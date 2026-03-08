@@ -129,9 +129,8 @@ declare global {
 }
 
 // Loader: geometry only. NEVER include "places" – load via importLibrary("places") for Place.searchNearby
-// mapIds required for AdvancedMarkerElement. For dark mode: create a Map ID with Dark style in Google Cloud Console and set NEXT_PUBLIC_GOOGLE_MAP_ID.
+// Dark mode: we use styles (no mapId) so styles apply. Markers use OverlayView (no AdvancedMarkerElement) to avoid mapId requirement.
 const libraries: Libraries = ["geometry"];
-const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAP_ID ?? "DEMO_MAP_ID";
 
 // Dark theme constants for map styling (reference image dark mode)
 const MAP_DARK = {
@@ -234,27 +233,9 @@ function formatDistance(meters: number): string {
   return `${(meters / 1000).toFixed(1)} km`;
 }
 
-function createUserLocationDotElement(): HTMLElement {
-  const size = 24;
-  const r = 10;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("width", String(size));
-  svg.setAttribute("height", String(size));
-  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
-  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-  circle.setAttribute("cx", String(size / 2));
-  circle.setAttribute("cy", String(size / 2));
-  circle.setAttribute("r", String(r));
-  circle.setAttribute("fill", "#4285F4");
-  circle.setAttribute("stroke", "#ffffff");
-  circle.setAttribute("stroke-width", "3");
-  svg.appendChild(circle);
-  const wrapper = document.createElement("div");
-  wrapper.style.display = "flex";
-  wrapper.style.alignItems = "center";
-  wrapper.style.justifyContent = "center";
-  wrapper.appendChild(svg);
-  return wrapper;
+function createUserLocationIconUrl(): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#4285F4" stroke="#ffffff" stroke-width="3"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 type CountryProfile = {
@@ -415,10 +396,9 @@ export const AddressExplorer = () => {
   // Requires: Maps JavaScript API, Places API (New). Enable both in Google Cloud Console.
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
   const mapRef = React.useRef<google.maps.Map | null>(null);
-  const restaurantMarkersRef = React.useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
-  const userLocationMarkerRef = React.useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const restaurantMarkersRef = React.useRef<google.maps.OverlayView[]>([]);
+  const userLocationMarkerRef = React.useRef<google.maps.Marker | null>(null);
   const infoWindowRef = React.useRef<google.maps.InfoWindow | null>(null);
-  const idleTimeoutRef = React.useRef<number | null>(null);
   const lastGoogleErrorRef = React.useRef<string | null>(null);
   const hasRequestedInitialLocationRef = React.useRef(false);
   const [activeSection, setActiveSection] =
@@ -481,7 +461,6 @@ export const AddressExplorer = () => {
     id: "streetiq-google-map",
     googleMapsApiKey: apiKey,
     libraries,
-    mapIds: [MAP_ID],
   });
 
   const searchNearbyRestaurants = React.useCallback(
@@ -489,7 +468,7 @@ export const AddressExplorer = () => {
       if (!window.google?.maps?.importLibrary || !map) return;
 
       setRestaurants([]);
-      restaurantMarkersRef.current.forEach((m) => { m.map = null; });
+      restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
       restaurantMarkersRef.current = [];
 
       const radius = 1500;
@@ -1036,18 +1015,11 @@ export const AddressExplorer = () => {
 
   const handleMapIdle = React.useCallback(() => {
     if (!map) return;
-
-    if (idleTimeoutRef.current !== null) {
-      window.clearTimeout(idleTimeoutRef.current);
-    }
-    idleTimeoutRef.current = window.setTimeout(() => {
-      idleTimeoutRef.current = null;
-      const mapCenter = map.getCenter();
-      if (!mapCenter) return;
-      const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
-      setCenter(viewCenter);
-      searchNearbyRestaurants(viewCenter);
-    }, 400);
+    const mapCenter = map.getCenter();
+    if (!mapCenter) return;
+    const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
+    setCenter(viewCenter);
+    searchNearbyRestaurants(viewCenter);
   }, [map, searchNearbyRestaurants]);
 
   React.useEffect(() => {
@@ -1250,27 +1222,27 @@ export const AddressExplorer = () => {
   }, []);
 
   React.useEffect(() => {
-    if (!map || !window.google?.maps?.importLibrary || !isLoaded) return;
+    if (!map || !window.google?.maps || !isLoaded) return;
 
-    const setupMarkers = async () => {
+    const setupMarkers = () => {
       if (userLocationMarkerRef.current) {
-        userLocationMarkerRef.current.map = null;
+        userLocationMarkerRef.current.setMap(null);
         userLocationMarkerRef.current = null;
       }
-      restaurantMarkersRef.current.forEach((m) => { m.map = null; });
+      const oldOverlays = [...restaurantMarkersRef.current];
       restaurantMarkersRef.current = [];
       if (!infoWindowRef.current) infoWindowRef.current = new window.google.maps.InfoWindow();
 
-      const markerLib = (await window.google.maps.importLibrary("marker")) as google.maps.MarkerLibrary;
-      const { AdvancedMarkerElement } = markerLib;
-
       if (currentLocation) {
-        const userDotContent = createUserLocationDotElement();
-        const userMarker = new AdvancedMarkerElement({
+        const userMarker = new window.google.maps.Marker({
           map,
           position: currentLocation,
           title: "You are here",
-          content: userDotContent,
+          icon: {
+            url: createUserLocationIconUrl(),
+            scaledSize: new window.google.maps.Size(24, 24),
+            anchor: new window.google.maps.Point(12, 12),
+          },
           zIndex: 1000,
         });
         userLocationMarkerRef.current = userMarker;
@@ -1281,37 +1253,80 @@ export const AddressExplorer = () => {
           ? [selectedRestaurant, ...filteredRestaurants]
           : filteredRestaurants;
 
-      const markerRestaurantPairs: Array<{ marker: google.maps.marker.AdvancedMarkerElement; restaurant: Restaurant }> = [];
+      const markerRestaurantPairs: Array<{ overlay: google.maps.OverlayView; restaurant: Restaurant }> = [];
       for (const restaurant of restaurantsToShow) {
         const { lat, lng } = restaurant.location;
         if (typeof lat !== "number" || typeof lng !== "number") continue;
 
-        const labelContent = createRestaurantLabelElement(
-          restaurant.name,
-          restaurant.rating,
-          selectedRestaurant?.id === restaurant.id,
+        class LabelOverlay extends google.maps.OverlayView {
+          private div: HTMLElement | null = null;
+          private position: google.maps.LatLng;
+          private restaurant: Restaurant;
+          private onClick: () => void;
+
+          constructor(
+            pos: google.maps.LatLng,
+            r: Restaurant,
+            onSelect: () => void,
+          ) {
+            super();
+            this.position = pos;
+            this.restaurant = r;
+            this.onClick = onSelect;
+          }
+
+          override onAdd() {
+            this.div = createRestaurantLabelElement(
+              this.restaurant.name,
+              this.restaurant.rating,
+              selectedRestaurant?.id === this.restaurant.id,
+            );
+            this.div.style.position = "absolute";
+            this.div.style.cursor = "pointer";
+            this.div.onclick = () => this.onClick();
+            const panes = this.getPanes();
+            if (panes) panes.overlayMouseTarget.appendChild(this.div);
+          }
+
+          override draw() {
+            if (!this.div || !this.position) return;
+            const projection = this.getProjection();
+            if (!projection) return;
+            const point = projection.fromLatLngToDivPixel(this.position);
+            if (point) {
+              this.div.style.left = `${point.x}px`;
+              this.div.style.top = `${point.y}px`;
+              this.div.style.transform = "translate(-50%, -100%)";
+            }
+          }
+
+          override onRemove() {
+            if (this.div?.parentNode) this.div.parentNode.removeChild(this.div);
+            this.div = null;
+          }
+        }
+
+        const overlay = new LabelOverlay(
+          new window.google.maps.LatLng(lat, lng),
+          restaurant,
+          () => {
+            setSelectedRestaurant(restaurant);
+            setSelectedBuilding(null);
+            setDismissedBuilding(null);
+            map.panTo({ lat, lng });
+          },
         );
-        const marker = new AdvancedMarkerElement({
-          map,
-          position: { lat, lng },
-          title: restaurant.name,
-          content: labelContent,
-          zIndex: selectedRestaurant?.id === restaurant.id ? 1001 : 1,
-        });
-        marker.addListener("click", () => {
-          setSelectedRestaurant(restaurant);
-          setSelectedBuilding(null);
-          setDismissedBuilding(null);
-          map.panTo({ lat, lng });
-        });
-        markerRestaurantPairs.push({ marker, restaurant });
-        restaurantMarkersRef.current.push(marker);
+        overlay.setMap(map);
+        markerRestaurantPairs.push({ overlay, restaurant });
+        restaurantMarkersRef.current.push(overlay);
       }
+
+      oldOverlays.forEach((ov) => ov.setMap(null));
 
       if (selectedRestaurant && infoWindowRef.current) {
         const pair = markerRestaurantPairs.find((p) => p.restaurant.id === selectedRestaurant.id);
-        const markerForSelected = pair?.marker;
-        if (markerForSelected) {
+        const overlayForSelected = pair?.overlay;
+        if (overlayForSelected) {
           const r = selectedRestaurant;
           let distanceText = "";
           if (currentLocation && window.google?.maps?.geometry?.spherical) {
@@ -1333,19 +1348,23 @@ export const AddressExplorer = () => {
           saveBtn.textContent = "Save";
           saveBtn.onclick = () => toggleSavedRestaurant(r);
           div.appendChild(saveBtn);
+          infoWindowRef.current.close();
           infoWindowRef.current.setContent(div);
-          infoWindowRef.current.open({ map, anchor: markerForSelected });
-          window.google.maps.event.addListenerOnce(infoWindowRef.current, "closeclick", () => setSelectedRestaurant(null));
+          infoWindowRef.current.setPosition(new window.google.maps.LatLng(r.location.lat, r.location.lng));
+          infoWindowRef.current.open(map);
+          window.google.maps.event.addListenerOnce(infoWindowRef.current, "closeclick", () => {
+            setSelectedRestaurant(null);
+          });
         }
       }
     };
     setupMarkers();
     return () => {
       if (userLocationMarkerRef.current) {
-        userLocationMarkerRef.current.map = null;
+        userLocationMarkerRef.current.setMap(null);
         userLocationMarkerRef.current = null;
       }
-      restaurantMarkersRef.current.forEach((m) => { m.map = null; });
+      restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
       restaurantMarkersRef.current = [];
     };
   }, [map, filteredRestaurants, selectedRestaurant, currentLocation, isLoaded, toggleSavedRestaurant]);
@@ -1734,14 +1753,6 @@ export const AddressExplorer = () => {
     setError(null);
   }, [error]);
 
-  React.useEffect(() => {
-    return () => {
-      if (idleTimeoutRef.current !== null) {
-        window.clearTimeout(idleTimeoutRef.current);
-      }
-    };
-  }, []);
-
   const renderExplore = () => (
     <div className="relative min-h-0 flex-1 flex flex-col gap-0 overflow-hidden">
       <div className="relative flex h-full min-h-0 flex-col gap-0 overflow-hidden bg-[#000000]">
@@ -1856,10 +1867,10 @@ export const AddressExplorer = () => {
               }}
               onUnmount={() => {
                 if (userLocationMarkerRef.current) {
-                  userLocationMarkerRef.current.map = null;
+                  userLocationMarkerRef.current.setMap(null);
                   userLocationMarkerRef.current = null;
                 }
-                restaurantMarkersRef.current.forEach((m) => { m.map = null; });
+                restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
                 restaurantMarkersRef.current = [];
                 if (infoWindowRef.current) infoWindowRef.current.close();
                 mapRef.current = null;
@@ -1887,7 +1898,6 @@ export const AddressExplorer = () => {
                 );
               }}
               options={{
-                mapId: MAP_ID,
                 mapTypeId: "roadmap",
                 backgroundColor: MAP_DARK.containerBg,
                 mapTypeControl: false,
