@@ -128,55 +128,80 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const fetchHeaders = {
+    Accept: "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
+  };
+  const sortParam = "תאריך_העסקה desc";
+
+  async function fetchAndProcess(q: string): Promise<{ records: unknown[]; json: { success?: boolean; error?: { message?: string }; result?: { records?: unknown[] } } }> {
+    const url = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${NADLAN_RESOURCE_ID}&q=${encodeURIComponent(q)}&limit=${limit}&sort=${encodeURIComponent(sortParam)}`;
+    const res = await fetch(url, { headers: fetchHeaders, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) {
+      throw new Error(`API returned ${res.status}`);
+    }
+    const json = await res.json().catch(() => ({ success: false, error: { message: "Invalid JSON" } }));
+    if (json?.success === false) {
+      throw new Error(json?.error?.message ?? "API request failed");
+    }
+    const records = json?.result?.records ?? [];
+    return { records, json };
+  }
+
   try {
     const searchTerms = [searchStreet, searchCity].filter(Boolean).join(" ");
     const cleanedAddress = address.replace(/\s*(Israel|ישראל)\s*$/i, "").trim();
     const q = searchTerms || cleanedAddress || "*";
-    const sortParam = "תאריך_העסקה desc";
 
-    const url = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${NADLAN_RESOURCE_ID}&q=${encodeURIComponent(q)}&limit=${limit}&sort=${encodeURIComponent(sortParam)}`;
-    console.log("[israel-real-estate] Fetching data.gov.il:", { url: url.slice(0, 120) + "..." });
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
-      },
-      signal: AbortSignal.timeout(15000),
-    });
+    let records: unknown[] = [];
+    let json: { success?: boolean; error?: { message?: string }; result?: { records?: unknown[] } } = {};
+    let usedStreetFallback = false;
 
-    if (!res.ok) {
-      console.log("[israel-real-estate] data.gov.il responded:", res.status, res.statusText);
-      return NextResponse.json({
-        transactions: [],
-        avgPrice: null,
-        avgPricePerSqm: null,
-        lastSaleDate: null,
-        lastSalePrice: null,
-        transactionCount: 0,
-        source: "data.gov.il",
-        error: `API returned ${res.status}`,
-      });
+    try {
+      console.log("[israel-real-estate] Fetching data.gov.il (specific):", q.slice(0, 80));
+      const result = await fetchAndProcess(q);
+      records = result.records;
+      json = result.json;
+
+      if (json?.success === false) {
+        throw new Error(json?.error?.message ?? "API request failed");
+      }
+    } catch (firstErr) {
+      console.log("[israel-real-estate] First fetch failed (404 or error), trying street-only:", searchStreet);
+      if (searchStreet) {
+        try {
+          const streetResult = await fetchAndProcess(searchStreet);
+          records = streetResult.records;
+          json = streetResult.json;
+          usedStreetFallback = true;
+          if (json?.success === false) {
+            records = [];
+          }
+        } catch {
+          records = [];
+        }
+      }
     }
 
-    const json = await res.json();
-    if (json?.success === false) {
-      const errMsg = json?.error?.message ?? "API request failed";
-      return NextResponse.json({
-        transactions: [],
-        avgPrice: null,
-        avgPricePerSqm: null,
-        lastSaleDate: null,
-        lastSalePrice: null,
-        transactionCount: 0,
-        source: "data.gov.il",
-        error: errMsg,
-      });
+    if (records.length === 0 && searchStreet) {
+      console.log("[israel-real-estate] No records from specific search, trying street-only:", searchStreet);
+      try {
+        const streetResult = await fetchAndProcess(searchStreet);
+        if (streetResult.records.length > 0) {
+          records = streetResult.records;
+          json = streetResult.json;
+          usedStreetFallback = true;
+        }
+      } catch {
+        /* keep records empty */
+      }
     }
-    const records = json?.result?.records ?? [];
-    console.log("[israel-real-estate] Records received:", records.length, "from data.gov.il");
 
-    const withGushParcel = records.filter((r: Record<string, unknown>) => hasGushAndParcel(r));
+    const recordList = records as Record<string, unknown>[];
+    console.log("[israel-real-estate] Records received:", recordList.length, "usedStreetFallback:", usedStreetFallback);
+
+    const withGushParcel = recordList.filter((r: Record<string, unknown>) => hasGushAndParcel(r));
     console.log("[israel-real-estate] After GUSH/PARCEL filter:", withGushParcel.length);
     if (withGushParcel.length > 0) {
       const first = withGushParcel[0] as Record<string, unknown>;
@@ -202,6 +227,7 @@ export async function GET(request: NextRequest) {
     });
 
     const lastSale = sortedByDate[0];
+    const top10Street = sortedByDate.slice(0, 10);
     const top20Street = sortedByDate.slice(0, 20);
     const withArea = top20Street.filter((t: { area: number }) => t.area > 0);
     const avgPricePerSqm = withArea.length > 0
@@ -210,8 +236,14 @@ export async function GET(request: NextRequest) {
         ? top20Street.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / top20Street.length / 100
         : null;
     const propertySqm = (lastSale?.area ?? 0) > 0 ? lastSale.area : (Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 100);
+
+    const neighborhoodAvgPrice = top10Street.length > 0
+      ? Math.round(top10Street.reduce((s: number, t: { price: number }) => s + t.price, 0) / top10Street.length)
+      : null;
     const estimatedValue = avgPricePerSqm != null ? Math.round(avgPricePerSqm * propertySqm) : null;
-    const avgPrice = estimatedValue;
+    const avgPrice = usedStreetFallback && neighborhoodAvgPrice != null
+      ? neighborhoodAvgPrice
+      : (estimatedValue ?? neighborhoodAvgPrice);
 
     const transactions = sortedByDate.slice(0, 20).map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date }));
 
@@ -243,6 +275,7 @@ export async function GET(request: NextRequest) {
           const db = b.date ? new Date(b.date).getTime() : 0;
           return db - da;
         });
+        const cityTop10 = citySorted.slice(0, 10);
         const cityTop20 = citySorted.slice(0, 20);
         const cityWithArea = cityTop20.filter((t: { area: number }) => t.area > 0);
         const cityAvgPricePerSqm = cityWithArea.length > 0
@@ -252,7 +285,10 @@ export async function GET(request: NextRequest) {
             : null;
         const cityLastSale = cityTop20[0];
         const cityPropertySqm = (cityLastSale?.area ?? 0) > 0 ? cityLastSale.area : 100;
-        const cityEstimatedValue = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * cityPropertySqm) : null;
+        const cityNeighborhoodAvg = cityTop10.length > 0
+          ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)
+          : null;
+        const cityEstimatedValue = cityNeighborhoodAvg ?? (cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * cityPropertySqm) : null);
 
         if (cityTop20.length > 0) {
           console.log("[israel-real-estate] City fallback success:", cityTop20.length, "transactions");
@@ -266,12 +302,13 @@ export async function GET(request: NextRequest) {
             transactionCount: cityTop20.length,
             source: "data.gov.il",
             isCityFallback: true,
+            isNeighborhoodEstimate: true,
           });
         }
       }
     }
 
-    console.log("[israel-real-estate] Success:", { transactionsCount: transactions.length, avgPrice, avgPricePerSqm, propertySqm });
+    console.log("[israel-real-estate] Success:", { transactionsCount: transactions.length, avgPrice, usedStreetFallback });
     return NextResponse.json({
       transactions,
       avgPrice,
@@ -282,6 +319,7 @@ export async function GET(request: NextRequest) {
       transactionCount: transactions.length,
       source: "data.gov.il",
       isCityFallback: false,
+      isNeighborhoodEstimate: usedStreetFallback,
     });
   } catch (err) {
     console.error("[israel-real-estate] API error:", err);
