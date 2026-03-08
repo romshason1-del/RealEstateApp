@@ -37,7 +37,7 @@ import {
 import { getMockPropertyInsight } from "@/lib/mock-data";
 import { createClient } from "@/lib/supabase/client";
 
-// Address explorer map component
+// deploy update
 type LatLng = {
   lat: number;
   lng: number;
