@@ -130,9 +130,22 @@
 .heart-save-btn {
   @apply text-amber-500;
 }
+.heart-save-icon {
+  transition: all 0.3s ease;
+}
+.heart-save-icon.heart-saved {
+  color: #eab308;
+  fill: #eab308;
+  transform: scale(1.1);
+}
+.heart-save-icon.heart-unsaved {
+  color: white;
+  fill: none;
+  transform: scale(1);
+}
 .heart-save-btn:active .heart-save-icon {
   transform: scale(0.95);
 }
-.heart-save-icon {
-  transition: fill 0.2s ease, stroke 0.2s ease, transform 0.2s ease;
+.heart-save-btn:active .heart-save-icon.heart-saved {
+  transform: scale(1.05);
 }
