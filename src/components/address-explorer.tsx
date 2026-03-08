@@ -133,26 +133,26 @@ declare global {
 const libraries: Libraries = ["geometry"];
 const MAP_ID = "DEMO_MAP_ID";
 
-// Dark theme constants for map styling
+// Dark theme constants for map styling (reference image dark mode)
 const MAP_DARK = {
-  geometry: "#24272c",
-  labelsFill: "#cfd4dc",
-  labelsStroke: "#1b1f24",
-  adminStroke: "#3b4149",
-  parcelLabels: "#8a919c",
-  landscape: "#2a2f36",
-  poi: "#303640",
+  geometry: "#1a1d21",
+  labelsFill: "#9ca3af",
+  labelsStroke: "#0f1114",
+  adminStroke: "#2d3238",
+  parcelLabels: "#6b7280",
+  landscape: "#1e2126",
+  poi: "#252a30",
   poiLabels: "#d4af37",
-  road: "#505761",
-  roadStroke: "#2d3238",
-  roadLabels: "#e5e7eb",
-  highway: "#676f7a",
-  highwayStroke: "#3a4048",
-  transit: "#353b44",
+  road: "#3d4349",
+  roadStroke: "#252a30",
+  roadLabels: "#d1d5db",
+  highway: "#4b5563",
+  highwayStroke: "#2d3238",
+  transit: "#2a2f36",
   transitLabels: "#d4af37",
-  water: "#1d2f3f",
-  waterLabels: "#aab6c3",
-  containerBg: "#1b1f24",
+  water: "#151c24",
+  waterLabels: "#9ca3af",
+  containerBg: "#0f1114",
 } as const;
 
 const mapContainerStyle: React.CSSProperties = {
@@ -211,29 +211,27 @@ function extractLatLng(loc: unknown): { lat: number; lng: number } | null {
   return { lat, lng };
 }
 
-function createRestaurantDotMarker(isSelected: boolean): HTMLElement {
-  const fill = isSelected ? "#f59e0b" : "#d4af37";
-  const size = 24;
-  const r = 8;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("width", String(size));
-  svg.setAttribute("height", String(size));
-  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
-  svg.style.cursor = "pointer";
-  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-  circle.setAttribute("cx", String(size / 2));
-  circle.setAttribute("cy", String(size / 2));
-  circle.setAttribute("r", String(r));
-  circle.setAttribute("fill", fill);
-  circle.setAttribute("stroke", "#1b1f24");
-  circle.setAttribute("stroke-width", "2");
-  svg.appendChild(circle);
-  const wrapper = document.createElement("div");
-  wrapper.style.display = "flex";
-  wrapper.style.alignItems = "center";
-  wrapper.style.justifyContent = "center";
-  wrapper.appendChild(svg);
-  return wrapper;
+function createRestaurantLabelElement(name: string, rating: number | undefined, isSelected: boolean): HTMLElement {
+  const label = document.createElement("div");
+  label.style.cssText = [
+    "padding: 4px 10px",
+    "border-radius: 6px",
+    "font-size: 12px",
+    "font-weight: 600",
+    "white-space: nowrap",
+    "cursor: pointer",
+    "box-shadow: 0 1px 3px rgba(0,0,0,0.3)",
+    "border: 1px solid rgba(0,0,0,0.15)",
+    `background: ${isSelected ? "#f59e0b" : "#eab308"}`,
+    "color: #1b1f24",
+  ].join("; ");
+  label.textContent = `${name} ★ ${rating != null ? rating.toFixed(1) : "N/A"}`;
+  return label;
+}
+
+function formatDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
 }
 
 type CountryProfile = {
@@ -519,7 +517,7 @@ export const AddressExplorer = () => {
         setRestaurants(nextRestaurants);
         setSelectedRestaurant((current) => {
           if (!current) return null;
-          return nextRestaurants.find((r) => r.id === current.id) ?? null;
+          return nextRestaurants.find((r) => r.id === current.id) ?? current;
         });
         setError(null);
       } catch (err) {
@@ -1256,17 +1254,26 @@ export const AddressExplorer = () => {
         userLocationMarkerRef.current = userMarker;
       }
 
+      const restaurantsToShow =
+        selectedRestaurant && !filteredRestaurants.some((r) => r.id === selectedRestaurant.id)
+          ? [selectedRestaurant, ...filteredRestaurants]
+          : filteredRestaurants;
+
       const markerRestaurantPairs: Array<{ marker: google.maps.marker.AdvancedMarkerElement; restaurant: Restaurant }> = [];
-      for (const restaurant of filteredRestaurants) {
+      for (const restaurant of restaurantsToShow) {
         const { lat, lng } = restaurant.location;
         if (typeof lat !== "number" || typeof lng !== "number") continue;
 
-        const dotContent = createRestaurantDotMarker(selectedRestaurant?.id === restaurant.id);
+        const labelContent = createRestaurantLabelElement(
+          restaurant.name,
+          restaurant.rating,
+          selectedRestaurant?.id === restaurant.id,
+        );
         const marker = new AdvancedMarkerElement({
           map,
           position: { lat, lng },
           title: restaurant.name,
-          content: dotContent,
+          content: labelContent,
           zIndex: selectedRestaurant?.id === restaurant.id ? 1001 : 1,
         });
         marker.addListener("click", () => {
@@ -1284,19 +1291,19 @@ export const AddressExplorer = () => {
         const markerForSelected = pair?.marker;
         if (markerForSelected) {
           const r = selectedRestaurant;
+          let distanceText = "";
+          if (currentLocation && window.google?.maps?.geometry?.spherical) {
+            const from = new window.google.maps.LatLng(currentLocation.lat, currentLocation.lng);
+            const to = new window.google.maps.LatLng(r.location.lat, r.location.lng);
+            const meters = window.google.maps.geometry.spherical.computeDistanceBetween(from, to);
+            distanceText = `${formatDistance(meters)} from you`;
+          }
           const div = document.createElement("div");
-          div.className = "max-w-[220px] bg-white p-3 text-black";
+          div.className = "max-w-[260px] bg-white p-3 text-black";
           div.innerHTML = `
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <div class="text-sm font-semibold">${r.name}</div>
-                <div class="mt-1 text-xs text-zinc-500">${r.address}</div>
-              </div>
-            </div>
-            <div class="mt-3 flex items-center gap-3 text-sm text-zinc-700">
-              <span class="font-medium text-amber-600">★ ${r.rating?.toFixed(1) ?? "N/A"}</span>
-              <span>${r.reviews} reviews</span>
-            </div>
+            <div class="text-sm font-semibold">${r.name} ★ ${r.rating?.toFixed(1) ?? "N/A"}</div>
+            <div class="mt-2 text-xs text-zinc-600">${r.address}</div>
+            ${distanceText ? `<div class="mt-1 text-xs text-zinc-500">${distanceText}</div>` : ""}
           `;
           const saveBtn = document.createElement("button");
           saveBtn.type = "button";
@@ -1792,7 +1799,7 @@ export const AddressExplorer = () => {
             <GoogleMap
               key={center ? "loaded" : "loading"}
               mapContainerStyle={mapContainerStyle}
-              mapContainerClassName="h-full min-h-[280px] w-full bg-[#1b1f24]"
+              mapContainerClassName="h-full min-h-[280px] w-full"
               center={currentLocation ?? center ?? (initialGeolocationComplete ? defaultCenter : WORLD_VIEW_CENTER)}
               zoom={currentLocation ?? center ? 17 : (initialGeolocationComplete ? 15 : WORLD_VIEW_ZOOM)}
               onLoad={(instance) => {
