@@ -5,7 +5,7 @@ import { X, TrendingUp, BadgeCheck } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { useIsraelRealEstate } from "@/hooks/use-israel-real-estate";
-import { formatSaleDate } from "@/lib/israel-real-estate";
+import { formatSaleYear } from "@/lib/israel-real-estate";
 
 export type PropertyValueCardProps = {
   /** Property address */
@@ -91,15 +91,16 @@ export function PropertyValueCard({
           </div>
         </div>
 
-        {/* Estimated Market Value */}
+        {/* Property Value - Two rows */}
         <div className="mt-4 rounded-xl border border-amber-400/15 bg-amber-400/5 px-4 py-3">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
-            {hasRealData ? "Official Market Value" : "Estimated Market Value"}
-          </div>
           {israelLoading && isIsrael ? (
-            <div className="mt-1.5 text-sm text-amber-200/70">Loading government data…</div>
+            <div className="text-sm text-amber-200/70">Loading government data…</div>
           ) : (
             <>
+              {/* Row 1 (main): Estimated Market Value - large */}
+              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
+                Estimated Market Value
+              </div>
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
                   {formattedValue}
@@ -111,9 +112,10 @@ export function PropertyValueCard({
                 )}
               </div>
 
-              {lastSaleDate && (
-                <div className="mt-1.5 text-xs text-zinc-400">
-                  Last sale: {formatSaleDate(lastSaleDate)}
+              {/* Row 2 (secondary): Last Official Sale - smaller */}
+              {hasRealData && israelData!.lastSalePrice != null && israelData!.lastSalePrice > 0 && (
+                <div className="mt-2 text-xs text-zinc-400">
+                  Last Official Sale: {currencySymbol}{israelData!.lastSalePrice.toLocaleString()} in {formatSaleYear(lastSaleDate)}
                   {isCityFallback && " (city average)"}
                 </div>
               )}
@@ -121,6 +123,12 @@ export function PropertyValueCard({
               {hasRealData && (israelData!.transactionCount ?? 0) > 0 && (
                 <div className="mt-1.5 text-[11px] text-zinc-500">
                   Based on {israelData!.transactionCount} recent transaction{(israelData!.transactionCount ?? 0) !== 1 ? "s" : ""} from the Tax Authority
+                </div>
+              )}
+
+              {hasRealData && (israelData!.lastSaleOlderThan2Years || (israelData!.transactionCount ?? 0) > 0) && (
+                <div className="mt-2 text-[10px] text-zinc-500 italic">
+                  Estimate based on neighborhood trends
                 </div>
               )}
 
