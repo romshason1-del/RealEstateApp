@@ -78,12 +78,16 @@ export function PropertyValueCard({
             <div className="text-sm text-amber-200/70">Loading…</div>
           ) : (
             <>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Last Deal on this Property</div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
+                {israelData?.hasSpecificHouse === false ? "Street Average" : "Last Deal on this Property"}
+              </div>
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
                   {currencySymbol}{mainPrice.toLocaleString()}
                 </span>
-                {lastSalePrice != null && <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>}
+                {israelData?.hasSpecificHouse && lastSalePrice != null && (
+                  <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>
+                )}
               </div>
 
               {marketValue != null && isIsrael && (
