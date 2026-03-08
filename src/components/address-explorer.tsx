@@ -2014,69 +2014,27 @@ export const AddressExplorer = () => {
           ) : null}
 
           {selectedBuilding ? (
-            <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10">
-              <div className="pointer-events-auto ml-auto max-w-[300px] rounded-2xl border border-amber-400/20 bg-black/90 p-4 text-white shadow-2xl backdrop-blur">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs uppercase tracking-[0.18em] text-amber-300">
-                      Property Value
-                    </div>
-                    <div className="mt-2 truncate text-sm font-semibold text-white">
-                      {selectedBuilding.address}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <HeartButton
-                      isSaved={isPropertySaved(selectedBuilding.address)}
-                      onToggle={() =>
-                        toggleSavedProperty({
-                          id: `saved-${selectedBuilding.address}`,
-                          address: selectedBuilding.address,
-                          position: selectedBuilding.position,
-                          ownership: "wishlist",
-                          propertyType: "apartment",
-                          estimatedPropertyValue:
-                            selectedBuilding.estimatedPropertyValue,
-                          estimatedPropertyValueNumber:
-                            selectedBuilding.estimatedPropertyValueNumber,
-                          currencySymbol: selectedBuilding.currencySymbol,
-                          countryCode: selectedBuilding.countryCode,
-                        })
-                      }
-                    />
-                    <button
-                      type="button"
-                      onClick={dismissSelectedBuilding}
-                      className="rounded-full border border-white/10 p-1 text-zinc-400 hover:text-white"
-                    >
-                      <X className="size-4" />
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-4 rounded-xl border border-amber-400/15 bg-amber-400/10 px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-amber-200/80">
-                    Estimated Value
-                  </div>
-                  {selectedBuilding.requiresHouseNumber ? (
-                    <div className="mt-1 text-sm font-medium text-amber-100">
-                      {selectedBuilding.valuationMessage}
-                    </div>
-                  ) : (
-                    <div className="mt-1 text-lg font-bold text-amber-300">
-                      {selectedBuilding.estimatedPropertyValue}
-                    </div>
-                  )}
-                </div>
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-                    Street Average
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-white">
-                    {selectedBuilding.streetAverageValue}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <PropertyValueCard
+              address={selectedBuilding.address}
+              position={selectedBuilding.position}
+              currencySymbol={selectedBuilding.currencySymbol}
+              onClose={dismissSelectedBuilding}
+              isSaved={isPropertySaved(selectedBuilding.address)}
+              onToggleSave={() =>
+                toggleSavedProperty({
+                  id: `saved-${selectedBuilding.address}`,
+                  address: selectedBuilding.address,
+                  position: selectedBuilding.position,
+                  ownership: "wishlist",
+                  propertyType: "apartment",
+                  estimatedPropertyValue: selectedBuilding.estimatedPropertyValue,
+                  estimatedPropertyValueNumber:
+                    selectedBuilding.estimatedPropertyValueNumber,
+                  currencySymbol: selectedBuilding.currencySymbol,
+                  countryCode: selectedBuilding.countryCode,
+                })
+              }
+            />
           ) : null}
 
           {showRestoreButton ? (
