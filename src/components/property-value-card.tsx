@@ -40,22 +40,17 @@ export function PropertyValueCard({
   );
   const { data: israelData, isLoading: israelLoading } = useIsraelRealEstate(address, isIsrael, mockData.areaSqm);
 
-  const hasLastDeal = isIsrael && israelData && !israelData.error &&
-    israelData.lastSalePrice != null && israelData.lastSalePrice > 0;
-  const hasStreetAvg = isIsrael && israelData && !israelData.error &&
-    ((israelData.avgPrice != null && israelData.avgPrice > 0) || (israelData.avgPricePerSqm != null && israelData.avgPricePerSqm > 0));
-  const hasMarketEstimate = isIsrael && israelData && !israelData.error &&
-    israelData.avgPrice != null && israelData.avgPrice > 0;
-
-  const lastDealPrice = hasLastDeal && israelData ? israelData.lastSalePrice! : null;
+  const hasIsraelData = isIsrael && israelData && !israelData.error;
+  const lastDealPrice = hasIsraelData && israelData?.lastSalePrice != null && israelData.lastSalePrice > 0
+    ? israelData.lastSalePrice
+    : null;
+  const lastSaleDate = hasIsraelData && israelData ? israelData.lastSaleDate : null;
+  const hasMarketEstimate = hasIsraelData && israelData?.avgPrice != null && israelData.avgPrice > 0;
   const marketEstimatePrice = hasMarketEstimate && israelData ? israelData.avgPrice! : null;
   const isCityFallback = israelData?.isCityFallback ?? false;
-  const isNeighborhoodEstimate = israelData?.isNeighborhoodEstimate ?? false;
-  const streetAvgFallback = (hasStreetAvg || isNeighborhoodEstimate) && israelData && !hasLastDeal
+  const fallbackPrice = hasIsraelData && israelData
     ? (israelData.avgPrice ?? (israelData.avgPricePerSqm != null ? Math.round(israelData.avgPricePerSqm * 100) : null))
     : null;
-  const historyFallbackPrice = israelData?.lastSalePrice ?? null;
-  const lastSaleDate = hasLastDeal && israelData ? israelData.lastSaleDate : null;
 
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
@@ -104,33 +99,22 @@ export function PropertyValueCard({
             <div className="text-sm text-amber-200/70">Loading government data…</div>
           ) : (
             <>
-              {/* Row 1 (main): Last Deal on this Property - the fact */}
+              {/* Row 1 (main): Last Deal on this Property - always show actual transaction when we have it */}
               <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
                 Last Deal on this Property
               </div>
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
-                {hasLastDeal && lastDealPrice != null ? (
+                {(lastDealPrice != null || fallbackPrice != null) && isIsrael ? (
                   <>
                     <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                      {currencySymbol}{lastDealPrice.toLocaleString()}
+                      {currencySymbol}{(lastDealPrice ?? fallbackPrice)!.toLocaleString()}
                     </span>
-                    <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>
-                  </>
-                ) : (hasStreetAvg || isNeighborhoodEstimate) && streetAvgFallback != null ? (
-                  <>
-                    <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                      {currencySymbol}{streetAvgFallback.toLocaleString()}
-                    </span>
-                    <span className="text-xs text-zinc-500">
-                      {isNeighborhoodEstimate ? "Neighborhood Estimate" : "Street Average"}
-                    </span>
-                  </>
-                ) : isIsrael && historyFallbackPrice != null ? (
-                  <>
-                    <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                      {currencySymbol}{historyFallbackPrice.toLocaleString()}
-                    </span>
-                    <span className="text-xs text-zinc-500">Last known deal</span>
+                    {lastDealPrice != null && (
+                      <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>
+                    )}
+                    {lastDealPrice == null && fallbackPrice != null && (
+                      <span className="text-xs text-zinc-500">Last known recorded price</span>
+                    )}
                   </>
                 ) : !isIsrael ? (
                   <>
@@ -142,10 +126,10 @@ export function PropertyValueCard({
                     </span>
                   </>
                 ) : (
-                  <span className="text-sm text-zinc-500">Neighborhood Estimate</span>
+                  <span className="text-sm text-zinc-500">No data for this address</span>
                 )}
               </div>
-              {hasLastDeal && isCityFallback && (
+              {lastDealPrice != null && isCityFallback && (
                 <div className="mt-1 text-[11px] text-zinc-500">(city average)</div>
               )}
 
@@ -175,7 +159,7 @@ export function PropertyValueCard({
               )}
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {(hasLastDeal || hasStreetAvg || hasMarketEstimate || isNeighborhoodEstimate) ? (
+                {(lastDealPrice != null || fallbackPrice != null || hasMarketEstimate) && isIsrael ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
                     <BadgeCheck className="size-3" aria-hidden />
                     Official Data
