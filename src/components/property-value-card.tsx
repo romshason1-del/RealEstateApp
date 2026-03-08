@@ -40,16 +40,17 @@ export function PropertyValueCard({
   );
   const { data: israelData, isLoading: israelLoading } = useIsraelRealEstate(address, isIsrael, mockData.areaSqm);
 
-  const hasRealData = isIsrael && israelData && !israelData.error &&
-    ((israelData.avgPrice != null && israelData.avgPrice > 0) || (israelData.lastSalePrice != null && israelData.lastSalePrice > 0));
+  const hasCalculatedValue = isIsrael && israelData && !israelData.error &&
+    israelData.avgPrice != null && israelData.avgPrice > 0;
+  const hasHistoricalSale = isIsrael && israelData && !israelData.error &&
+    israelData.lastSalePrice != null && israelData.lastSalePrice > 0;
 
-  const rawPrice = hasRealData
-    ? (israelData!.avgPrice ?? israelData!.lastSalePrice ?? mockData.valueNumber)
+  const displayPrice = hasCalculatedValue && israelData
+    ? israelData.avgPrice!
     : mockData.valueNumber;
-  const displayPrice = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : mockData.valueNumber;
   const formattedValue = `${Math.round(displayPrice).toLocaleString()} ${currencySymbol}`.trim();
-  const lastSaleDate = hasRealData ? israelData!.lastSaleDate : null;
-  const isCityFallback = hasRealData && israelData!.isCityFallback;
+  const lastSaleDate = hasHistoricalSale && israelData ? israelData.lastSaleDate : null;
+  const isCityFallback = israelData?.isCityFallback ?? false;
 
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
@@ -98,42 +99,52 @@ export function PropertyValueCard({
             <div className="text-sm text-amber-200/70">Loading government data…</div>
           ) : (
             <>
-              {/* Row 1 (main): Estimated Market Value - large */}
+              {/* Row 1 (main): Estimated Market Value - GFA × Street Avg only */}
               <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
                 Estimated Market Value
               </div>
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
-                <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                  {formattedValue}
-                </span>
-                {!hasRealData && (
-                  <span className="text-sm font-medium text-emerald-400">
-                    ↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% vs last year
+                {hasCalculatedValue ? (
+                  <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
+                    {formattedValue}
                   </span>
+                ) : isIsrael && israelData && !israelData.error ? (
+                  <span className="text-sm text-zinc-500">Insufficient data (need GFA + street sales)</span>
+                ) : (
+                  <>
+                    <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
+                      {formattedValue}
+                    </span>
+                    {!isIsrael && (
+                      <span className="text-sm font-medium text-emerald-400">
+                        ↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% vs last year
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
 
-              {/* Row 2 (secondary): Last Official Sale - smaller */}
-              {hasRealData && israelData!.lastSalePrice != null && israelData!.lastSalePrice > 0 && (
+              {/* Row 2 (secondary): Historical Sale - 903,350 etc */}
+              {hasHistoricalSale && israelData && (
                 <div className="mt-2 text-xs text-zinc-400">
-                  Last Official Sale: {currencySymbol}{israelData!.lastSalePrice.toLocaleString()} ({formatSaleYear(lastSaleDate)})
+                  Historical Sale: {currencySymbol}{israelData.lastSalePrice!.toLocaleString()} ({formatSaleYear(lastSaleDate)})
                   {isCityFallback && " (city average)"}
                 </div>
               )}
 
-              {hasRealData && (israelData!.transactionCount ?? 0) > 0 && (
+              {hasCalculatedValue && israelData && (israelData.transactionCount ?? 0) > 0 && (
                 <div className="mt-1.5 text-[11px] text-zinc-500">
-                  Based on {israelData!.transactionCount} recent transaction{(israelData!.transactionCount ?? 0) !== 1 ? "s" : ""} from the Tax Authority
+                  Based on {israelData.transactionCount} recent transaction{(israelData.transactionCount ?? 0) !== 1 ? "s" : ""} from the Tax Authority
                 </div>
               )}
 
-              {hasRealData && (israelData!.lastSaleOlderThan2Years || (israelData!.transactionCount ?? 0) > 0) && (
+              {hasCalculatedValue && israelData && (israelData.lastSaleOlderThan2Years || (israelData.transactionCount ?? 0) > 0) && (
                 <div className="mt-2 text-[10px] text-zinc-500 italic">
                   Estimate based on neighborhood trends
                 </div>
               )}
 
-              {!hasRealData && (
+              {!isIsrael && (
                 <div className="mt-2 text-xs text-zinc-400">
                   {mockData.pricePerSqm.toLocaleString()} {currencySymbol}
                   <span className="ml-1 text-zinc-500">/ sqm</span>
@@ -141,7 +152,7 @@ export function PropertyValueCard({
               )}
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {hasRealData ? (
+                {(hasCalculatedValue || hasHistoricalSale) ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
                     <BadgeCheck className="size-3" aria-hidden />
                     Official Data
@@ -157,7 +168,7 @@ export function PropertyValueCard({
                     Verified
                   </span>
                 )}
-                {!hasRealData && (
+                {!isIsrael && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium text-emerald-400">
                     <TrendingUp className="size-3" aria-hidden />
                     {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY

@@ -6,7 +6,8 @@ const NADLAN_RESOURCE_ID = "ad6680ef-5d46-4654-be8d-7301292a8e48";
 /** Hebrew field names from Israel Tax Authority real estate dataset (מאגר עסקאות הנדל"ן) */
 const SALE_PRICE_FIELDS = ["מחיר העסקה", "מחיר עסקה", "מחיר_העסקה", "מחיר_עסקה", "sale_price", "price"];
 const SALE_DATE_FIELDS = ["תאריך העסקה", "תאריך עסקה", "תאריך_העסקה", "תאריך_עסקה", "DEALDATE", "sale_date", "date"];
-const AREA_FIELDS = ["GFA_QUANTITY", "GFA", "שטח", "שטח במ\"ר", "מ\"ר", "area", "sqm", "שטח_במ\"ר"];
+/** GFA_QUANTITY first - exact field from data.gov.il; then Hebrew/English variants */
+const AREA_FIELDS = ["GFA_QUANTITY", "GFA", "שטח", "שטח במ\"ר", "שטח_במ\"ר", "מ\"ר", "area", "sqm", "שטח_במ\"ר"];
 const GUSH_FIELDS = ["גוש", "GUSH", "gush"];
 const PARCEL_FIELDS = ["חלקה", "PARCEL", "parcel"];
 
@@ -33,13 +34,22 @@ function hasGushAndParcel(record: Record<string, unknown>): boolean {
   return gushStr.length > 0 && parcelStr.length > 0;
 }
 
+/** Extract GFA_QUANTITY or area from record - iterates all keys for robustness */
 function getArea(record: Record<string, unknown>): number {
   for (const f of AREA_FIELDS) {
     const val = record[f];
-    if (val != null && val !== "") return parseNumeric(val);
+    if (val != null && val !== "") {
+      const n = parseNumeric(val);
+      if (n > 0) return n;
+    }
   }
   for (const [key, val] of Object.entries(record)) {
-    if (val != null && val !== "" && (key.includes("GFA") || key.includes("שטח") || key.includes("area") || key.includes("sqm"))) return parseNumeric(val);
+    if (val == null || val === "") continue;
+    const k = String(key).toUpperCase();
+    if (k.includes("GFA") || k.includes("QUANTITY") || k.includes("שטח") || k.includes("AREA") || k.includes("SQM") || key.includes("מ")) {
+      const n = parseNumeric(val);
+      if (n > 0) return n;
+    }
   }
   return 0;
 }
@@ -171,6 +181,11 @@ export async function GET(request: NextRequest) {
 
     const withGushParcel = records.filter((r: Record<string, unknown>) => hasGushAndParcel(r));
     console.log("[israel-real-estate] After GUSH/PARCEL filter:", withGushParcel.length);
+    if (withGushParcel.length > 0) {
+      const first = withGushParcel[0] as Record<string, unknown>;
+      console.log("[israel-real-estate] First record keys:", Object.keys(first).join(", "));
+      console.log("[israel-real-estate] First record GFA/area:", getArea(first));
+    }
 
     const allTransactions = withGushParcel.map((r: Record<string, unknown>) => {
       const price = getFieldValue(r, SALE_PRICE_FIELDS);
@@ -198,21 +213,26 @@ export async function GET(request: NextRequest) {
       return ts >= twentyFourMonthsAgo;
     });
     const top10Recent = inLast24Months.slice(0, 10);
-    const withArea = top10Recent.filter((t: { area: number }) => t.area > 0);
-    const avgPricePerSqmFrom24Mo = withArea.length > 0
-      ? withArea.reduce((sum: number, t: { price: number; area: number }) => sum + t.price / t.area, 0) / withArea.length
-      : top10Recent.length > 0
-        ? top10Recent.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / top10Recent.length / 85
-        : null;
+    const withArea24 = top10Recent.filter((t: { area: number }) => t.area > 0);
+    let avgPricePerSqmFrom24Mo = withArea24.length > 0
+      ? withArea24.reduce((sum: number, t: { price: number; area: number }) => sum + t.price / t.area, 0) / withArea24.length
+      : null;
+    if (avgPricePerSqmFrom24Mo == null && sortedByDate.length > 0) {
+      const allWithArea = sortedByDate.filter((t: { area: number }) => t.area > 0);
+      if (allWithArea.length > 0) {
+        avgPricePerSqmFrom24Mo = allWithArea.reduce((sum: number, t: { price: number; area: number }) => sum + t.price / t.area, 0) / allWithArea.length;
+      }
+    }
 
-    const officialPropertySqm = (lastSale?.area != null && lastSale.area > 0)
-      ? lastSale.area
-      : (Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 85);
-    const estimatedValue = avgPricePerSqmFrom24Mo != null
-      ? Math.round(avgPricePerSqmFrom24Mo * officialPropertySqm)
-      : lastSale?.price ?? null;
-    const avgPrice = estimatedValue ?? (sortedByDate.length > 0 ? Math.round(sortedByDate.reduce((s: number, t: { price: number }) => s + t.price, 0) / sortedByDate.length) : null);
+    const lastSaleWithArea = sortedByDate.find((t: { area: number }) => t.area > 0);
+    const officialPropertySqm = (lastSaleWithArea?.area ?? lastSale?.area ?? 0) > 0
+      ? (lastSaleWithArea?.area ?? lastSale?.area ?? 0)
+      : 0;
     const avgPricePerSqm = avgPricePerSqmFrom24Mo;
+    const estimatedValue = (avgPricePerSqm != null && officialPropertySqm > 0)
+      ? Math.round(avgPricePerSqm * officialPropertySqm)
+      : null;
+    const avgPrice = estimatedValue;
 
     const transactions = sortedByDate.slice(0, 10).map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date }));
 
@@ -252,10 +272,13 @@ export async function GET(request: NextRequest) {
             ? cityTop5.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / cityTop5.length / 85
             : null;
         const cityLastSale = cityTop5[0];
-        const cityOfficialSqm = (cityLastSale?.area != null && cityLastSale.area > 0)
-          ? cityLastSale.area
-          : (Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 85);
-        const cityEstimatedValue = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * cityOfficialSqm) : null;
+        const cityLastWithArea = cityWithArea[0] ?? cityLastSale;
+        const cityOfficialSqm = (cityLastWithArea?.area ?? cityLastSale?.area ?? 0) > 0
+          ? (cityLastWithArea?.area ?? cityLastSale?.area ?? 0)
+          : 0;
+        const cityEstimatedValue = (cityAvgPricePerSqm != null && cityOfficialSqm > 0)
+          ? Math.round(cityAvgPricePerSqm * cityOfficialSqm)
+          : null;
         const cityLastSaleTs = cityLastSale?.date ? new Date(cityLastSale.date).getTime() : 0;
         const cityLastSaleOld = cityLastSaleTs > 0 && cityLastSaleTs < twoYearsAgo;
 
@@ -263,7 +286,7 @@ export async function GET(request: NextRequest) {
           console.log("[israel-real-estate] City fallback success:", cityTop5.length, "transactions");
           return NextResponse.json({
             transactions: cityTop5.map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date })),
-            avgPrice: cityEstimatedValue ?? cityLastSale?.price ?? Math.round(cityTop5.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop5.length),
+            avgPrice: cityEstimatedValue,
             avgPricePerSqm: cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm) : null,
             officialPropertySqm: cityOfficialSqm,
             lastSaleDate: cityLastSale?.date ?? null,
