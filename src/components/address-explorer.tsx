@@ -21,6 +21,7 @@ import {
   User,
   X,
 } from "lucide-react";
+import { HeartButton } from "@/components/heart-button";
 import {
   GoogleMap,
   useJsApiLoader,
@@ -1221,7 +1222,7 @@ export const AddressExplorer = () => {
         ? current.filter((item) => item.id !== restaurant.id)
         : [restaurant, ...current],
     );
-    if (isAdding) setFlashMessage("הוספת את המסעדה למועדפים");
+    if (isAdding) setFlashMessage("Added to favorites");
   }, [savedRestaurants]);
 
   React.useEffect(() => {
@@ -2025,9 +2026,9 @@ export const AddressExplorer = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
+                    <HeartButton
+                      isSaved={isPropertySaved(selectedBuilding.address)}
+                      onToggle={() =>
                         toggleSavedProperty({
                           id: `saved-${selectedBuilding.address}`,
                           address: selectedBuilding.address,
@@ -2042,18 +2043,7 @@ export const AddressExplorer = () => {
                           countryCode: selectedBuilding.countryCode,
                         })
                       }
-                      className="heart-save-btn rounded-full border border-amber-400/30 p-1 focus:outline-none focus:ring-0 focus:shadow-none"
-                      aria-label={isPropertySaved(selectedBuilding.address) ? "Remove from saved" : "Save to favorites"}
-                    >
-                      <Heart
-                        className={[
-                          "heart-save-icon size-3.5",
-                          isPropertySaved(selectedBuilding.address)
-                            ? "heart-saved"
-                            : "heart-unsaved",
-                        ].join(" ")}
-                      />
-                    </button>
+                    />
                     <button
                       type="button"
                       onClick={dismissSelectedBuilding}

@@ -142,8 +142,8 @@ button.heart-save-btn:focus-visible {
   transition: all 0.3s ease;
 }
 .heart-save-icon.heart-saved {
-  color: #eab308;
-  fill: #eab308;
+  color: #d4af37;
+  fill: #d4af37;
   transform: scale(1.1);
 }
 .heart-save-icon.heart-unsaved {
