@@ -12,7 +12,6 @@ export type IsraelRealEstateResponse = {
   officialPropertySqm?: number;
   lastSaleDate: string | null;
   lastSalePrice: number | null;
-  lastSaleOlderThan2Years?: boolean;
   transactionCount: number;
   source: string;
   isCityFallback?: boolean;
@@ -43,7 +42,7 @@ export async function fetchIsraelRealEstate(address: string, propertyAreaSqm?: n
 
   console.log("[fetchIsraelRealEstate] Fetching /api/israel-real-estate for:", address.slice(0, 50));
   try {
-    const params = new URLSearchParams({ address, limit: "50" });
+    const params = new URLSearchParams({ address, limit: "60" });
     if (propertyAreaSqm != null && propertyAreaSqm > 0) params.set("propertyAreaSqm", String(propertyAreaSqm));
     const res = await fetch(
       `/api/israel-real-estate?${params.toString()}`,
@@ -63,7 +62,7 @@ export async function fetchIsraelRealEstate(address: string, propertyAreaSqm?: n
       error: data.error,
     });
 
-    if (res.ok && !data.error && (data.avgPrice != null || data.lastSalePrice != null)) {
+    if (res.ok && !data.error && (data.avgPrice != null || data.lastSalePrice != null || data.avgPricePerSqm != null)) {
       CACHE.set(key, { data, ts: Date.now() });
     }
     return data;

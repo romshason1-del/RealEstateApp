@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { X, TrendingUp, BadgeCheck } from "lucide-react";
+import { X, TrendingUp, BadgeCheck, Sparkles } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { useIsraelRealEstate } from "@/hooks/use-israel-real-estate";
@@ -40,16 +40,19 @@ export function PropertyValueCard({
   );
   const { data: israelData, isLoading: israelLoading } = useIsraelRealEstate(address, isIsrael, mockData.areaSqm);
 
-  const hasCalculatedValue = isIsrael && israelData && !israelData.error &&
-    israelData.avgPrice != null && israelData.avgPrice > 0;
-  const hasHistoricalSale = isIsrael && israelData && !israelData.error &&
+  const hasLastDeal = isIsrael && israelData && !israelData.error &&
     israelData.lastSalePrice != null && israelData.lastSalePrice > 0;
+  const hasStreetAvg = isIsrael && israelData && !israelData.error &&
+    ((israelData.avgPrice != null && israelData.avgPrice > 0) || (israelData.avgPricePerSqm != null && israelData.avgPricePerSqm > 0));
+  const hasMarketEstimate = isIsrael && israelData && !israelData.error &&
+    israelData.avgPrice != null && israelData.avgPrice > 0;
 
-  const displayPrice = hasCalculatedValue && israelData
-    ? israelData.avgPrice!
-    : mockData.valueNumber;
-  const formattedValue = `${Math.round(displayPrice).toLocaleString()} ${currencySymbol}`.trim();
-  const lastSaleDate = hasHistoricalSale && israelData ? israelData.lastSaleDate : null;
+  const lastDealPrice = hasLastDeal && israelData ? israelData.lastSalePrice! : null;
+  const marketEstimatePrice = hasMarketEstimate && israelData ? israelData.avgPrice! : null;
+  const streetAvgFallback = hasStreetAvg && israelData && !hasLastDeal
+    ? (israelData.avgPrice ?? (israelData.avgPricePerSqm != null ? Math.round(israelData.avgPricePerSqm * 100) : null))
+    : null;
+  const lastSaleDate = hasLastDeal && israelData ? israelData.lastSaleDate : null;
   const isCityFallback = israelData?.isCityFallback ?? false;
 
   const [mounted, setMounted] = React.useState(false);
@@ -99,48 +102,57 @@ export function PropertyValueCard({
             <div className="text-sm text-amber-200/70">Loading government data…</div>
           ) : (
             <>
-              {/* Row 1 (main): Estimated Market Value - GFA × Street Avg only */}
+              {/* Row 1 (main): Last Deal on this Property - the fact */}
               <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
-                Estimated Market Value
+                Last Deal on this Property
               </div>
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
-                {hasCalculatedValue ? (
-                  <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                    {formattedValue}
-                  </span>
-                ) : isIsrael && israelData && !israelData.error ? (
-                  <span className="text-sm text-zinc-500">Insufficient data (need GFA + street sales)</span>
-                ) : (
+                {hasLastDeal && lastDealPrice != null ? (
                   <>
                     <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                      {formattedValue}
+                      {currencySymbol}{lastDealPrice.toLocaleString()}
                     </span>
-                    {!isIsrael && (
-                      <span className="text-sm font-medium text-emerald-400">
-                        ↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% vs last year
-                      </span>
-                    )}
+                    <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>
                   </>
+                ) : hasStreetAvg && streetAvgFallback != null ? (
+                  <>
+                    <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
+                      {currencySymbol}{streetAvgFallback.toLocaleString()}
+                    </span>
+                    <span className="text-xs text-zinc-500">Street Average</span>
+                  </>
+                ) : !isIsrael ? (
+                  <>
+                    <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
+                      {currencySymbol}{mockData.valueNumber.toLocaleString()}
+                    </span>
+                    <span className="text-sm font-medium text-emerald-400">
+                      ↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% vs last year
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-sm text-zinc-500">No data for this address</span>
                 )}
               </div>
-
-              {/* Row 2 (secondary): Historical Sale - 903,350 etc */}
-              {hasHistoricalSale && israelData && (
-                <div className="mt-2 text-xs text-zinc-400">
-                  Historical Sale: {currencySymbol}{israelData.lastSalePrice!.toLocaleString()} ({formatSaleYear(lastSaleDate)})
-                  {isCityFallback && " (city average)"}
-                </div>
+              {hasLastDeal && isCityFallback && (
+                <div className="mt-1 text-[11px] text-zinc-500">(city average)</div>
               )}
 
-              {hasCalculatedValue && israelData && (israelData.transactionCount ?? 0) > 0 && (
-                <div className="mt-1.5 text-[11px] text-zinc-500">
-                  Based on {israelData.transactionCount} recent transaction{(israelData.transactionCount ?? 0) !== 1 ? "s" : ""} from the Tax Authority
-                </div>
-              )}
-
-              {hasCalculatedValue && israelData && (israelData.lastSaleOlderThan2Years || (israelData.transactionCount ?? 0) > 0) && (
-                <div className="mt-2 text-[10px] text-zinc-500 italic">
-                  Estimate based on neighborhood trends
+              {/* Row 2 (secondary): Market Value Estimate - calculation with Smart AI icon */}
+              {hasMarketEstimate && marketEstimatePrice != null && (
+                <div className="mt-3 flex items-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                  <Sparkles className="size-4 shrink-0 text-violet-400" aria-hidden />
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-violet-400/90">Market Value Estimate</div>
+                    <div className="text-lg font-semibold text-violet-300">
+                      {currencySymbol}{marketEstimatePrice.toLocaleString()}
+                    </div>
+                    {israelData && (israelData.transactionCount ?? 0) > 0 && (
+                      <div className="text-[10px] text-zinc-500">
+                        Based on {israelData.transactionCount} street sales
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -152,7 +164,7 @@ export function PropertyValueCard({
               )}
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {(hasCalculatedValue || hasHistoricalSale) ? (
+                {(hasLastDeal || hasStreetAvg || hasMarketEstimate) ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
                     <BadgeCheck className="size-3" aria-hidden />
                     Official Data
