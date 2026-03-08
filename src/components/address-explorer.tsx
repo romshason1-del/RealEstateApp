@@ -129,9 +129,9 @@ declare global {
 }
 
 // Loader: geometry only. NEVER include "places" – load via importLibrary("places") for Place.searchNearby
-// mapIds: DEMO_MAP_ID required for AdvancedMarkerElement (Maps JavaScript API + Places API New)
+// mapIds required for AdvancedMarkerElement. For dark mode: create a Map ID with Dark style in Google Cloud Console and set NEXT_PUBLIC_GOOGLE_MAP_ID.
 const libraries: Libraries = ["geometry"];
-const MAP_ID = "DEMO_MAP_ID";
+const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAP_ID ?? "DEMO_MAP_ID";
 
 // Dark theme constants for map styling (reference image dark mode)
 const MAP_DARK = {
@@ -232,6 +232,29 @@ function createRestaurantLabelElement(name: string, rating: number | undefined, 
 function formatDistance(meters: number): string {
   if (meters < 1000) return `${Math.round(meters)} m`;
   return `${(meters / 1000).toFixed(1)} km`;
+}
+
+function createUserLocationDotElement(): HTMLElement {
+  const size = 24;
+  const r = 10;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  circle.setAttribute("cx", String(size / 2));
+  circle.setAttribute("cy", String(size / 2));
+  circle.setAttribute("r", String(r));
+  circle.setAttribute("fill", "#4285F4");
+  circle.setAttribute("stroke", "#ffffff");
+  circle.setAttribute("stroke-width", "3");
+  svg.appendChild(circle);
+  const wrapper = document.createElement("div");
+  wrapper.style.display = "flex";
+  wrapper.style.alignItems = "center";
+  wrapper.style.justifyContent = "center";
+  wrapper.appendChild(svg);
+  return wrapper;
 }
 
 type CountryProfile = {
@@ -1014,12 +1037,17 @@ export const AddressExplorer = () => {
   const handleMapIdle = React.useCallback(() => {
     if (!map) return;
 
-    const mapCenter = map.getCenter();
-    if (!mapCenter) return;
-
-    const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
-    setCenter(viewCenter);
-    searchNearbyRestaurants(viewCenter);
+    if (idleTimeoutRef.current !== null) {
+      window.clearTimeout(idleTimeoutRef.current);
+    }
+    idleTimeoutRef.current = window.setTimeout(() => {
+      idleTimeoutRef.current = null;
+      const mapCenter = map.getCenter();
+      if (!mapCenter) return;
+      const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
+      setCenter(viewCenter);
+      searchNearbyRestaurants(viewCenter);
+    }, 400);
   }, [map, searchNearbyRestaurants]);
 
   React.useEffect(() => {
@@ -1223,7 +1251,6 @@ export const AddressExplorer = () => {
 
   React.useEffect(() => {
     if (!map || !window.google?.maps?.importLibrary || !isLoaded) return;
-    if (!selectedRestaurant && infoWindowRef.current) infoWindowRef.current.close();
 
     const setupMarkers = async () => {
       if (userLocationMarkerRef.current) {
@@ -1235,20 +1262,15 @@ export const AddressExplorer = () => {
       if (!infoWindowRef.current) infoWindowRef.current = new window.google.maps.InfoWindow();
 
       const markerLib = (await window.google.maps.importLibrary("marker")) as google.maps.MarkerLibrary;
-      const { AdvancedMarkerElement, PinElement } = markerLib;
+      const { AdvancedMarkerElement } = markerLib;
 
       if (currentLocation) {
-        const userPin = new PinElement({
-          background: "#4285F4",
-          borderColor: "#ffffff",
-          glyphColor: "#ffffff",
-          scale: 1.2,
-        });
+        const userDotContent = createUserLocationDotElement();
         const userMarker = new AdvancedMarkerElement({
           map,
           position: currentLocation,
           title: "You are here",
-          content: userPin.element,
+          content: userDotContent,
           zIndex: 1000,
         });
         userLocationMarkerRef.current = userMarker;
@@ -1795,7 +1817,7 @@ export const AddressExplorer = () => {
             </div>
           ) : (
             <>
-            <div className="relative w-full shrink-0 touch-pan-x touch-pan-y" style={{ height: "min(55vh, 50dvh)", minHeight: "280px" }}>
+            <div className="relative w-full shrink-0 touch-pan-x touch-pan-y" style={{ height: "min(55vh, 50dvh)", minHeight: "280px", backgroundColor: MAP_DARK.containerBg }}>
             <GoogleMap
               key={center ? "loaded" : "loading"}
               mapContainerStyle={mapContainerStyle}
@@ -1867,6 +1889,7 @@ export const AddressExplorer = () => {
               options={{
                 mapId: MAP_ID,
                 mapTypeId: "roadmap",
+                backgroundColor: MAP_DARK.containerBg,
                 mapTypeControl: false,
                 streetViewControl: false,
                 fullscreenControl: false,
