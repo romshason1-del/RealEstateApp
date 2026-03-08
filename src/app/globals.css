@@ -125,3 +125,14 @@
     min-height: 100vh;
   }
 }
+
+/* Save (heart) button - toggle animation and visual states */
+.heart-save-btn {
+  @apply text-amber-500;
+}
+.heart-save-btn:active .heart-save-icon {
+  transform: scale(0.95);
+}
+.heart-save-icon {
+  transition: fill 0.2s ease, stroke 0.2s ease, transform 0.2s ease;
+}
