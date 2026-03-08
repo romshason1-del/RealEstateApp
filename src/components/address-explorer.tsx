@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
+import { PropertyValueCardSafe } from "@/components/property-value-card-safe";
 import {
   GoogleMap,
   useJsApiLoader,
@@ -395,7 +396,7 @@ function getPropertyInsight(
 
 export const AddressExplorer = () => {
   // Requires: Maps JavaScript API, Places API (New). Enable both in Google Cloud Console.
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
+  const apiKey = (typeof process !== "undefined" ? process.env?.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY : undefined) ?? "";
   const mapRef = React.useRef<google.maps.Map | null>(null);
   const restaurantMarkersRef = React.useRef<google.maps.OverlayView[]>([]);
   const userLocationMarkerRef = React.useRef<google.maps.Marker | null>(null);
@@ -2014,10 +2015,11 @@ export const AddressExplorer = () => {
           ) : null}
 
           {selectedBuilding ? (
-            <PropertyValueCard
+            <PropertyValueCardSafe
               address={selectedBuilding.address}
               position={selectedBuilding.position}
               currencySymbol={selectedBuilding.currencySymbol}
+              countryCode={selectedBuilding.countryCode}
               onClose={dismissSelectedBuilding}
               isSaved={isPropertySaved(selectedBuilding.address)}
               onToggleSave={() =>
@@ -2503,6 +2505,14 @@ export const AddressExplorer = () => {
             className="mt-8 w-full rounded-xl bg-amber-400 px-5 py-3 text-sm font-medium text-black disabled:opacity-60 disabled:cursor-not-allowed hover:bg-amber-300"
           >
             {isSigningUp ? "Creating account..." : "Get Started"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowWelcomeScreen(false)}
+            className="mt-4 w-full rounded-xl border border-amber-400/40 px-5 py-2.5 text-sm font-medium text-amber-300 hover:bg-amber-400/10"
+          >
+            Temporary Bypass (skip signup for testing)
           </button>
         </div>
       </div>
