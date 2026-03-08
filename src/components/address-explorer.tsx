@@ -179,6 +179,15 @@ function parseCurrencyAmount(value: string): number {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function extractLatLng(loc: unknown): { lat: number; lng: number } | null {
+  if (!loc || typeof loc !== "object") return null;
+  const o = loc as Record<string, unknown>;
+  const lat = typeof o.lat === "function" ? (o.lat as () => number)() : o.lat;
+  const lng = typeof o.lng === "function" ? (o.lng as () => number)() : o.lng;
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  return { lat, lng };
+}
+
 type CountryProfile = {
   countryCode: string;
   currencySymbol: string;
@@ -438,34 +447,27 @@ export const AddressExplorer = () => {
         const { places } = await Place.searchNearby(request);
         const bounds = map.getBounds();
         const nextRestaurants: Restaurant[] = (places ?? [])
-          .filter((place) => place.location)
-          .filter((place) => {
-            if (!bounds || !place.location) return true;
-            const loc = place.location as { lat: () => number; lng: () => number } | { lat: number; lng: number };
-            const lat = typeof (loc as { lat: () => number }).lat === "function" ? (loc as { lat: () => number; lng: () => number }).lat() : (loc as { lat: number; lng: number }).lat;
-            const lng = typeof (loc as { lng: () => number }).lng === "function" ? (loc as { lat: () => number; lng: () => number }).lng() : (loc as { lat: number; lng: number }).lng;
-            return bounds.contains({ lat, lng });
-          })
           .map((place, index) => {
-            const loc = place.location as { lat: () => number; lng: () => number } | { lat: number; lng: number };
-            const lat = typeof (loc as { lat: () => number }).lat === "function"
-              ? (loc as { lat: () => number; lng: () => number }).lat()
-              : (loc as { lat: number; lng: number }).lat;
-            const lng = typeof (loc as { lng: () => number }).lng === "function"
-              ? (loc as { lat: () => number; lng: () => number }).lng()
-              : (loc as { lat: number; lng: number }).lng;
+            const coords = extractLatLng(place.location);
+            if (!coords) return null;
             const name =
               typeof place.displayName === "string"
                 ? place.displayName
                 : (place.displayName as unknown as { text?: string } | null)?.text ?? "Restaurant";
-            return {
+            const r: Restaurant = {
               id: place.id ?? `restaurant-${index}`,
               name,
               address: place.formattedAddress ?? "Address unavailable",
               rating: place.rating ?? undefined,
               reviews: place.userRatingCount ?? 0,
-              location: { lat, lng },
+              location: coords,
             };
+            return r;
+          })
+          .filter((r): r is Restaurant => r !== null)
+          .filter((r) => {
+            if (!bounds) return true;
+            return bounds.contains(r.location);
           });
 
         setRestaurants(nextRestaurants);
@@ -1210,7 +1212,11 @@ export const AddressExplorer = () => {
         userLocationMarkerRef.current = userMarker;
       }
 
+      const markerRestaurantPairs: Array<{ marker: google.maps.marker.AdvancedMarkerElement; restaurant: Restaurant }> = [];
       for (const restaurant of filteredRestaurants) {
+        const { lat, lng } = restaurant.location;
+        if (typeof lat !== "number" || typeof lng !== "number") continue;
+
         const pin = new PinElement({
           background: selectedRestaurant?.id === restaurant.id ? "#f59e0b" : "#d4af37",
           borderColor: "#1b1f24",
@@ -1219,7 +1225,7 @@ export const AddressExplorer = () => {
         });
         const marker = new AdvancedMarkerElement({
           map,
-          position: restaurant.location,
+          position: { lat, lng },
           title: restaurant.name,
           content: pin.element,
           zIndex: selectedRestaurant?.id === restaurant.id ? 1001 : 1,
@@ -1228,34 +1234,41 @@ export const AddressExplorer = () => {
           setSelectedRestaurant(restaurant);
           setSelectedBuilding(null);
           setDismissedBuilding(null);
-          map.panTo(restaurant.location);
-          if (infoWindowRef.current) {
-            const div = document.createElement("div");
-            div.className = "max-w-[220px] bg-white p-3 text-black";
-            div.innerHTML = `
-              <div class="flex items-start justify-between gap-3">
-                <div>
-                  <div class="text-sm font-semibold">${restaurant.name}</div>
-                  <div class="mt-1 text-xs text-zinc-500">${restaurant.address}</div>
-                </div>
-              </div>
-              <div class="mt-3 flex items-center gap-3 text-sm text-zinc-700">
-                <span class="font-medium text-amber-600">★ ${restaurant.rating?.toFixed(1) ?? "N/A"}</span>
-                <span>${restaurant.reviews} reviews</span>
-              </div>
-            `;
-            const saveBtn = document.createElement("button");
-            saveBtn.type = "button";
-            saveBtn.className = "mt-2 rounded-full border border-amber-400/30 px-2 py-1 text-amber-500 text-xs";
-            saveBtn.textContent = "Save";
-            saveBtn.onclick = () => toggleSavedRestaurant(restaurant);
-            div.appendChild(saveBtn);
-            infoWindowRef.current.setContent(div);
-            infoWindowRef.current.open({ map, anchor: marker });
-            window.google.maps.event.addListenerOnce(infoWindowRef.current, "closeclick", () => setSelectedRestaurant(null));
-          }
+          map.panTo({ lat, lng });
         });
+        markerRestaurantPairs.push({ marker, restaurant });
         restaurantMarkersRef.current.push(marker);
+      }
+
+      if (selectedRestaurant && infoWindowRef.current) {
+        const pair = markerRestaurantPairs.find((p) => p.restaurant.id === selectedRestaurant.id);
+        const markerForSelected = pair?.marker;
+        if (markerForSelected) {
+          const r = selectedRestaurant;
+          const div = document.createElement("div");
+          div.className = "max-w-[220px] bg-white p-3 text-black";
+          div.innerHTML = `
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-sm font-semibold">${r.name}</div>
+                <div class="mt-1 text-xs text-zinc-500">${r.address}</div>
+              </div>
+            </div>
+            <div class="mt-3 flex items-center gap-3 text-sm text-zinc-700">
+              <span class="font-medium text-amber-600">★ ${r.rating?.toFixed(1) ?? "N/A"}</span>
+              <span>${r.reviews} reviews</span>
+            </div>
+          `;
+          const saveBtn = document.createElement("button");
+          saveBtn.type = "button";
+          saveBtn.className = "mt-2 rounded-full border border-amber-400/30 px-2 py-1 text-amber-500 text-xs";
+          saveBtn.textContent = "Save";
+          saveBtn.onclick = () => toggleSavedRestaurant(r);
+          div.appendChild(saveBtn);
+          infoWindowRef.current.setContent(div);
+          infoWindowRef.current.open({ map, anchor: markerForSelected });
+          window.google.maps.event.addListenerOnce(infoWindowRef.current, "closeclick", () => setSelectedRestaurant(null));
+        }
       }
     };
     setupMarkers();
@@ -1792,6 +1805,7 @@ export const AddressExplorer = () => {
 
                 setSearchPredictions([]);
                 setIsSearchDropdownOpen(false);
+                if (infoWindowRef.current) infoWindowRef.current.close();
                 setSelectedRestaurant(null);
                 setDismissedBuilding(null);
                 setSelectedBuilding(
