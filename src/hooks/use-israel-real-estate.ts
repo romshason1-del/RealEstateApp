@@ -6,31 +6,27 @@ import { fetchIsraelRealEstate, type IsraelRealEstateResponse } from "@/lib/isra
 export function useIsraelRealEstate(address: string, isIsrael: boolean, propertyAreaSqm?: number) {
   const [data, setData] = React.useState<IsraelRealEstateResponse | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!address.trim() || !isIsrael) {
       setData(null);
-      setError(null);
       setIsLoading(false);
       return;
     }
 
     let cancelled = false;
     setIsLoading(true);
-    setError(null);
 
     fetchIsraelRealEstate(address, propertyAreaSqm)
       .then((res) => {
         if (!cancelled) {
           setData(res);
-          if (res.error) setError(res.error);
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Connection failed");
-          setData({ transactions: [], avgPrice: null, avgPricePerSqm: null, lastSaleDate: null, lastSalePrice: null, transactionCount: 0, source: "data.gov.il", error: "Connection failed" });
+          console.error("[useIsraelRealEstate] Cannot show 900k - REASON: fetch threw", err);
+          setData((prev) => prev);
         }
       })
       .finally(() => {
@@ -40,5 +36,5 @@ export function useIsraelRealEstate(address: string, isIsrael: boolean, property
     return () => { cancelled = true; };
   }, [address, isIsrael, propertyAreaSqm]);
 
-  return { data, isLoading, error };
+  return { data, isLoading };
 }
