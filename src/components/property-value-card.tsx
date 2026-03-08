@@ -78,23 +78,23 @@ export function PropertyValueCard({
             <div className="text-sm text-amber-200/70">Loading…</div>
           ) : (
             <>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
-                {israelData?.hasSpecificHouse === false ? "Street Average" : "Last Deal on this Property"}
-              </div>
+              {/* Row 1: Last Recorded Deal - historical fact */}
+              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Last Recorded Deal</div>
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
                 <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
                   {currencySymbol}{mainPrice.toLocaleString()}
                 </span>
-                {israelData?.hasSpecificHouse && lastSalePrice != null && (
-                  <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>
+                {lastSalePrice != null && lastSaleDate && (
+                  <span className="text-sm font-medium text-zinc-400">From {formatSaleYear(lastSaleDate)}</span>
                 )}
               </div>
 
+              {/* Row 2: Current Market Estimate - today value */}
               {marketValue != null && isIsrael && (
                 <div className="mt-3 flex items-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
                   <Sparkles className="size-4 shrink-0 text-violet-400" aria-hidden />
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-violet-400/90">Market Value</div>
+                    <div className="text-[10px] uppercase tracking-wider text-violet-400/90">Current Market Estimate</div>
                     <div className="text-base font-semibold text-violet-300">{currencySymbol}{marketValue.toLocaleString()}</div>
                   </div>
                 </div>

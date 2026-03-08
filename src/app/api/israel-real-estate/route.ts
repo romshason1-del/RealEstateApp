@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
   const address = searchParams.get("address") ?? "";
   const street = searchParams.get("street") ?? "";
   const city = searchParams.get("city") ?? "";
-  const propertyAreaSqm = parseFloat(searchParams.get("propertyAreaSqm") ?? "85");
+  const propertyAreaSqm = parseFloat(searchParams.get("propertyAreaSqm") ?? "100");
   const limitParam = parseInt(searchParams.get("limit") ?? "100", 10);
   const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 100;
 
@@ -216,10 +216,11 @@ export async function GET(request: NextRequest) {
     const streetAverage = top10Street.length > 0
       ? Math.round(top10Street.reduce((s: number, t: { price: number }) => s + t.price, 0) / top10Street.length)
       : null;
-    const avgPrice = avgPricePerSqm != null ? Math.round(avgPricePerSqm * 100) : streetAverage;
+    const sqmForEstimate = propertyAreaSqm > 0 ? propertyAreaSqm : 100;
+    const avgPrice = avgPricePerSqm != null ? Math.round(avgPricePerSqm * sqmForEstimate) : streetAverage;
 
-    const lastSalePrice = hasSpecificHouse ? lastSaleForHouse?.price : (streetAverage ?? lastSaleForStreet?.price);
-    const lastSaleDate = hasSpecificHouse ? lastSaleForHouse?.date : null;
+    const lastSalePrice = hasSpecificHouse ? lastSaleForHouse?.price : (lastSaleForStreet?.price ?? streetAverage);
+    const lastSaleDate = hasSpecificHouse ? lastSaleForHouse?.date : lastSaleForStreet?.date ?? null;
 
     const transactions = sortedByDate.slice(0, 20).map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date }));
 
@@ -260,8 +261,8 @@ export async function GET(request: NextRequest) {
             ? cityTop20.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / cityTop20.length / 100
             : null;
         const cityLastSale = cityTop20[0];
-        const cityPropertySqm = (cityLastSale?.area ?? 0) > 0 ? cityLastSale.area : 100;
-        const cityNeighborhoodEstimate = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * 100) : null;
+        const citySqmForEstimate = propertyAreaSqm > 0 ? propertyAreaSqm : 100;
+        const cityNeighborhoodEstimate = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * citySqmForEstimate) : null;
         const cityEstimatedValue = cityNeighborhoodEstimate ?? (cityTop10.length > 0
           ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)
           : null);
@@ -270,14 +271,14 @@ export async function GET(request: NextRequest) {
           const cityStreetAvg = cityTop10.length > 0
             ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)
             : null;
-          const cityAvgPrice = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * 100) : cityStreetAvg;
+          const cityAvgPrice = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * citySqmForEstimate) : cityStreetAvg;
           console.log("[israel-real-estate] City fallback success:", cityTop20.length, "transactions");
           return NextResponse.json({
             transactions: cityTop20.map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date })),
             avgPrice: cityAvgPrice,
             avgPricePerSqm: cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm) : null,
-            lastSaleDate: null,
-            lastSalePrice: cityStreetAvg ?? cityLastSale?.price ?? null,
+            lastSaleDate: cityLastSale?.date ?? null,
+            lastSalePrice: cityLastSale?.price ?? cityStreetAvg ?? null,
             streetAverage: cityStreetAvg,
             hasSpecificHouse: false,
             transactionCount: cityTop20.length,
@@ -293,7 +294,7 @@ export async function GET(request: NextRequest) {
       transactions,
       avgPrice,
       avgPricePerSqm: avgPricePerSqm != null ? Math.round(avgPricePerSqm) : null,
-      lastSaleDate: hasSpecificHouse ? lastSaleDate : null,
+      lastSaleDate,
       lastSalePrice,
       streetAverage,
       hasSpecificHouse,
