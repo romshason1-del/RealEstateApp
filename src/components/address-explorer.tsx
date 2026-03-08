@@ -1221,7 +1221,7 @@ export const AddressExplorer = () => {
         ? current.filter((item) => item.id !== restaurant.id)
         : [restaurant, ...current],
     );
-    if (isAdding) setFlashMessage("Added to favorites");
+    if (isAdding) setFlashMessage("הוספת את המסעדה למועדפים");
   }, [savedRestaurants]);
 
   React.useEffect(() => {
@@ -1338,29 +1338,25 @@ export const AddressExplorer = () => {
             const meters = window.google.maps.geometry.spherical.computeDistanceBetween(from, to);
             distanceText = `${formatDistance(meters)} from you`;
           }
-          const isSaved = savedRestaurants.some((item) => item.id === r.id);
-          const heartFill = isSaved ? "#eab308" : "none";
-          const heartStroke = isSaved ? "#eab308" : "#6b7280";
-          const heartScale = isSaved ? "1.1" : "1";
+          const isSavedRestaurant = savedRestaurants.some((item) => item.id === r.id);
           const div = document.createElement("div");
-          div.className = "max-w-[260px] bg-white p-3 text-black";
+          div.className = "restaurant-infowindow max-w-[260px] bg-white p-3 text-black";
           div.innerHTML = `
             <div class="text-sm font-semibold">${r.name} ★ ${r.rating?.toFixed(1) ?? "N/A"}</div>
             <div class="mt-2 text-xs text-zinc-600">${r.address}</div>
             ${distanceText ? `<div class="mt-1 text-xs text-zinc-500">${distanceText}</div>` : ""}
-            <button type="button" class="heart-save-btn mt-2 rounded-full border border-amber-400/30 p-1.5 hover:border-amber-400/50" data-restaurant-save style="outline:none;box-shadow:none;">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${heartFill}" stroke="${heartStroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="heart-save-icon" style="transform: scale(${heartScale});"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+            <button type="button" class="heart-save-btn mt-2 rounded-full border border-amber-400/30 p-1.5 hover:border-amber-400/50 focus:outline-none focus:ring-0 focus:shadow-none" data-restaurant-save>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="heart-save-icon ${isSavedRestaurant ? "heart-saved" : "heart-unsaved"}"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
             </button>
           `;
           const saveBtn = div.querySelector("[data-restaurant-save]");
           if (saveBtn) {
             saveBtn.addEventListener("click", (e) => {
-              const willBeSaved = !isSaved;
               const svg = (e.currentTarget as HTMLElement).querySelector("svg");
               if (svg) {
-                svg.setAttribute("fill", willBeSaved ? "#eab308" : "none");
-                svg.setAttribute("stroke", willBeSaved ? "#eab308" : "#6b7280");
-                svg.style.transform = willBeSaved ? "scale(1.1)" : "scale(1)";
+                const willBeSaved = !isSavedRestaurant;
+                svg.classList.toggle("heart-saved", willBeSaved);
+                svg.classList.toggle("heart-unsaved", !willBeSaved);
               }
               toggleSavedRestaurant(r);
             });

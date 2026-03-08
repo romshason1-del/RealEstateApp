@@ -151,6 +151,10 @@ button.heart-save-btn:focus-visible {
   fill: none;
   transform: scale(1);
 }
+/* Restaurant InfoWindow has white bg - use gray outline for visibility */
+.restaurant-infowindow .heart-save-icon.heart-unsaved {
+  color: #6b7280;
+}
 .heart-save-btn:active .heart-save-icon {
   transform: scale(0.95);
 }
