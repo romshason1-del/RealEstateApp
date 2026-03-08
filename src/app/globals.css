@@ -132,7 +132,9 @@
 }
 .heart-save-btn:focus,
 .heart-save-btn:focus-visible,
-.heart-save-btn:active {
+.heart-save-btn:active,
+button.heart-save-btn:focus,
+button.heart-save-btn:focus-visible {
   outline: none;
   box-shadow: none;
 }

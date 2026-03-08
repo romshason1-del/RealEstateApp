@@ -974,6 +974,9 @@ export const AddressExplorer = () => {
         return;
       }
 
+      setSearchPredictions([]);
+      setIsSearchDropdownOpen(false);
+
       try {
         const { results, status } = await geocodeRequest({
           placeId: prediction.placeId,
@@ -988,8 +991,6 @@ export const AddressExplorer = () => {
         const nextCenter = { lat: location.lat(), lng: location.lng() };
         const formattedAddress =
           results[0].formatted_address ?? prediction.description;
-
-        setSearchPredictions([]);
         setQuery(formattedAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
@@ -1347,7 +1348,7 @@ export const AddressExplorer = () => {
             <div class="text-sm font-semibold">${r.name} ★ ${r.rating?.toFixed(1) ?? "N/A"}</div>
             <div class="mt-2 text-xs text-zinc-600">${r.address}</div>
             ${distanceText ? `<div class="mt-1 text-xs text-zinc-500">${distanceText}</div>` : ""}
-            <button type="button" class="heart-save-btn mt-2 rounded-full border border-amber-400/30 p-1.5 hover:border-amber-400/50" data-restaurant-save>
+            <button type="button" class="heart-save-btn mt-2 rounded-full border border-amber-400/30 p-1.5 hover:border-amber-400/50" data-restaurant-save style="outline:none;box-shadow:none;">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${heartFill}" stroke="${heartStroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="heart-save-icon" style="transform: scale(${heartScale});"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
             </button>
           `;
@@ -2045,7 +2046,7 @@ export const AddressExplorer = () => {
                           countryCode: selectedBuilding.countryCode,
                         })
                       }
-                      className="heart-save-btn rounded-full border border-amber-400/30 p-1"
+                      className="heart-save-btn rounded-full border border-amber-400/30 p-1 focus:outline-none focus:ring-0 focus:shadow-none"
                       aria-label={isPropertySaved(selectedBuilding.address) ? "Remove from saved" : "Save to favorites"}
                     >
                       <Heart
