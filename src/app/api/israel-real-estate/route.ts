@@ -6,8 +6,8 @@ const NADLAN_RESOURCE_ID = "ad6680ef-5d46-4654-be8d-7301292a8e48";
 /** Hebrew field names from Israel Tax Authority real estate dataset (מאגר עסקאות הנדל"ן) */
 const SALE_PRICE_FIELDS = ["מחיר העסקה", "מחיר עסקה", "מחיר_העסקה", "מחיר_עסקה", "sale_price", "price"];
 const SALE_DATE_FIELDS = ["תאריך העסקה", "תאריך עסקה", "תאריך_העסקה", "תאריך_עסקה", "DEALDATE", "sale_date", "date"];
-/** GFA_QUANTITY first - exact field from data.gov.il; then Hebrew/English variants */
-const AREA_FIELDS = ["GFA_QUANTITY", "GFA", "שטח", "שטח במ\"ר", "שטח_במ\"ר", "מ\"ר", "area", "sqm", "שטח_במ\"ר"];
+const AREA_FIELDS = ["GFA_QUANTITY", "GFA", "שטח", "שטח במ\"ר", "שטח_במ\"ר", "מ\"ר", "area", "sqm"];
+const ADDRESS_FIELDS = ["כתובת", "street", "address", "רחוב"];
 const GUSH_FIELDS = ["גוש", "GUSH", "gush"];
 const PARCEL_FIELDS = ["חלקה", "PARCEL", "parcel"];
 
@@ -80,11 +80,10 @@ function normalizeForSearch(text: string): string {
 }
 
 /**
- * Parse street and city from address string.
- * Handles formats like "123 Dizengoff St, Tel Aviv, Israel" or "רחוב דיזנגוף 123, תל אביב"
- * Strips "Israel" from end for better API search.
+ * Parse address into street, city, and house number.
+ * Handles "123 Dizengoff St, Tel Aviv", "Dizengoff 123, Tel Aviv", "רחוב דיזנגוף 123, תל אביב"
  */
-function parseAddressParts(address: string): { street: string; city: string } {
+function parseAddressParts(address: string): { street: string; city: string; houseNumber: string } {
   const trimmed = address.trim();
   let parts = trimmed.split(/[,،]/).map((p) => p.trim()).filter(Boolean);
 
@@ -92,22 +91,45 @@ function parseAddressParts(address: string): { street: string; city: string } {
     parts = parts.slice(0, -1);
   }
 
+  const houseMatch = trimmed.match(/\b(\d+)\b/);
+  const houseNumber = houseMatch ? houseMatch[1] : "";
+
   if (parts.length >= 2) {
     const city = normalizeForSearch(parts[parts.length - 1]);
-    const street = normalizeForSearch(parts.slice(0, -1).join(" "));
-    return { street, city };
+    const streetPart = parts.slice(0, -1).join(" ");
+    const street = normalizeForSearch(streetPart.replace(/\d+/g, " ").replace(/\s+/g, " ").trim());
+    return { street: street || normalizeForSearch(streetPart), city, houseNumber };
   }
   if (parts.length === 1) {
-    const cleaned = normalizeForSearch(parts[0]);
-    return { street: cleaned, city: cleaned };
+    const cleaned = normalizeForSearch(parts[0].replace(/\d+/g, " ").replace(/\s+/g, " ").trim());
+    return { street: cleaned || normalizeForSearch(parts[0]), city: cleaned, houseNumber };
   }
-  return { street: "", city: "" };
+  return { street: "", city: "", houseNumber: "" };
 }
 
-/** Extract street name only (e.g. "Khayim Shorer") for broad street-level search. Removes leading numbers. */
-function getStreetNameForFallback(street: string): string {
-  const withoutLeadingNum = street.replace(/^\d+\s+/, "").trim();
-  return withoutLeadingNum || street;
+/** Street name without house number for API search */
+function getStreetName(street: string): string {
+  return street.replace(/^\d+\s+/, "").replace(/\s+\d+$/, "").trim() || street;
+}
+
+function getAddressFromRecord(record: Record<string, unknown>): string {
+  for (const f of ADDRESS_FIELDS) {
+    const val = record[f];
+    if (val != null && val !== "") return String(val).trim();
+  }
+  for (const [key, val] of Object.entries(record)) {
+    if (val != null && val !== "" && (key.includes("כתובת") || key.includes("address") || key.includes("street"))) {
+      return String(val).trim();
+    }
+  }
+  return "";
+}
+
+function recordMatchesHouse(record: Record<string, unknown>, houseNumber: string): boolean {
+  if (!houseNumber) return false;
+  const addr = getAddressFromRecord(record);
+  if (!addr) return false;
+  return addr.includes(houseNumber) || new RegExp(`\\b${houseNumber}\\b`).test(addr);
 }
 
 export async function GET(request: NextRequest) {
@@ -117,19 +139,19 @@ export async function GET(request: NextRequest) {
   const street = searchParams.get("street") ?? "";
   const city = searchParams.get("city") ?? "";
   const propertyAreaSqm = parseFloat(searchParams.get("propertyAreaSqm") ?? "85");
-  const limitParam = parseInt(searchParams.get("limit") ?? "60", 10);
-  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 60;
+  const limitParam = parseInt(searchParams.get("limit") ?? "100", 10);
+  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 100;
 
 
-  const { street: parsedStreet, city: parsedCity } = parseAddressParts(address);
-  const searchStreet = street || parsedStreet;
+  const { street: parsedStreet, city: parsedCity, houseNumber } = parseAddressParts(address);
+  const searchStreet = street || getStreetName(parsedStreet);
   const searchCity = city || parsedCity;
 
-  console.log("[israel-real-estate] Parsed:", { address, searchStreet, searchCity, limit, resourceId: NADLAN_RESOURCE_ID });
+  console.log("[israel-real-estate] Fetch by street+city:", { searchStreet, searchCity, houseNumber, limit });
 
-  if (!address.trim() && !searchStreet && !searchCity) {
+  if (!searchStreet && !searchCity) {
     return NextResponse.json(
-      { error: "Address, street, or city is required", transactions: [], avgPrice: null },
+      { error: "Street or city is required", transactions: [], avgPrice: null },
       { status: 400 }
     );
   }
@@ -141,73 +163,16 @@ export async function GET(request: NextRequest) {
   };
   const sortParam = "תאריך_העסקה desc";
 
-  async function fetchAndProcess(q: string): Promise<{ records: unknown[]; json: { success?: boolean; error?: { message?: string }; result?: { records?: unknown[] } } }> {
+  try {
+    const q = [searchStreet, searchCity].filter(Boolean).join(" ");
     const url = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${NADLAN_RESOURCE_ID}&q=${encodeURIComponent(q)}&limit=${limit}&sort=${encodeURIComponent(sortParam)}`;
     const res = await fetch(url, { headers: fetchHeaders, signal: AbortSignal.timeout(15000) });
-    if (!res.ok) {
-      throw new Error(`API returned ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`API returned ${res.status}`);
     const json = await res.json().catch(() => ({ success: false, error: { message: "Invalid JSON" } }));
-    if (json?.success === false) {
-      throw new Error(json?.error?.message ?? "API request failed");
-    }
-    const records = json?.result?.records ?? [];
-    return { records, json };
-  }
+    if (json?.success === false) throw new Error(json?.error?.message ?? "API request failed");
 
-  try {
-    const searchTerms = [searchStreet, searchCity].filter(Boolean).join(" ");
-    const cleanedAddress = address.replace(/\s*(Israel|ישראל)\s*$/i, "").trim();
-    const q = searchTerms || cleanedAddress || "*";
-
-    let records: unknown[] = [];
-    let json: { success?: boolean; error?: { message?: string }; result?: { records?: unknown[] } } = {};
-    let usedStreetFallback = false;
-
-    try {
-      console.log("[israel-real-estate] Fetching data.gov.il (specific):", q.slice(0, 80));
-      const result = await fetchAndProcess(q);
-      records = result.records;
-      json = result.json;
-
-      if (json?.success === false) {
-        throw new Error(json?.error?.message ?? "API request failed");
-      }
-    } catch {
-      console.log("[israel-real-estate] First fetch failed (404 or error), trying street-only:", searchStreet);
-      const streetName = searchStreet ? getStreetNameForFallback(searchStreet) : "";
-      if (streetName) {
-        try {
-          const streetResult = await fetchAndProcess(streetName);
-          records = streetResult.records;
-          json = streetResult.json;
-          usedStreetFallback = true;
-          if (json?.success === false) records = [];
-        } catch {
-          records = [];
-        }
-      }
-    }
-
-    if (records.length === 0 && searchStreet) {
-      const streetName = getStreetNameForFallback(searchStreet);
-      console.log("[israel-real-estate] No records from specific search, trying street-only:", streetName);
-      if (streetName) {
-        try {
-          const streetResult = await fetchAndProcess(streetName);
-          if (streetResult.records.length > 0) {
-            records = streetResult.records;
-            json = streetResult.json;
-            usedStreetFallback = true;
-          }
-        } catch {
-          /* keep records empty */
-        }
-      }
-    }
-
-    const recordList = records as Record<string, unknown>[];
-    console.log("[israel-real-estate] Records received:", recordList.length, "usedStreetFallback:", usedStreetFallback);
+    const recordList = (json?.result?.records ?? []) as Record<string, unknown>[];
+    console.log("[israel-real-estate] Records received:", recordList.length, "for street+city");
 
     const withGushParcel = recordList.filter((r: Record<string, unknown>) => hasGushAndParcel(r));
     console.log("[israel-real-estate] After GUSH/PARCEL filter:", withGushParcel.length);
@@ -225,6 +190,7 @@ export async function GET(request: NextRequest) {
         price: parseNumeric(price),
         date: date != null ? String(date) : null,
         area,
+        record: r,
       };
     }).filter((t: { price: number }) => t.price > 0);
 
@@ -234,7 +200,11 @@ export async function GET(request: NextRequest) {
       return db - da;
     });
 
-    const lastSale = sortedByDate[0];
+    const forThisHouse = houseNumber ? sortedByDate.filter((t) => recordMatchesHouse(t.record as Record<string, unknown>, houseNumber)) : [];
+    const hasSpecificHouse = forThisHouse.length > 0;
+    const lastSaleForHouse = forThisHouse[0];
+    const lastSaleForStreet = sortedByDate[0];
+
     const top10Street = sortedByDate.slice(0, 10);
     const top20Street = sortedByDate.slice(0, 20);
     const withArea = top20Street.filter((t: { area: number }) => t.area > 0);
@@ -243,16 +213,13 @@ export async function GET(request: NextRequest) {
       : top20Street.length > 0
         ? top20Street.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / top20Street.length / 100
         : null;
-    const propertySqm = (lastSale?.area ?? 0) > 0 ? lastSale.area : (Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 100);
-
-    const neighborhoodAvgPrice = top10Street.length > 0
+    const streetAverage = top10Street.length > 0
       ? Math.round(top10Street.reduce((s: number, t: { price: number }) => s + t.price, 0) / top10Street.length)
       : null;
-    const estimatedValue = avgPricePerSqm != null ? Math.round(avgPricePerSqm * propertySqm) : null;
-    const neighborhoodEstimatePrice = usedStreetFallback && avgPricePerSqm != null
-      ? Math.round(avgPricePerSqm * 100)
-      : null;
-    const avgPrice = neighborhoodEstimatePrice ?? estimatedValue ?? neighborhoodAvgPrice ?? lastSale?.price ?? null;
+    const avgPrice = avgPricePerSqm != null ? Math.round(avgPricePerSqm * 100) : streetAverage;
+
+    const lastSalePrice = hasSpecificHouse ? lastSaleForHouse?.price : (streetAverage ?? lastSaleForStreet?.price);
+    const lastSaleDate = hasSpecificHouse ? lastSaleForHouse?.date : null;
 
     const transactions = sortedByDate.slice(0, 20).map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date }));
 
@@ -300,35 +267,39 @@ export async function GET(request: NextRequest) {
           : null);
 
         if (cityTop20.length > 0) {
+          const cityStreetAvg = cityTop10.length > 0
+            ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)
+            : null;
+          const cityAvgPrice = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * 100) : cityStreetAvg;
           console.log("[israel-real-estate] City fallback success:", cityTop20.length, "transactions");
           return NextResponse.json({
             transactions: cityTop20.map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date })),
-            avgPrice: cityEstimatedValue,
+            avgPrice: cityAvgPrice,
             avgPricePerSqm: cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm) : null,
-            officialPropertySqm: cityPropertySqm,
-            lastSaleDate: cityLastSale?.date ?? null,
-            lastSalePrice: cityLastSale?.price ?? null,
+            lastSaleDate: null,
+            lastSalePrice: cityStreetAvg ?? cityLastSale?.price ?? null,
+            streetAverage: cityStreetAvg,
+            hasSpecificHouse: false,
             transactionCount: cityTop20.length,
             source: "data.gov.il",
             isCityFallback: true,
-            isNeighborhoodEstimate: true,
           });
         }
       }
     }
 
-    console.log("[israel-real-estate] Success:", { transactionsCount: transactions.length, avgPrice, usedStreetFallback });
+    console.log("[israel-real-estate] Success:", { transactionsCount: transactions.length, hasSpecificHouse, lastSalePrice, streetAverage });
     return NextResponse.json({
       transactions,
       avgPrice,
       avgPricePerSqm: avgPricePerSqm != null ? Math.round(avgPricePerSqm) : null,
-      officialPropertySqm: propertySqm,
-      lastSaleDate: lastSale?.date ?? null,
-      lastSalePrice: lastSale?.price ?? null,
+      lastSaleDate: hasSpecificHouse ? lastSaleDate : null,
+      lastSalePrice,
+      streetAverage,
+      hasSpecificHouse,
       transactionCount: transactions.length,
       source: "data.gov.il",
       isCityFallback: false,
-      isNeighborhoodEstimate: usedStreetFallback,
     });
   } catch (err) {
     console.error("[israel-real-estate] API error:", err);

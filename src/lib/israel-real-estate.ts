@@ -9,13 +9,13 @@ export type IsraelRealEstateResponse = {
   transactions: IsraelTransaction[];
   avgPrice: number | null;
   avgPricePerSqm: number | null;
-  officialPropertySqm?: number;
   lastSaleDate: string | null;
   lastSalePrice: number | null;
+  streetAverage?: number | null;
+  hasSpecificHouse?: boolean;
   transactionCount: number;
   source: string;
   isCityFallback?: boolean;
-  isNeighborhoodEstimate?: boolean;
   error?: string;
 };
 
@@ -33,6 +33,17 @@ const FALLBACK_RESPONSE: IsraelRealEstateResponse = {
   error: "Connection failed",
 };
 
+function parseStreetCity(address: string): { street: string; city: string } {
+  const parts = address.replace(/\s*(Israel|ישראל)\s*$/i, "").trim().split(/[,،]/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const city = parts[parts.length - 1];
+    const street = parts.slice(0, -1).join(" ").replace(/^\d+\s+/, "").replace(/\s+\d+$/, "").trim();
+    return { street, city };
+  }
+  if (parts.length === 1) return { street: parts[0], city: parts[0] };
+  return { street: "", city: "" };
+}
+
 export async function fetchIsraelRealEstate(address: string, propertyAreaSqm?: number): Promise<IsraelRealEstateResponse> {
   const key = address.trim().toLowerCase();
   const cached = CACHE.get(key);
@@ -41,9 +52,12 @@ export async function fetchIsraelRealEstate(address: string, propertyAreaSqm?: n
     return cached.data;
   }
 
-  console.log("[fetchIsraelRealEstate] Fetching /api/israel-real-estate for:", address.slice(0, 50));
+  const { street, city } = parseStreetCity(address);
+  console.log("[fetchIsraelRealEstate] Fetching by street+city:", street || "(parsed)", city || "(parsed)");
   try {
-    const params = new URLSearchParams({ address, limit: "60" });
+    const params = new URLSearchParams({ address, limit: "100" });
+    if (street) params.set("street", street);
+    if (city) params.set("city", city);
     if (propertyAreaSqm != null && propertyAreaSqm > 0) params.set("propertyAreaSqm", String(propertyAreaSqm));
     const res = await fetch(
       `/api/israel-real-estate?${params.toString()}`,
