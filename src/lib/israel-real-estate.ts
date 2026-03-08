@@ -56,15 +56,18 @@ export async function fetchIsraelRealEstate(address: string, propertyAreaSqm?: n
     }));
     if (data.transactionCount == null) data.transactionCount = data.transactions?.length ?? 0;
 
-    console.log("[fetchIsraelRealEstate] Response:", {
-      ok: res.ok,
-      status: res.status,
-      hasData: !data.error && (data.avgPrice != null || data.lastSalePrice != null),
-      error: data.error,
-    });
-
-    if (res.ok && !data.error && (data.avgPrice != null || data.lastSalePrice != null || data.avgPricePerSqm != null)) {
+    if (res.ok && !data.error && (data.lastSalePrice != null || data.avgPrice != null || data.avgPricePerSqm != null)) {
       CACHE.set(key, { data, ts: Date.now() });
+    }
+
+    if (!res.ok || data.error) {
+      const cached = CACHE.get(key);
+      if (cached) {
+        console.log("[fetchIsraelRealEstate] 404/error - using last successful data for address");
+        return cached.data;
+      }
+      console.error("[fetchIsraelRealEstate] Cannot show 900k - REASON: API returned", res.status, data.error ?? "no error field", "- no cached data for this address");
+      return data;
     }
     return data;
   } catch (err) {
