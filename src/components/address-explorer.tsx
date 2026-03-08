@@ -1214,12 +1214,14 @@ export const AddressExplorer = () => {
   );
 
   const toggleSavedRestaurant = React.useCallback((restaurant: SavedRestaurant) => {
+    const isAdding = !savedRestaurants.some((item) => item.id === restaurant.id);
     setSavedRestaurants((current) =>
       current.some((item) => item.id === restaurant.id)
         ? current.filter((item) => item.id !== restaurant.id)
         : [restaurant, ...current],
     );
-  }, []);
+    if (isAdding) setFlashMessage("הוספת את המסעדה למועדפים");
+  }, [savedRestaurants]);
 
   React.useEffect(() => {
     if (!map || !window.google?.maps || !isLoaded) return;
@@ -1335,19 +1337,21 @@ export const AddressExplorer = () => {
             const meters = window.google.maps.geometry.spherical.computeDistanceBetween(from, to);
             distanceText = `${formatDistance(meters)} from you`;
           }
+          const isSaved = savedRestaurants.some((item) => item.id === r.id);
+          const heartFill = isSaved ? "#eab308" : "none";
+          const heartStroke = isSaved ? "#eab308" : "#6b7280";
           const div = document.createElement("div");
           div.className = "max-w-[260px] bg-white p-3 text-black";
           div.innerHTML = `
             <div class="text-sm font-semibold">${r.name} ★ ${r.rating?.toFixed(1) ?? "N/A"}</div>
             <div class="mt-2 text-xs text-zinc-600">${r.address}</div>
             ${distanceText ? `<div class="mt-1 text-xs text-zinc-500">${distanceText}</div>` : ""}
+            <button type="button" class="mt-2 rounded-full border border-amber-400/30 p-1.5 transition-colors duration-200 ease-in-out hover:border-amber-400/50" data-restaurant-save>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="${heartFill}" stroke="${heartStroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: fill 0.2s ease, stroke 0.2s ease"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+            </button>
           `;
-          const saveBtn = document.createElement("button");
-          saveBtn.type = "button";
-          saveBtn.className = "mt-2 rounded-full border border-amber-400/30 px-2 py-1 text-amber-500 text-xs";
-          saveBtn.textContent = "Save";
-          saveBtn.onclick = () => toggleSavedRestaurant(r);
-          div.appendChild(saveBtn);
+          const saveBtn = div.querySelector("[data-restaurant-save]");
+          if (saveBtn) saveBtn.addEventListener("click", () => toggleSavedRestaurant(r));
           infoWindowRef.current.close();
           infoWindowRef.current.setContent(div);
           infoWindowRef.current.setPosition(new window.google.maps.LatLng(r.location.lat, r.location.lng));
@@ -1367,15 +1371,17 @@ export const AddressExplorer = () => {
       restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
       restaurantMarkersRef.current = [];
     };
-  }, [map, filteredRestaurants, selectedRestaurant, currentLocation, isLoaded, toggleSavedRestaurant]);
+  }, [map, filteredRestaurants, selectedRestaurant, currentLocation, isLoaded, toggleSavedRestaurant, savedRestaurants]);
 
   const toggleSavedProperty = React.useCallback((property: PortfolioAsset) => {
+    const isAdding = !savedProperties.some((item) => item.address === property.address);
     setSavedProperties((current) =>
       current.some((item) => item.address === property.address)
         ? current.filter((item) => item.address !== property.address)
         : [property, ...current],
     );
-  }, []);
+    if (isAdding) setFlashMessage("הוספת את הנכס למועדפים");
+  }, [savedProperties]);
 
   const openSavedRestaurant = React.useCallback(
     (restaurant: SavedRestaurant) => {
@@ -1645,23 +1651,21 @@ export const AddressExplorer = () => {
     }
 
     const activeBiasLocation = currentLocation ?? searchBiasLocation;
-    if (!activeBiasLocation) {
-      setSearchPredictions([]);
-      return;
+    const autocompleteRequest: { input: string; locationBias?: { center: { lat: number; lng: number }; radius: number } } = {
+      input: trimmedQuery,
+    };
+    if (activeBiasLocation) {
+      autocompleteRequest.locationBias = {
+        center: { lat: activeBiasLocation.lat, lng: activeBiasLocation.lng },
+        radius: 1500,
+      };
     }
 
     (async () => {
       try {
         const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
         const { AutocompleteSuggestion } = placesLib;
-        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: trimmedQuery,
-          locationBias: {
-            center: { lat: activeBiasLocation.lat, lng: activeBiasLocation.lng },
-            radius: 1500,
-          },
-          ...(searchCountryCode ? { includedRegionCodes: [searchCountryCode.toUpperCase()] } : {}),
-        });
+        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions(autocompleteRequest);
         setSearchPredictions(
           (suggestions ?? []).slice(0, 6).map((s) => {
             const p = s.placePrediction;
@@ -1675,7 +1679,7 @@ export const AddressExplorer = () => {
         setSearchPredictions([]);
       }
     })();
-  }, [currentLocation, isLoaded, isSearchDropdownOpen, query, searchBiasLocation, searchCountryCode]);
+  }, [currentLocation, isLoaded, isSearchDropdownOpen, query, searchBiasLocation]);
 
   React.useEffect(() => {
     if (!isLoaded || !window.google?.maps?.importLibrary || !isPropertyValueAddressInputOpen) {
@@ -2034,10 +2038,10 @@ export const AddressExplorer = () => {
                     >
                       <Heart
                         className={[
-                          "size-3.5",
+                          "size-3.5 transition-colors duration-200 ease-in-out",
                           isPropertySaved(selectedBuilding.address)
                             ? "fill-amber-500 text-amber-500"
-                            : "",
+                            : "text-white",
                         ].join(" ")}
                       />
                     </button>
