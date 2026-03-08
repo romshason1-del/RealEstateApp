@@ -7,10 +7,6 @@ import { calculatePropertyValue } from "@/lib/property-value";
 import { useIsraelRealEstate } from "@/hooks/use-israel-real-estate";
 import { formatSaleYear } from "@/lib/israel-real-estate";
 
-const SQM_MIN = 20;
-const SQM_MAX = 400;
-const SQM_STEP = 5;
-
 export type PropertyValueCardProps = {
   /** Property address */
   address: string;
@@ -47,36 +43,15 @@ export function PropertyValueCard({
   const hasRealData = isIsrael && israelData && !israelData.error &&
     ((israelData.avgPrice != null && israelData.avgPrice > 0) || (israelData.lastSalePrice != null && israelData.lastSalePrice > 0));
 
-  /** Street avg price per sqm - from API or mock */
-  const pricePerSqm = React.useMemo(() => {
-    if (hasRealData && israelData!.avgPricePerSqm != null && israelData!.avgPricePerSqm > 0) {
-      return israelData!.avgPricePerSqm;
-    }
-    if (hasRealData && israelData!.avgPrice != null && israelData!.avgPrice > 0 && mockData.areaSqm > 0) {
-      return Math.round(israelData!.avgPrice / mockData.areaSqm);
-    }
-    return mockData.pricePerSqm;
-  }, [hasRealData, israelData, mockData.pricePerSqm, mockData.areaSqm]);
-
-  const [mounted, setMounted] = React.useState(false);
-  const [manualSqm, setManualSqm] = React.useState<number | null>(null);
-  const [isPremium, setIsPremium] = React.useState(false);
-
-  const effectiveSqm = manualSqm ?? mockData.areaSqm;
-  const conditionMultiplier = isPremium ? 1.2 : 1;
-  const tunerPrice = pricePerSqm * effectiveSqm * conditionMultiplier;
-  const rawPrice = hasRealData || pricePerSqm > 0
-    ? tunerPrice
+  const rawPrice = hasRealData
+    ? (israelData!.avgPrice ?? israelData!.lastSalePrice ?? mockData.valueNumber)
     : mockData.valueNumber;
   const displayPrice = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : mockData.valueNumber;
   const formattedValue = `${Math.round(displayPrice).toLocaleString()} ${currencySymbol}`.trim();
   const lastSaleDate = hasRealData ? israelData!.lastSaleDate : null;
   const isCityFallback = hasRealData && israelData!.isCityFallback;
 
-  React.useEffect(() => {
-    setManualSqm(null);
-    setIsPremium(false);
-  }, [address]);
+  const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
     const id = requestAnimationFrame(() => setMounted(true));
     return () => cancelAnimationFrame(id);
@@ -141,7 +116,7 @@ export function PropertyValueCard({
               {/* Row 2 (secondary): Last Official Sale - smaller */}
               {hasRealData && israelData!.lastSalePrice != null && israelData!.lastSalePrice > 0 && (
                 <div className="mt-2 text-xs text-zinc-400">
-                  Last Official Sale: {currencySymbol}{israelData!.lastSalePrice.toLocaleString()} in {formatSaleYear(lastSaleDate)}
+                  Last Official Sale: {currencySymbol}{israelData!.lastSalePrice.toLocaleString()} ({formatSaleYear(lastSaleDate)})
                   {isCityFallback && " (city average)"}
                 </div>
               )}
@@ -157,37 +132,6 @@ export function PropertyValueCard({
                   Estimate based on neighborhood trends
                 </div>
               )}
-
-              {/* Price Tuner */}
-              <div className="mt-3 space-y-2 rounded-lg border border-white/5 bg-black/30 px-3 py-2">
-                <div className="text-[10px] uppercase tracking-wider text-zinc-500">Price Tuner</div>
-                <div className="flex items-center gap-3">
-                  <label className="flex flex-1 items-center gap-2 text-xs">
-                    <span className="shrink-0 text-zinc-400">Sqm</span>
-                    <input
-                      type="number"
-                      min={SQM_MIN}
-                      max={SQM_MAX}
-                      step={SQM_STEP}
-                      value={effectiveSqm}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value);
-                        setManualSqm(Number.isFinite(v) ? Math.max(SQM_MIN, Math.min(SQM_MAX, v)) : null);
-                      }}
-                      className="w-16 rounded border border-white/10 bg-white/5 px-2 py-1 text-right text-white focus:border-amber-400/50 focus:outline-none"
-                    />
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
-                    <input
-                      type="checkbox"
-                      checked={isPremium}
-                      onChange={(e) => setIsPremium(e.target.checked)}
-                      className="rounded border-white/20 bg-white/5 text-amber-500 focus:ring-amber-400/50"
-                    />
-                    <span>Premium/Renovated (+20%)</span>
-                  </label>
-                </div>
-              </div>
 
               {!hasRealData && (
                 <div className="mt-2 text-xs text-zinc-400">
