@@ -132,11 +132,34 @@ declare global {
 // mapIds: DEMO_MAP_ID required for AdvancedMarkerElement (Maps JavaScript API + Places API New)
 const libraries: Libraries = ["geometry"];
 const MAP_ID = "DEMO_MAP_ID";
+
+// Dark theme constants for map styling
+const MAP_DARK = {
+  geometry: "#24272c",
+  labelsFill: "#cfd4dc",
+  labelsStroke: "#1b1f24",
+  adminStroke: "#3b4149",
+  parcelLabels: "#8a919c",
+  landscape: "#2a2f36",
+  poi: "#303640",
+  poiLabels: "#d4af37",
+  road: "#505761",
+  roadStroke: "#2d3238",
+  roadLabels: "#e5e7eb",
+  highway: "#676f7a",
+  highwayStroke: "#3a4048",
+  transit: "#353b44",
+  transitLabels: "#d4af37",
+  water: "#1d2f3f",
+  waterLabels: "#aab6c3",
+  containerBg: "#1b1f24",
+} as const;
+
 const mapContainerStyle: React.CSSProperties = {
   width: "100%",
   height: "min(55vh, 50dvh)",
   minHeight: "280px",
-  backgroundColor: "#1b1f24",
+  backgroundColor: MAP_DARK.containerBg,
 };
 
 const navItems = [
@@ -186,6 +209,31 @@ function extractLatLng(loc: unknown): { lat: number; lng: number } | null {
   const lng = typeof o.lng === "function" ? (o.lng as () => number)() : o.lng;
   if (typeof lat !== "number" || typeof lng !== "number") return null;
   return { lat, lng };
+}
+
+function createRestaurantDotMarker(isSelected: boolean): HTMLElement {
+  const fill = isSelected ? "#f59e0b" : "#d4af37";
+  const size = 24;
+  const r = 8;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.style.cursor = "pointer";
+  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  circle.setAttribute("cx", String(size / 2));
+  circle.setAttribute("cy", String(size / 2));
+  circle.setAttribute("r", String(r));
+  circle.setAttribute("fill", fill);
+  circle.setAttribute("stroke", "#1b1f24");
+  circle.setAttribute("stroke-width", "2");
+  svg.appendChild(circle);
+  const wrapper = document.createElement("div");
+  wrapper.style.display = "flex";
+  wrapper.style.alignItems = "center";
+  wrapper.style.justifyContent = "center";
+  wrapper.appendChild(svg);
+  return wrapper;
 }
 
 type CountryProfile = {
@@ -420,10 +468,8 @@ export const AddressExplorer = () => {
       if (!window.google?.maps?.importLibrary || !map) return;
 
       setRestaurants([]);
-      setSelectedRestaurant(null);
       restaurantMarkersRef.current.forEach((m) => { m.map = null; });
       restaurantMarkersRef.current = [];
-      if (infoWindowRef.current) infoWindowRef.current.close();
 
       const radius = 1500;
 
@@ -472,10 +518,8 @@ export const AddressExplorer = () => {
 
         setRestaurants(nextRestaurants);
         setSelectedRestaurant((current) => {
-          const nextSelected = current
-            ? nextRestaurants.find((restaurant) => restaurant.id === current.id) ?? null
-            : null;
-          return current?.id === nextSelected?.id ? current : nextSelected;
+          if (!current) return null;
+          return nextRestaurants.find((r) => r.id === current.id) ?? null;
         });
         setError(null);
       } catch (err) {
@@ -763,7 +807,7 @@ export const AddressExplorer = () => {
       setIsWaitingForLocation(false);
       setInitialGeolocationComplete(true);
         focusMapOnLocation(nextCenter, "Near me", {
-          openPropertyInsight: true,
+          openPropertyInsight: source === "recenter",
           flashText: source === "initial" ? "Showing your location" : "Showing results near you",
           updateQuery: false,
           zoom: 17,
@@ -1217,17 +1261,12 @@ export const AddressExplorer = () => {
         const { lat, lng } = restaurant.location;
         if (typeof lat !== "number" || typeof lng !== "number") continue;
 
-        const pin = new PinElement({
-          background: selectedRestaurant?.id === restaurant.id ? "#f59e0b" : "#d4af37",
-          borderColor: "#1b1f24",
-          glyphColor: "#1b1f24",
-          scale: 1.1,
-        });
+        const dotContent = createRestaurantDotMarker(selectedRestaurant?.id === restaurant.id);
         const marker = new AdvancedMarkerElement({
           map,
           position: { lat, lng },
           title: restaurant.name,
-          content: pin.element,
+          content: dotContent,
           zIndex: selectedRestaurant?.id === restaurant.id ? 1001 : 1,
         });
         marker.addListener("click", () => {
@@ -1829,23 +1868,23 @@ export const AddressExplorer = () => {
                 draggable: true,
                 scrollwheel: true,
                 styles: [
-                  { elementType: "geometry", stylers: [{ color: "#24272c" }] },
-                  { elementType: "labels.text.fill", stylers: [{ color: "#cfd4dc" }] },
-                  { elementType: "labels.text.stroke", stylers: [{ color: "#1b1f24" }] },
-                  { featureType: "administrative", elementType: "geometry.stroke", stylers: [{ color: "#3b4149" }] },
-                  { featureType: "administrative.land_parcel", elementType: "labels.text.fill", stylers: [{ color: "#8a919c" }] },
-                  { featureType: "landscape", elementType: "geometry", stylers: [{ color: "#2a2f36" }] },
-                  { featureType: "poi", elementType: "geometry", stylers: [{ color: "#303640" }] },
-                  { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#d4af37" }] },
-                  { featureType: "road", elementType: "geometry", stylers: [{ color: "#505761" }] },
-                  { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#2d3238" }] },
-                  { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: "#e5e7eb" }] },
-                  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#676f7a" }] },
-                  { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#3a4048" }] },
-                  { featureType: "transit", elementType: "geometry", stylers: [{ color: "#353b44" }] },
-                  { featureType: "transit.station", elementType: "labels.text.fill", stylers: [{ color: "#d4af37" }] },
-                  { featureType: "water", elementType: "geometry", stylers: [{ color: "#1d2f3f" }] },
-                  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#aab6c3" }] },
+                  { elementType: "geometry", stylers: [{ color: MAP_DARK.geometry }] },
+                  { elementType: "labels.text.fill", stylers: [{ color: MAP_DARK.labelsFill }] },
+                  { elementType: "labels.text.stroke", stylers: [{ color: MAP_DARK.labelsStroke }] },
+                  { featureType: "administrative", elementType: "geometry.stroke", stylers: [{ color: MAP_DARK.adminStroke }] },
+                  { featureType: "administrative.land_parcel", elementType: "labels.text.fill", stylers: [{ color: MAP_DARK.parcelLabels }] },
+                  { featureType: "landscape", elementType: "geometry", stylers: [{ color: MAP_DARK.landscape }] },
+                  { featureType: "poi", elementType: "geometry", stylers: [{ color: MAP_DARK.poi }] },
+                  { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: MAP_DARK.poiLabels }] },
+                  { featureType: "road", elementType: "geometry", stylers: [{ color: MAP_DARK.road }] },
+                  { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: MAP_DARK.roadStroke }] },
+                  { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: MAP_DARK.roadLabels }] },
+                  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: MAP_DARK.highway }] },
+                  { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: MAP_DARK.highwayStroke }] },
+                  { featureType: "transit", elementType: "geometry", stylers: [{ color: MAP_DARK.transit }] },
+                  { featureType: "transit.station", elementType: "labels.text.fill", stylers: [{ color: MAP_DARK.transitLabels }] },
+                  { featureType: "water", elementType: "geometry", stylers: [{ color: MAP_DARK.water }] },
+                  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: MAP_DARK.waterLabels }] },
                 ],
               }}
             >
