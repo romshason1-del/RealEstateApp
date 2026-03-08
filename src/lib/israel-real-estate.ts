@@ -11,6 +11,7 @@ export type IsraelRealEstateResponse = {
   avgPricePerSqm: number | null;
   lastSaleDate: string | null;
   lastSalePrice: number | null;
+  lastSaleOlderThan2Years?: boolean;
   transactionCount: number;
   source: string;
   isCityFallback?: boolean;
@@ -79,5 +80,20 @@ export function formatSaleDate(dateStr: string | null): string {
     return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   } catch {
     return dateStr;
+  }
+}
+
+export function formatSaleYear(dateStr: string | null): string {
+  if (!dateStr) return "";
+  try {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) {
+      const m = /\d{4}/.exec(dateStr);
+      return m ? m[0] : "";
+    }
+    return String(d.getFullYear());
+  } catch {
+    const m = /\d{4}/.exec(dateStr);
+    return m ? m[0] : "";
   }
 }
