@@ -1220,7 +1220,7 @@ export const AddressExplorer = () => {
         ? current.filter((item) => item.id !== restaurant.id)
         : [restaurant, ...current],
     );
-    if (isAdding) setFlashMessage("הוספת את המסעדה למועדפים");
+    if (isAdding) setFlashMessage("Added to favorites");
   }, [savedRestaurants]);
 
   React.useEffect(() => {
@@ -1391,7 +1391,7 @@ export const AddressExplorer = () => {
         ? current.filter((item) => item.address !== property.address)
         : [property, ...current],
     );
-    if (isAdding) setFlashMessage("הוספת את הנכס למועדפים");
+    if (isAdding) setFlashMessage("Added to favorites");
   }, [savedProperties]);
 
   const openSavedRestaurant = React.useCallback(

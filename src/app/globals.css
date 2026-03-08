@@ -130,6 +130,12 @@
 .heart-save-btn {
   @apply text-amber-500;
 }
+.heart-save-btn:focus,
+.heart-save-btn:focus-visible,
+.heart-save-btn:active {
+  outline: none;
+  box-shadow: none;
+}
 .heart-save-icon {
   transition: all 0.3s ease;
 }
