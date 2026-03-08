@@ -6,7 +6,7 @@ const NADLAN_RESOURCE_ID = "ad6680ef-5d46-4654-be8d-7301292a8e48";
 /** Hebrew field names from Israel Tax Authority real estate dataset (מאגר עסקאות הנדל"ן) */
 const SALE_PRICE_FIELDS = ["מחיר העסקה", "מחיר עסקה", "מחיר_העסקה", "מחיר_עסקה", "sale_price", "price"];
 const SALE_DATE_FIELDS = ["תאריך העסקה", "תאריך עסקה", "תאריך_העסקה", "תאריך_עסקה", "DEALDATE", "sale_date", "date"];
-const AREA_FIELDS = ["שטח", "שטח במ\"ר", "מ\"ר", "area", "sqm", "שטח_במ\"ר"];
+const AREA_FIELDS = ["GFA_QUANTITY", "GFA", "שטח", "שטח במ\"ר", "מ\"ר", "area", "sqm", "שטח_במ\"ר"];
 const GUSH_FIELDS = ["גוש", "GUSH", "gush"];
 const PARCEL_FIELDS = ["חלקה", "PARCEL", "parcel"];
 
@@ -39,7 +39,7 @@ function getArea(record: Record<string, unknown>): number {
     if (val != null && val !== "") return parseNumeric(val);
   }
   for (const [key, val] of Object.entries(record)) {
-    if (val != null && val !== "" && (key.includes("שטח") || key.includes("area") || key.includes("sqm"))) return parseNumeric(val);
+    if (val != null && val !== "" && (key.includes("GFA") || key.includes("שטח") || key.includes("area") || key.includes("sqm"))) return parseNumeric(val);
   }
   return 0;
 }
@@ -204,14 +204,13 @@ export async function GET(request: NextRequest) {
       : top10Recent.length > 0
         ? top10Recent.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / top10Recent.length / 85
         : null;
-    const areaForEstimate = Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 85;
-    const estimatedFrom24Mo = avgPricePerSqmFrom24Mo != null
-      ? Math.round(avgPricePerSqmFrom24Mo * areaForEstimate)
-      : null;
 
-    const estimatedValue = lastSaleOlderThan2Years && estimatedFrom24Mo != null
-      ? estimatedFrom24Mo
-      : lastSale?.price ?? estimatedFrom24Mo;
+    const officialPropertySqm = (lastSale?.area != null && lastSale.area > 0)
+      ? lastSale.area
+      : (Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 85);
+    const estimatedValue = avgPricePerSqmFrom24Mo != null
+      ? Math.round(avgPricePerSqmFrom24Mo * officialPropertySqm)
+      : lastSale?.price ?? null;
     const avgPrice = estimatedValue ?? (sortedByDate.length > 0 ? Math.round(sortedByDate.reduce((s: number, t: { price: number }) => s + t.price, 0) / sortedByDate.length) : null);
     const avgPricePerSqm = avgPricePerSqmFrom24Mo;
 
@@ -252,9 +251,11 @@ export async function GET(request: NextRequest) {
           : cityTop5.length > 0
             ? cityTop5.reduce((sum: number, t: { price: number }) => sum + t.price, 0) / cityTop5.length / 85
             : null;
-        const cityAreaForEstimate = Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 85;
-        const cityEstimatedValue = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * cityAreaForEstimate) : null;
         const cityLastSale = cityTop5[0];
+        const cityOfficialSqm = (cityLastSale?.area != null && cityLastSale.area > 0)
+          ? cityLastSale.area
+          : (Number.isFinite(propertyAreaSqm) && propertyAreaSqm > 0 ? propertyAreaSqm : 85);
+        const cityEstimatedValue = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * cityOfficialSqm) : null;
         const cityLastSaleTs = cityLastSale?.date ? new Date(cityLastSale.date).getTime() : 0;
         const cityLastSaleOld = cityLastSaleTs > 0 && cityLastSaleTs < twoYearsAgo;
 
@@ -262,8 +263,9 @@ export async function GET(request: NextRequest) {
           console.log("[israel-real-estate] City fallback success:", cityTop5.length, "transactions");
           return NextResponse.json({
             transactions: cityTop5.map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date })),
-            avgPrice: (cityLastSaleOld && cityEstimatedValue != null) ? cityEstimatedValue : (cityLastSale?.price ?? cityEstimatedValue ?? Math.round(cityTop5.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop5.length)),
+            avgPrice: cityEstimatedValue ?? cityLastSale?.price ?? Math.round(cityTop5.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop5.length),
             avgPricePerSqm: cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm) : null,
+            officialPropertySqm: cityOfficialSqm,
             lastSaleDate: cityLastSale?.date ?? null,
             lastSalePrice: cityLastSale?.price ?? null,
             lastSaleOlderThan2Years: cityLastSaleOld,
@@ -275,11 +277,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    console.log("[israel-real-estate] Success:", { transactionsCount: transactions.length, avgPrice, avgPricePerSqm, lastSaleOlderThan2Years });
+    console.log("[israel-real-estate] Success:", { transactionsCount: transactions.length, avgPrice, avgPricePerSqm, officialPropertySqm });
     return NextResponse.json({
       transactions,
       avgPrice,
       avgPricePerSqm: avgPricePerSqm != null ? Math.round(avgPricePerSqm) : null,
+      officialPropertySqm,
       lastSaleDate: lastSale?.date ?? null,
       lastSalePrice: lastSale?.price ?? null,
       lastSaleOlderThan2Years,

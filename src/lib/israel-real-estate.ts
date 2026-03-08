@@ -9,6 +9,7 @@ export type IsraelRealEstateResponse = {
   transactions: IsraelTransaction[];
   avgPrice: number | null;
   avgPricePerSqm: number | null;
+  officialPropertySqm?: number;
   lastSaleDate: string | null;
   lastSalePrice: number | null;
   lastSaleOlderThan2Years?: boolean;
