@@ -34,17 +34,16 @@ export function PropertyValueCard({
   onToggleSave,
 }: PropertyValueCardProps) {
   const isIsrael = countryCode === "IL";
-  const { data: israelData, isLoading: israelLoading } = useIsraelRealEstate(address, isIsrael);
-
   const mockData = React.useMemo(
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
   );
+  const { data: israelData, isLoading: israelLoading } = useIsraelRealEstate(address, isIsrael, mockData.areaSqm);
 
   const hasRealData = isIsrael && israelData && !israelData.error &&
     ((israelData.avgPrice != null && israelData.avgPrice > 0) || (israelData.lastSalePrice != null && israelData.lastSalePrice > 0));
   const rawPrice = hasRealData
-    ? (israelData!.lastSalePrice ?? israelData!.avgPrice ?? mockData.valueNumber)
+    ? (israelData!.avgPrice ?? israelData!.lastSalePrice ?? mockData.valueNumber)
     : mockData.valueNumber;
   const displayPrice = Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : mockData.valueNumber;
   const formattedValue = `${displayPrice.toLocaleString()} ${currencySymbol}`.trim();
@@ -116,6 +115,12 @@ export function PropertyValueCard({
                 <div className="mt-1.5 text-xs text-zinc-400">
                   Last sale: {formatSaleDate(lastSaleDate)}
                   {isCityFallback && " (city average)"}
+                </div>
+              )}
+
+              {hasRealData && (israelData!.transactionCount ?? 0) > 0 && (
+                <div className="mt-1.5 text-[11px] text-zinc-500">
+                  Based on {israelData!.transactionCount} recent transaction{(israelData!.transactionCount ?? 0) !== 1 ? "s" : ""} from the Tax Authority
                 </div>
               )}
 

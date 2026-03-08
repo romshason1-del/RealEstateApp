@@ -8,8 +8,10 @@ export type IsraelTransaction = {
 export type IsraelRealEstateResponse = {
   transactions: IsraelTransaction[];
   avgPrice: number | null;
+  avgPricePerSqm: number | null;
   lastSaleDate: string | null;
   lastSalePrice: number | null;
+  transactionCount: number;
   source: string;
   isCityFallback?: boolean;
   error?: string;
@@ -21,13 +23,15 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const FALLBACK_RESPONSE: IsraelRealEstateResponse = {
   transactions: [],
   avgPrice: null,
+  avgPricePerSqm: null,
   lastSaleDate: null,
   lastSalePrice: null,
+  transactionCount: 0,
   source: "data.gov.il",
   error: "Connection failed",
 };
 
-export async function fetchIsraelRealEstate(address: string): Promise<IsraelRealEstateResponse> {
+export async function fetchIsraelRealEstate(address: string, propertyAreaSqm?: number): Promise<IsraelRealEstateResponse> {
   const key = address.trim().toLowerCase();
   const cached = CACHE.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
@@ -37,14 +41,18 @@ export async function fetchIsraelRealEstate(address: string): Promise<IsraelReal
 
   console.log("[fetchIsraelRealEstate] Fetching /api/israel-real-estate for:", address.slice(0, 50));
   try {
+    const params = new URLSearchParams({ address, limit: "50" });
+    if (propertyAreaSqm != null && propertyAreaSqm > 0) params.set("propertyAreaSqm", String(propertyAreaSqm));
     const res = await fetch(
-      `/api/israel-real-estate?address=${encodeURIComponent(address)}&limit=50`,
+      `/api/israel-real-estate?${params.toString()}`,
       { signal: AbortSignal.timeout(20000) }
     );
     const data: IsraelRealEstateResponse = await res.json().catch(() => ({
       ...FALLBACK_RESPONSE,
+      transactionCount: 0,
       error: "Invalid response",
     }));
+    if (data.transactionCount == null) data.transactionCount = data.transactions?.length ?? 0;
 
     console.log("[fetchIsraelRealEstate] Response:", {
       ok: res.ok,
