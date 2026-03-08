@@ -280,7 +280,6 @@ export async function GET(request: NextRequest) {
       transactions,
       avgPrice,
       avgPricePerSqm: avgPricePerSqm != null ? Math.round(avgPricePerSqm) : null,
-      lastSaleOlderThan2Years,
       lastSaleDate: lastSale?.date ?? null,
       lastSalePrice: lastSale?.price ?? null,
       lastSaleOlderThan2Years,
