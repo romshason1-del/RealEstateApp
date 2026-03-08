@@ -15,6 +15,7 @@ export type IsraelRealEstateResponse = {
   transactionCount: number;
   source: string;
   isCityFallback?: boolean;
+  isNeighborhoodEstimate?: boolean;
   error?: string;
 };
 

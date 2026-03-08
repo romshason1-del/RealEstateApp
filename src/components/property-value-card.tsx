@@ -54,6 +54,7 @@ export function PropertyValueCard({
     : null;
   const lastSaleDate = hasLastDeal && israelData ? israelData.lastSaleDate : null;
   const isCityFallback = israelData?.isCityFallback ?? false;
+  const isNeighborhoodEstimate = israelData?.isNeighborhoodEstimate ?? false;
 
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
@@ -114,12 +115,14 @@ export function PropertyValueCard({
                     </span>
                     <span className="text-lg font-semibold text-zinc-400">({formatSaleYear(lastSaleDate)})</span>
                   </>
-                ) : hasStreetAvg && streetAvgFallback != null ? (
+                ) : (hasStreetAvg || isNeighborhoodEstimate) && streetAvgFallback != null ? (
                   <>
                     <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
                       {currencySymbol}{streetAvgFallback.toLocaleString()}
                     </span>
-                    <span className="text-xs text-zinc-500">Street Average</span>
+                    <span className="text-xs text-zinc-500">
+                      {isNeighborhoodEstimate ? "Neighborhood Estimate" : "Street Average"}
+                    </span>
                   </>
                 ) : !isIsrael ? (
                   <>
@@ -131,7 +134,7 @@ export function PropertyValueCard({
                     </span>
                   </>
                 ) : (
-                  <span className="text-sm text-zinc-500">No data for this address</span>
+                  <span className="text-sm text-zinc-500">Neighborhood Estimate</span>
                 )}
               </div>
               {hasLastDeal && isCityFallback && (
@@ -164,7 +167,7 @@ export function PropertyValueCard({
               )}
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {(hasLastDeal || hasStreetAvg || hasMarketEstimate) ? (
+                {(hasLastDeal || hasStreetAvg || hasMarketEstimate || isNeighborhoodEstimate) ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
                     <BadgeCheck className="size-3" aria-hidden />
                     Official Data
