@@ -49,12 +49,13 @@ export function PropertyValueCard({
 
   const lastDealPrice = hasLastDeal && israelData ? israelData.lastSalePrice! : null;
   const marketEstimatePrice = hasMarketEstimate && israelData ? israelData.avgPrice! : null;
-  const streetAvgFallback = hasStreetAvg && israelData && !hasLastDeal
-    ? (israelData.avgPrice ?? (israelData.avgPricePerSqm != null ? Math.round(israelData.avgPricePerSqm * 100) : null))
-    : null;
-  const lastSaleDate = hasLastDeal && israelData ? israelData.lastSaleDate : null;
   const isCityFallback = israelData?.isCityFallback ?? false;
   const isNeighborhoodEstimate = israelData?.isNeighborhoodEstimate ?? false;
+  const streetAvgFallback = (hasStreetAvg || isNeighborhoodEstimate) && israelData && !hasLastDeal
+    ? (israelData.avgPrice ?? (israelData.avgPricePerSqm != null ? Math.round(israelData.avgPricePerSqm * 100) : null))
+    : null;
+  const historyFallbackPrice = israelData?.lastSalePrice ?? null;
+  const lastSaleDate = hasLastDeal && israelData ? israelData.lastSaleDate : null;
 
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
@@ -123,6 +124,13 @@ export function PropertyValueCard({
                     <span className="text-xs text-zinc-500">
                       {isNeighborhoodEstimate ? "Neighborhood Estimate" : "Street Average"}
                     </span>
+                  </>
+                ) : isIsrael && historyFallbackPrice != null ? (
+                  <>
+                    <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
+                      {currencySymbol}{historyFallbackPrice.toLocaleString()}
+                    </span>
+                    <span className="text-xs text-zinc-500">Last known deal</span>
                   </>
                 ) : !isIsrael ? (
                   <>

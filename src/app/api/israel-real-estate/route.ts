@@ -104,6 +104,12 @@ function parseAddressParts(address: string): { street: string; city: string } {
   return { street: "", city: "" };
 }
 
+/** Extract street name only (e.g. "Khayim Shorer") for broad street-level search. Removes leading numbers. */
+function getStreetNameForFallback(street: string): string {
+  const withoutLeadingNum = street.replace(/^\d+\s+/, "").trim();
+  return withoutLeadingNum || street;
+}
+
 export async function GET(request: NextRequest) {
   console.log("[israel-real-estate] GET request received");
   const { searchParams } = new URL(request.url);
@@ -167,17 +173,16 @@ export async function GET(request: NextRequest) {
       if (json?.success === false) {
         throw new Error(json?.error?.message ?? "API request failed");
       }
-    } catch (firstErr) {
+    } catch {
       console.log("[israel-real-estate] First fetch failed (404 or error), trying street-only:", searchStreet);
-      if (searchStreet) {
+      const streetName = searchStreet ? getStreetNameForFallback(searchStreet) : "";
+      if (streetName) {
         try {
-          const streetResult = await fetchAndProcess(searchStreet);
+          const streetResult = await fetchAndProcess(streetName);
           records = streetResult.records;
           json = streetResult.json;
           usedStreetFallback = true;
-          if (json?.success === false) {
-            records = [];
-          }
+          if (json?.success === false) records = [];
         } catch {
           records = [];
         }
@@ -185,16 +190,19 @@ export async function GET(request: NextRequest) {
     }
 
     if (records.length === 0 && searchStreet) {
-      console.log("[israel-real-estate] No records from specific search, trying street-only:", searchStreet);
-      try {
-        const streetResult = await fetchAndProcess(searchStreet);
-        if (streetResult.records.length > 0) {
-          records = streetResult.records;
-          json = streetResult.json;
-          usedStreetFallback = true;
+      const streetName = getStreetNameForFallback(searchStreet);
+      console.log("[israel-real-estate] No records from specific search, trying street-only:", streetName);
+      if (streetName) {
+        try {
+          const streetResult = await fetchAndProcess(streetName);
+          if (streetResult.records.length > 0) {
+            records = streetResult.records;
+            json = streetResult.json;
+            usedStreetFallback = true;
+          }
+        } catch {
+          /* keep records empty */
         }
-      } catch {
-        /* keep records empty */
       }
     }
 
@@ -241,9 +249,10 @@ export async function GET(request: NextRequest) {
       ? Math.round(top10Street.reduce((s: number, t: { price: number }) => s + t.price, 0) / top10Street.length)
       : null;
     const estimatedValue = avgPricePerSqm != null ? Math.round(avgPricePerSqm * propertySqm) : null;
-    const avgPrice = usedStreetFallback && neighborhoodAvgPrice != null
-      ? neighborhoodAvgPrice
-      : (estimatedValue ?? neighborhoodAvgPrice);
+    const neighborhoodEstimatePrice = usedStreetFallback && avgPricePerSqm != null
+      ? Math.round(avgPricePerSqm * 100)
+      : null;
+    const avgPrice = neighborhoodEstimatePrice ?? estimatedValue ?? neighborhoodAvgPrice ?? lastSale?.price ?? null;
 
     const transactions = sortedByDate.slice(0, 20).map((t: { price: number; date: string | null }) => ({ price: t.price, date: t.date }));
 
@@ -285,10 +294,10 @@ export async function GET(request: NextRequest) {
             : null;
         const cityLastSale = cityTop20[0];
         const cityPropertySqm = (cityLastSale?.area ?? 0) > 0 ? cityLastSale.area : 100;
-        const cityNeighborhoodAvg = cityTop10.length > 0
+        const cityNeighborhoodEstimate = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * 100) : null;
+        const cityEstimatedValue = cityNeighborhoodEstimate ?? (cityTop10.length > 0
           ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)
-          : null;
-        const cityEstimatedValue = cityNeighborhoodAvg ?? (cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * cityPropertySqm) : null);
+          : null);
 
         if (cityTop20.length > 0) {
           console.log("[israel-real-estate] City fallback success:", cityTop20.length, "transactions");
