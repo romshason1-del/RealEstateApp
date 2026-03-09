@@ -11,6 +11,7 @@ import type {
   PropertyValueInsightsSuccess,
   PropertyValueInsightsNoMatch,
   PropertyValueInsightsError,
+  PropertyValueInsightsDebug,
 } from "./types";
 
 import { propertyProviderConfig } from "./config";
@@ -37,6 +38,26 @@ type RentCastResponse = RentCastProperty[] | { data?: RentCastProperty[] };
 
 function isConfigured(): boolean {
   return Boolean(RENTCAST_API_KEY);
+}
+
+function buildUSProviderDebug(overrides: Partial<{
+  request_attempted: boolean;
+  http_status?: number;
+  api_error?: string;
+  reason?: string;
+  records_fetched?: number;
+  records_returned?: number;
+  exact_matches_count?: number;
+  response_summary?: string;
+}>): PropertyValueInsightsDebug {
+  return {
+    active_provider_id: "us-rentcast",
+    provider_configured: isConfigured(),
+    PROPERTY_PROVIDER_US: propertyProviderConfig.us || "(not set)",
+    RENTCAST_API_KEY_present: Boolean(RENTCAST_API_KEY),
+    request_attempted: false,
+    ...overrides,
+  };
 }
 
 function buildAddressUrl(input: PropertyValueInput): string | null {
@@ -211,6 +232,10 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       return {
         message: "Property data source is not configured for the United States.",
         error: "PROVIDER_NOT_CONFIGURED",
+        debug: buildUSProviderDebug({
+          request_attempted: false,
+          reason: "US provider not configured in production environment",
+        }),
       };
     }
 
@@ -219,32 +244,72 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       return {
         message: "Address must include city and street, or coordinates.",
         error: "INVALID_INPUT",
+        debug: buildUSProviderDebug({
+          request_attempted: false,
+          reason: "Could not build request URL: address must include city and street, or latitude/longitude",
+        }),
       };
     }
 
     try {
       const res = await fetchWithTimeout(url);
+      const httpStatus = res.status;
 
       if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const apiError = (body as { message?: string })?.message ?? `HTTP ${httpStatus}`;
         if (res.status === 401 || res.status === 403) {
           return {
             message: "Property data API authentication failed. Please contact support.",
             error: "AUTH_ERROR",
+            debug: buildUSProviderDebug({
+              request_attempted: true,
+              http_status: httpStatus,
+              api_error: apiError,
+              reason: "API authentication failed (401/403)",
+            }),
           };
         }
         if (res.status === 404) {
-          return { message: "no transaction found" };
+          return {
+            message: "no transaction found",
+            debug: buildUSProviderDebug({
+              request_attempted: true,
+              http_status: httpStatus,
+              api_error: apiError,
+              records_fetched: 0,
+              records_returned: 0,
+              exact_matches_count: 0,
+              response_summary: "No property found at this address",
+            }),
+          };
         }
-        const body = await res.json().catch(() => ({}));
         return {
           message: "Could not fetch property data. Please try again later.",
-          error: (body as { message?: string })?.message ?? `HTTP ${res.status}`,
+          error: apiError,
+          debug: buildUSProviderDebug({
+            request_attempted: true,
+            http_status: httpStatus,
+            api_error: apiError,
+            reason: `API returned ${httpStatus}`,
+          }),
         };
       }
 
       const body = (await res.json().catch(() => null)) as RentCastResponse | null;
       if (!body) {
-        return { message: "no transaction found" };
+        return {
+          message: "no transaction found",
+          debug: buildUSProviderDebug({
+            request_attempted: true,
+            http_status: httpStatus,
+            api_error: "Failed to parse response body",
+            records_fetched: 0,
+            records_returned: 0,
+            exact_matches_count: 0,
+            response_summary: "Empty or invalid JSON response",
+          }),
+        };
       }
 
       const records: RentCastProperty[] = Array.isArray(body)
@@ -253,17 +318,53 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       const prop = records[0];
 
       if (!prop) {
-        return { message: "no transaction found" };
+        return {
+          message: "no transaction found",
+          debug: buildUSProviderDebug({
+            request_attempted: true,
+            http_status: httpStatus,
+            records_fetched: records.length,
+            records_returned: records.length,
+            exact_matches_count: 0,
+            response_summary: "API returned empty property list",
+          }),
+        };
       }
 
       const mapped = mapToInsights(prop, input);
       if (!mapped) {
-        return { message: "no transaction found" };
+        return {
+          message: "no transaction found",
+          debug: buildUSProviderDebug({
+            request_attempted: true,
+            http_status: httpStatus,
+            records_fetched: records.length,
+            records_returned: records.length,
+            exact_matches_count: 0,
+            response_summary: "Property record had no valid sale price",
+          }),
+        };
       }
 
-      return mapped;
+      const debug: PropertyValueInsightsDebug = buildUSProviderDebug({
+        request_attempted: true,
+        http_status: httpStatus,
+        records_fetched: records.length,
+        records_returned: 1,
+        exact_matches_count: 1,
+        response_summary: `Mapped 1 property: ${mapped.address.city}, ${mapped.address.street}`,
+      });
+      return { ...mapped, debug };
     } catch (err) {
-      return mapError(err);
+      const mappedErr = mapError(err);
+      return {
+        ...mappedErr,
+        debug: buildUSProviderDebug({
+          request_attempted: true,
+          api_error: mappedErr.error,
+          reason: err instanceof Error ? err.message : "Request failed before HTTP response",
+        }),
+      };
     }
   }
 }

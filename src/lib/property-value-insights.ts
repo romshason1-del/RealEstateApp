@@ -6,6 +6,8 @@
 
 import {
   getPropertyDataProvider,
+  isUSRentcastConfigured,
+  propertyProviderConfig,
   type PropertyValueInput as ProviderInput,
   type PropertyValueInsightsResult as ProviderResult,
 } from "./property-value-providers";
@@ -54,9 +56,22 @@ export async function getPropertyValueInsights(
 
   const provider = getPropertyDataProvider(countryCode);
   if (!provider) {
+    const code = (countryCode ?? "").toUpperCase();
+    const debug =
+      code === "US"
+        ? {
+            active_provider_id: "none",
+            provider_configured: isUSRentcastConfigured(),
+            PROPERTY_PROVIDER_US: propertyProviderConfig.us || "(not set)",
+            RENTCAST_API_KEY_present: Boolean(propertyProviderConfig.rentcast.apiKey),
+            request_attempted: false,
+            reason: "US provider not configured in production environment",
+          }
+        : undefined;
     return {
       message: "Property value data is not available for this country.",
       error: "NO_PROVIDER",
+      debug,
     };
   }
 
