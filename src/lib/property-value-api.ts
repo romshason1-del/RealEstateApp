@@ -5,7 +5,7 @@
  * Uses ONLY official Israeli government data. Never returns street-level or nearby data.
  */
 
-import { parseAddressFromFullString } from "./address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString } from "./address-parse";
 import { toCanonicalAddress } from "./address-canonical";
 
 export type PropertyValueInsightsResponse = {
@@ -76,7 +76,14 @@ export async function fetchPropertyValueInsights(
     return cached.data;
   }
 
-  const parsed = parseAddressFromFullString(address);
+  const code = (options?.countryCode ?? "").toUpperCase();
+  const parsed =
+    code === "US"
+      ? (() => {
+          const us = parseUSAddressFromFullString(address);
+          return { city: us.city, street: us.street, houseNumber: us.houseNumber };
+        })()
+      : parseAddressFromFullString(address);
   const fullAddress = address.trim() || undefined;
   if (!parsed.city || !parsed.street) {
     return {
