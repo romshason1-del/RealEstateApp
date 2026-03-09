@@ -12,6 +12,8 @@ export type PropertyValueInput = {
   latitude?: number;
   longitude?: number;
   resolvedAddress?: { city: string; street: string; houseNumber?: string; apartmentNumber?: string };
+  /** Full address string (e.g. for US RentCast: "123 Main St, City, ST 12345") */
+  fullAddress?: string;
 };
 
 export type LatestTransaction = {

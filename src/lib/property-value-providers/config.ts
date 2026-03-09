@@ -16,6 +16,15 @@ export const propertyProviderConfig = {
   /** Israel: "official" | "mock" | unset = not configured */
   israel: env("PROPERTY_PROVIDER_ISRAEL"),
 
+  /** United States: "rentcast" | unset = not configured */
+  us: env("PROPERTY_PROVIDER_US"),
+
+  /** RentCast API (United States) */
+  rentcast: {
+    apiKey: env("RENTCAST_API_KEY"),
+    baseUrl: env("RENTCAST_API_BASE_URL") || "https://api.rentcast.io/v1",
+  },
+
   /** Israel Tax Authority API */
   israelTaxApi: {
     baseUrl: env("ISRAEL_TAX_API_BASE_URL"),
@@ -39,4 +48,8 @@ export function isIsraelOfficialConfigured(): boolean {
 
 export function isIsraelMockEnabled(): boolean {
   return propertyProviderConfig.israel === "mock";
+}
+
+export function isUSRentcastConfigured(): boolean {
+  return propertyProviderConfig.us === "rentcast" && Boolean(propertyProviderConfig.rentcast.apiKey);
 }

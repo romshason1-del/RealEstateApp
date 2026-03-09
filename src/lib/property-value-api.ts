@@ -77,6 +77,7 @@ export async function fetchPropertyValueInsights(
   }
 
   const parsed = parseAddressFromFullString(address);
+  const fullAddress = address.trim() || undefined;
   if (!parsed.city || !parsed.street) {
     return {
       message: "no reliable exact match found",
