@@ -92,7 +92,6 @@ type DebugPanelProps = {
       property_size_used?: number;
       transactions_count_5y?: number;
       latest_transaction_amount?: number;
-      fallback_level_used?: string;
     };
     message?: string;
   } | null;
