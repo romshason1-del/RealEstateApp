@@ -341,6 +341,7 @@ export function PropertyValueCard({
   const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
   const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
+  const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
@@ -582,6 +583,29 @@ export function PropertyValueCard({
                     <div className="text-[11px] sm:text-xs text-zinc-500">No government area data available.</div>
                     <div className="mt-1 text-[10px] text-zinc-500">
                       Government area-level statistics from the U.S. Census Bureau.
+                    </div>
+                  </div>
+                )}
+              </CollapsibleSection>
+              <CollapsibleSection title="Market Trend (FHFA)">
+                {marketTrend != null && (marketTrend.hpi_index > 0 || marketTrend.change_1y_percent !== 0) ? (
+                  <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
+                    {marketTrend.hpi_index > 0 && (
+                      <div>Housing Price Index: {marketTrend.hpi_index.toLocaleString("en-US")}</div>
+                    )}
+                    <div>
+                      1-Year Price Change: {marketTrend.change_1y_percent >= 0 ? "+" : ""}
+                      {marketTrend.change_1y_percent.toFixed(1)}%
+                    </div>
+                    <div className="mt-1.5 pt-1 border-t border-zinc-500/20 text-[10px] text-zinc-500">
+                      Official housing market trend data from the Federal Housing Finance Agency.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="text-[11px] sm:text-xs text-zinc-500">No FHFA market trend data available.</div>
+                    <div className="mt-1 text-[10px] text-zinc-500">
+                      Official housing market trend data from the Federal Housing Finance Agency.
                     </div>
                   </div>
                 )}

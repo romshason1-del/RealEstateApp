@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
+import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
@@ -155,6 +156,31 @@ export async function GET(request: NextRequest) {
         }
       } catch {
         // Census failure must not break the property card
+      }
+    }
+
+    if (isUS && (state || usMockMode)) {
+      try {
+        const fhfaResult = usMockMode
+          ? null
+          : await fetchMarketTrend({
+              state: state.trim() || undefined,
+              zip: zip.trim() || undefined,
+              latitude,
+              longitude,
+            });
+        if (fhfaResult) {
+          response = { ...response, market_trend: fhfaResult.market_trend };
+        }
+      } catch {
+        // FHFA failure must not break the property card
+      }
+    }
+
+    if (usMockMode && isUS) {
+      const mockTrend = (response as { market_trend?: unknown }).market_trend;
+      if (!mockTrend) {
+        response = { ...response, market_trend: { hpi_index: 412.3, change_1y_percent: 4.2 } };
       }
     }
 
