@@ -37,9 +37,26 @@ export type CurrentEstimatedValue = {
 
 export type BuildingSummary = {
   transactions_count_last_3_years: number;
+  transactions_count_last_5_years?: number;
   latest_building_transaction_price: number;
   average_apartment_value_today: number;
 } | null;
+
+/** How market value was derived */
+export type MarketValueSource =
+  | "exact_transaction"
+  | "exact_provider"
+  | "price_per_m2_x_size"
+  | "street_median"
+  | "none";
+
+/** Data quality / fallback level */
+export type FallbackLevel =
+  | "exact_building"
+  | "exact_property"
+  | "building_fallback"
+  | "street_fallback"
+  | "none";
 
 export type MatchQuality = "exact_building" | "exact_property" | "nearby_building" | "no_reliable_match";
 
@@ -51,6 +68,10 @@ export type PropertyValueInsightsSuccess = {
   latest_transaction: LatestTransaction;
   current_estimated_value: CurrentEstimatedValue;
   building_summary_last_3_years: BuildingSummary;
+  /** Market value source for debug/display */
+  market_value_source?: MarketValueSource;
+  /** Fallback level used (exact_building, street_fallback, etc.) */
+  fallback_level?: FallbackLevel;
   explanation?: string;
   debug?: PropertyValueInsightsDebug;
   source: string;
