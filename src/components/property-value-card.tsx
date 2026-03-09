@@ -41,6 +41,10 @@ type DebugPanelProps = {
       records_fetched?: number;
       records_after_filter?: number;
       exact_matches_count?: number;
+      nearby_matches_count?: number;
+      street_matches_found?: string[];
+      building_numbers_found?: string[];
+      distance_from_requested_m?: number;
       rejection_reason?: string;
       dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
     };
@@ -74,6 +78,16 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
         <div><span className="text-zinc-500">Candidate records:</span> {d?.records_after_filter ?? "—"}</div>
         <div><span className="text-zinc-500">Exact matches:</span> {d?.exact_matches_count ?? "—"}</div>
+        <div><span className="text-zinc-500">Nearby matches:</span> {d?.nearby_matches_count ?? "—"}</div>
+        {d?.street_matches_found && d.street_matches_found.length > 0 && (
+          <div><span className="text-zinc-500">Street matches:</span> {d.street_matches_found.join(", ")}</div>
+        )}
+        {d?.building_numbers_found && d.building_numbers_found.length > 0 && (
+          <div><span className="text-zinc-500">Building numbers:</span> {d.building_numbers_found.join(", ")}</div>
+        )}
+        {d?.distance_from_requested_m != null && (
+          <div><span className="text-zinc-500">Distance from requested:</span> {d.distance_from_requested_m} m</div>
+        )}
         {d?.rejection_reason && (
           <div><span className="text-zinc-500">Rejection reason:</span> <span className="text-amber-300/90">{d.rejection_reason}</span></div>
         )}
@@ -119,10 +133,14 @@ export function PropertyValueCard({
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
   );
-  const { data: insightsData, isLoading } = usePropertyValueInsights(address, isIsrael);
+  const { data: insightsData, isLoading } = usePropertyValueInsights(address, isIsrael, {
+    latitude: position?.lat,
+    longitude: position?.lng,
+  });
 
   const [debugMode, setDebugMode] = React.useState(false);
-  const hasExactMatch = insightsData?.address != null && insightsData?.match_quality === "exact_building";
+  const hasMatch = insightsData?.address != null && (insightsData?.match_quality === "exact_building" || insightsData?.match_quality === "nearby_building");
+  const isNearbyBuilding = insightsData?.match_quality === "nearby_building";
   const latest = insightsData?.latest_transaction;
   const estimate = insightsData?.current_estimated_value;
   const building = insightsData?.building_summary_last_3_years;
@@ -192,7 +210,7 @@ export function PropertyValueCard({
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
-          ) : !hasExactMatch ? (
+          ) : !hasMatch ? (
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-amber-300/90">
                 <FileText className="size-4 shrink-0" aria-hidden />
@@ -292,9 +310,15 @@ export function PropertyValueCard({
               )}
 
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
-                  <BadgeCheck className="size-3" aria-hidden /> Exact Building Match
-                </span>
+                {isNearbyBuilding ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-300">
+                    Based on the closest verified transaction on this street.
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
+                    <BadgeCheck className="size-3" aria-hidden /> Exact Building Match
+                  </span>
+                )}
               </div>
             </div>
           )}

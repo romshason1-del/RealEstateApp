@@ -14,8 +14,12 @@ const CACHE = new Map<string, { data: unknown; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ADDRESS_LENGTH = 200;
 
-function buildCacheKey(city: string, street: string, houseNumber: string): string {
-  return [city.trim().toLowerCase(), street.trim().toLowerCase(), houseNumber.trim()].join("|");
+function buildCacheKey(city: string, street: string, houseNumber: string, lat?: number, lng?: number): string {
+  const base = [city.trim().toLowerCase(), street.trim().toLowerCase(), houseNumber.trim()].join("|");
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return `${base}|${lat}|${lng}`;
+  }
+  return base;
 }
 
 function validateInput(city: string, street: string): { valid: boolean; error?: string } {
@@ -37,6 +41,10 @@ export async function GET(request: NextRequest) {
   let street = searchParams.get("street") ?? "";
   let houseNumber = searchParams.get("houseNumber") ?? searchParams.get("house_number") ?? "";
   const addressParam = searchParams.get("address") ?? "";
+  const latParam = searchParams.get("latitude");
+  const lngParam = searchParams.get("longitude");
+  const latitude = latParam ? parseFloat(latParam) : undefined;
+  const longitude = lngParam ? parseFloat(lngParam) : undefined;
 
   if (addressParam && (!city || !street)) {
     const parsed = parseAddressFromFullString(addressParam);
@@ -53,7 +61,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const cacheKey = buildCacheKey(city, street, houseNumber);
+  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude);
   const cached = CACHE.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return NextResponse.json(cached.data);
@@ -64,6 +72,8 @@ export async function GET(request: NextRequest) {
       city: city.trim(),
       street: street.trim(),
       houseNumber: houseNumber.trim(),
+      latitude: Number.isFinite(latitude) ? latitude : undefined,
+      longitude: Number.isFinite(longitude) ? longitude : undefined,
     });
 
     if ("message" in result && "error" in result && result.error) {

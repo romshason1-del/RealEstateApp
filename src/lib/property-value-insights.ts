@@ -53,7 +53,7 @@ export type BuildingSummary = {
   average_apartment_value_today: number;
 } | null;
 
-export type MatchQuality = "exact_building" | "exact_property" | "no_reliable_match";
+export type MatchQuality = "exact_building" | "exact_property" | "nearby_building" | "no_reliable_match";
 
 export type PropertyValueInsightsDebug = {
   raw_input_address: { city: string; street: string; house_number: string };
@@ -61,9 +61,15 @@ export type PropertyValueInsightsDebug = {
   records_fetched: number;
   records_after_filter: number;
   exact_matches_count: number;
+  nearby_matches_count?: number;
+  street_matches_found?: string[];
+  building_numbers_found?: string[];
+  distance_from_requested_m?: number;
   dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
   rejection_reason?: string;
 };
+
+const PROXIMITY_RADIUS_M = 25;
 
 export type PropertyValueInsightsSuccess = {
   address: { city: string; street: string; house_number: string };
@@ -328,6 +334,91 @@ function extractHouseNumberFromAddress(addr: string): string {
   return suffix ? `${m[1]}${suffix}` : m[1];
 }
 
+/** Extract numeric part of house number for +/- 1 comparison. "10", "10A" -> 10. Never match 10 with 100. */
+function parseHouseNumberNumeric(house: string): number | null {
+  const m = house.match(/^(\d+)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Check if record is on same street, same city, and building number within +/- 1. */
+function recordMatchesNearbyBuilding(
+  record: Record<string, unknown>,
+  mapping: FieldMapping,
+  targetCity: string,
+  targetStreet: string,
+  targetHouseNumber: string
+): boolean {
+  const getVal = (key: string | null): string => {
+    if (!key) return "";
+    const v = record[key];
+    return v != null && v !== "" ? String(v).trim() : "";
+  };
+
+  const recAddr = getVal(mapping.street);
+  const explicitCity = getVal(mapping.city) || (() => {
+    for (const k of Object.keys(record)) {
+      if (/עיר|city|ישוב/i.test(k)) return String(record[k] ?? "").trim();
+    }
+    return "";
+  })();
+
+  let recCity = normalizeStreetOrCity(explicitCity);
+  let recStreet = normalizeStreetOrCity(recAddr);
+  let recHouse = extractHouseNumberFromAddress(recAddr) || getVal(mapping.houseNumber);
+
+  if (!recCity && recAddr.includes(",")) {
+    const parsed = parseCombinedAddress(recAddr);
+    recCity = normalizeStreetOrCity(parsed.city);
+    recStreet = normalizeStreetOrCity(parsed.street);
+    recHouse = recHouse || parsed.houseNumber;
+  }
+
+  const targetCanon = toCanonicalAddress(targetCity, targetStreet, targetHouseNumber);
+  const recCanon = toCanonicalAddress(recCity, recStreet, recHouse);
+
+  if (targetCanon.cityKey !== recCanon.cityKey) return false;
+  if (targetCanon.streetKey !== recCanon.streetKey) return false;
+
+  const targetNum = parseHouseNumberNumeric(targetHouseNumber);
+  const recNum = parseHouseNumberNumeric(recHouse);
+  if (targetNum == null || recNum == null) return false;
+  if (Math.abs(targetNum - recNum) > 1) return false;
+
+  return true;
+}
+
+function extractCoordinatesFromRecord(record: Record<string, unknown>): { lat: number; lng: number } | null {
+  let lat: number | null = null;
+  let lng: number | null = null;
+  for (const [key, val] of Object.entries(record)) {
+    const k = String(key).toLowerCase();
+    const v = parseNumeric(val);
+    if (!Number.isFinite(v)) continue;
+    if (k.includes("lat") || k === "y") lat = v;
+    if (k.includes("lon") || k.includes("lng") || k === "x") lng = v;
+  }
+  if (lat != null && lng != null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+    return { lat, lng };
+  }
+  return null;
+}
+
+function haversineDistanceMeters(
+  lat1: number, lng1: number,
+  lat2: number, lng2: number
+): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 /**
  * Parse combined Israeli address string into city, street, house number.
  * Handles "דיזנגוף 10, תל אביב", "10 Dizengoff, Tel Aviv", "רחוב דיזנגוף 10 תל אביב", "123 Dizengoff St, Tel Aviv".
@@ -561,39 +652,93 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     );
     debugBase.exact_matches_count = exactMatches.length;
 
+    let matches: ParsedTransaction[] = exactMatches;
+    let matchQuality: MatchQuality = "exact_building";
+
     if (exactMatches.length === 0) {
-      debugBase.dataset_sample = parsed.slice(0, 5).map((t) => {
+      const nearbyMatches = parsed.filter((t) =>
+        recordMatchesNearbyBuilding(t.record, mapping, city, street, houseNumber)
+      );
+      debugBase.nearby_matches_count = nearbyMatches.length;
+      debugBase.street_matches_found = [...new Set(parsed.filter((t) => {
         const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
-        return {
-          city: t.city,
-          street: t.street,
-          house_number: t.houseNumber,
-          canonical: { city_key: c.cityKey, street_key: c.streetKey, house_key: c.houseKey },
-        };
-      });
-      const mismatchHint = debugBase.dataset_sample?.length
-        ? ` Sample dataset values did not match canonical (city_key, street_key, house_key).`
-        : "";
-      console.log("[property-value-insights] REJECTED: no exact building match", debugBase);
-      const sanitizedDebug = { ...debugBase };
-      if (sanitizedDebug.dataset_sample) {
-        sanitizedDebug.dataset_sample = sanitizedDebug.dataset_sample.map((s) => ({
-          city: hasHebrew(s.city) ? "[Hebrew]" : s.city,
-          street: hasHebrew(s.street) ? "[Hebrew]" : s.street,
-          house_number: s.house_number,
-          canonical: s.canonical,
-        }));
+        return c.streetKey === inputCanonForMatch.streetKey;
+      }).map((t) => t.street))].slice(0, 10);
+      debugBase.building_numbers_found = [...new Set(parsed.filter((t) => {
+        const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
+        return c.streetKey === inputCanonForMatch.streetKey;
+      }).map((t) => t.houseNumber))].slice(0, 20);
+
+      console.log("[property-value-insights] No exact match. Street matches:", debugBase.street_matches_found?.length ?? 0, "Building numbers:", debugBase.building_numbers_found ?? []);
+
+      if (nearbyMatches.length > 0) {
+        matches = nearbyMatches;
+        matchQuality = "nearby_building";
+        console.log("[property-value-insights] Using nearby_building fallback:", nearbyMatches.length, "matches");
+      } else if (input.latitude != null && input.longitude != null && Number.isFinite(input.latitude) && Number.isFinite(input.longitude)) {
+        const inputLat = input.latitude;
+        const inputLng = input.longitude;
+        const withCoords = parsed.filter((t) => {
+          const coords = extractCoordinatesFromRecord(t.record);
+          if (!coords) return false;
+          const dist = haversineDistanceMeters(inputLat, inputLng, coords.lat, coords.lng);
+          if (dist > PROXIMITY_RADIUS_M) return false;
+          const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
+          return c.streetKey === inputCanonForMatch.streetKey && c.cityKey === inputCanonForMatch.cityKey;
+        });
+        if (withCoords.length > 0) {
+          withCoords.sort((a, b) => {
+            const coordsA = extractCoordinatesFromRecord(a.record);
+            const coordsB = extractCoordinatesFromRecord(b.record);
+            if (!coordsA || !coordsB) return 0;
+            const distA = haversineDistanceMeters(inputLat, inputLng, coordsA.lat, coordsA.lng);
+            const distB = haversineDistanceMeters(inputLat, inputLng, coordsB.lat, coordsB.lng);
+            return distA - distB;
+          });
+          const closest = withCoords[0];
+          const coords = extractCoordinatesFromRecord(closest.record);
+          const dist = coords ? haversineDistanceMeters(inputLat, inputLng, coords.lat, coords.lng) : 0;
+          debugBase.distance_from_requested_m = Math.round(dist * 10) / 10;
+          matches = withCoords;
+          matchQuality = "nearby_building";
+          console.log("[property-value-insights] Using proximity fallback:", withCoords.length, "matches within 25m, closest:", debugBase.distance_from_requested_m, "m");
+        }
       }
-      return {
-        message: "no reliable exact match found",
-        debug: {
-          ...sanitizedDebug,
-          rejection_reason: `No transactions matched the exact address. Input canonical: city_key=${inputCanonForMatch.cityKey}, street_key=${inputCanonForMatch.streetKey}, house_key=${inputCanonForMatch.houseKey}.${mismatchHint}`,
-        },
-      };
+
+      if (matches.length === 0) {
+        debugBase.dataset_sample = parsed.slice(0, 5).map((t) => {
+          const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
+          return {
+            city: t.city,
+            street: t.street,
+            house_number: t.houseNumber,
+            canonical: { city_key: c.cityKey, street_key: c.streetKey, house_key: c.houseKey },
+          };
+        });
+        const mismatchHint = debugBase.dataset_sample?.length
+          ? ` Sample dataset values did not match. Street matches: ${debugBase.street_matches_found?.length ?? 0}, building numbers: ${(debugBase.building_numbers_found ?? []).join(", ")}`
+          : "";
+        console.log("[property-value-insights] REJECTED: no exact or nearby match", debugBase);
+        const sanitizedDebug = { ...debugBase };
+        if (sanitizedDebug.dataset_sample) {
+          sanitizedDebug.dataset_sample = sanitizedDebug.dataset_sample.map((s) => ({
+            city: hasHebrew(s.city) ? "[Hebrew]" : s.city,
+            street: hasHebrew(s.street) ? "[Hebrew]" : s.street,
+            house_number: s.house_number,
+            canonical: s.canonical,
+          }));
+        }
+        return {
+          message: "no reliable exact match found",
+          debug: {
+            ...sanitizedDebug,
+            rejection_reason: `No transactions matched. Input: city_key=${inputCanonForMatch.cityKey}, street_key=${inputCanonForMatch.streetKey}, house_key=${inputCanonForMatch.houseKey}.${mismatchHint}`,
+          },
+        };
+      }
     }
 
-    const latest = exactMatches[0];
+    const latest = matches[0];
     const latestDate = latest.saleDate ?? "";
     const latestPrice = latest.salePrice;
     const latestSize = latest.propertySize;
@@ -601,19 +746,22 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     const pricePerM2 =
       latestPrice > 0 && latestSize > 0 ? Math.round((latestPrice / latestSize) * 100) / 100 : 0;
 
-    // Current estimated value: ONLY from latest exact transaction, never guess or use nearby data
+    // Current estimated value: from latest matched transaction (exact or nearby)
     let currentEstimatedValue: CurrentEstimatedValue = null;
     if (latestPrice > 0 && latestSize > 0) {
       const estimatedPricePerM2 = latestPrice / latestSize;
+      const methodText = matchQuality === "exact_building"
+        ? "Based only on the latest exact official transaction. This is NOT an official appraisal."
+        : "Based on the closest verified transaction on this street. This is NOT an official appraisal.";
       currentEstimatedValue = {
         estimated_value: Math.round(estimatedPricePerM2 * latestSize),
         estimated_price_per_m2: Math.round(estimatedPricePerM2 * 100) / 100,
-        estimation_method: "Based only on the latest exact official transaction. This is NOT an official appraisal.",
+        estimation_method: methodText,
       };
     }
 
-    // Building summary: last 3 years, same building only
-    const buildingLast3 = filterLast3Years(exactMatches);
+    // Building summary: last 3 years, same matched set (exact or nearby)
+    const buildingLast3 = filterLast3Years(matches);
     let buildingSummary: BuildingSummary = null;
 
     if (buildingLast3.length > 0) {
@@ -634,9 +782,12 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       };
     }
 
-    const matchQuality: MatchQuality = "exact_building";
     const displayCity = cityKeyToEnglish(inputCanonForMatch.cityKey) || city;
     const displayStreet = street; // Keep original; dataset street may be Hebrew but we display user's input
+
+    const explanation = matchQuality === "exact_building"
+      ? `Exact match for ${displayCity}, ${displayStreet} ${houseNumber}. ${matches.length} official transaction(s) for this building.`
+      : `Based on the closest verified transaction on this street.`;
 
     return {
       address: { city: displayCity, street: displayStreet, house_number: houseNumber },
@@ -649,7 +800,7 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       },
       current_estimated_value: currentEstimatedValue,
       building_summary_last_3_years: buildingSummary,
-      explanation: `Exact match for ${displayCity}, ${displayStreet} ${houseNumber}. ${exactMatches.length} official transaction(s) for this building.`,
+      explanation,
       debug: debugBase,
       source: "data.gov.il",
     };
