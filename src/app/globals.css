@@ -141,6 +141,9 @@ button.heart-save-btn:focus-visible {
 .heart-save-icon {
   transition: all 0.3s ease;
 }
+.heart-save-icon-instant {
+  transition: color 0.06s ease, fill 0.06s ease, transform 0.06s ease;
+}
 .heart-save-icon.heart-saved {
   color: #d4af37;
   fill: #d4af37;

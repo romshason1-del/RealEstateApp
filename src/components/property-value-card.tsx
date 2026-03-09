@@ -367,7 +367,7 @@ export function PropertyValueCard({
   return (
     <div
       className={[
-        "pointer-events-none absolute inset-x-4 bottom-4 z-10 flex justify-end transition-all duration-300 ease-out",
+        "pointer-events-none absolute inset-x-4 bottom-4 z-20 flex justify-end transition-all duration-300 ease-out",
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
     >

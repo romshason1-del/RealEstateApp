@@ -2040,7 +2040,7 @@ export const AddressExplorer = () => {
           ) : null}
 
           {showRestoreButton ? (
-            <div className="pointer-events-none absolute right-4 z-50" style={{ bottom: "20px" }}>
+            <div className="pointer-events-none absolute bottom-3 left-1/2 z-[5] -translate-x-1/2">
               <div className="pointer-events-auto">
                 <button
                   type="button"

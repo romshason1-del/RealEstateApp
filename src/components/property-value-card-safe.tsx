@@ -75,7 +75,7 @@ function PropertyValueCardFallback({
   );
 
   return (
-    <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 flex justify-end">
+    <div className="pointer-events-none absolute inset-x-4 bottom-4 z-20 flex justify-end">
       <div className="pointer-events-auto w-full max-w-[320px] rounded-2xl border border-amber-400/20 bg-black/85 p-4 shadow-2xl backdrop-blur-xl sm:max-w-[340px]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
