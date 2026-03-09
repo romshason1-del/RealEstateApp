@@ -42,6 +42,7 @@ export type PropertyValueInsightsResponse = {
     population: number;
   };
   data_source?: "live" | "cache" | "mock";
+  market_trend?: { hpi_index: number; change_1y_percent: number };
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
     canonical_address?: { city_key: string; street_key: string; house_key: string };
