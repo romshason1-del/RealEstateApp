@@ -14,10 +14,66 @@ import {
 const FETCH_TIMEOUT_MS = 15000;
 const THREE_YEARS_MS = 3 * 365.25 * 24 * 60 * 60 * 1000;
 
-// Israeli Real Estate Transactions (Nadlan) - data.gov.il CKAN datastore
-// Direct resource ID - no discovery
-const NADLAN_RESOURCE_ID = "ad6680ef-5d46-4654-be8d-7301292a8e48";
-const DATA_GOV_IL_DATASTORE_URL = "https://data.gov.il/api/3/action/datastore_search";
+// CKAN API base URLs (try data.gov.il first, then odata.org.il)
+const API_BASES = ["https://data.gov.il", "https://www.odata.org.il"] as const;
+
+type ResolvedResource = {
+  baseUrl: string;
+  resourceId: string;
+  datasetId: string;
+  datastoreActive: boolean;
+};
+
+/**
+ * Resolve the correct resource_id by querying package metadata.
+ * GET package_show?id=real-estate-transactions, then nadlan.
+ * Returns the first resource with datastore_active: true, or first resource as fallback.
+ */
+async function resolveNadlanResource(): Promise<ResolvedResource | null> {
+  const headers = {
+    Accept: "application/json",
+    "User-Agent": "StreetIQ/1.0 (Official Government Data)",
+    "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
+  };
+
+  const packageIds = ["real-estate-transactions", "nadlan"];
+
+  for (const base of API_BASES) {
+    for (const pkgId of packageIds) {
+      try {
+        const url = `${base}/api/3/action/package_show?id=${encodeURIComponent(pkgId)}`;
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+
+        const json = (await res.json().catch(() => null)) as {
+          success?: boolean;
+          result?: {
+            id?: string;
+            resources?: Array<{ id?: string; datastore_active?: boolean }>;
+          };
+        } | null;
+
+        if (!json?.success || !json?.result?.resources?.length) continue;
+
+        const datasetId = json.result.id ?? pkgId;
+        const datastoreResource = json.result.resources.find((r) => r.datastore_active === true);
+        if (!datastoreResource) continue;
+        const resourceId = datastoreResource.id;
+        if (!resourceId) continue;
+
+        return {
+          baseUrl: base,
+          resourceId,
+          datasetId,
+          datastoreActive: true,
+        };
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,6 +131,12 @@ export type PropertyValueInsightsDebug = {
   records_returned?: number;
   /** First 5 raw records from dataset for structure verification */
   raw_dataset_sample?: Record<string, unknown>[];
+  /** Dataset/package ID from package_show */
+  dataset_id?: string;
+  /** Resource ID selected for datastore_search */
+  resource_id_selected?: string;
+  /** Whether the resource has datastore enabled */
+  datastore_active?: boolean;
 };
 
 const PROXIMITY_RADIUS_M = 25;
@@ -458,19 +520,42 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
   };
 
+  const resolved = await resolveNadlanResource();
+  if (!resolved) {
+    const canon = toCanonicalAddress(city, street, houseNumber);
+    console.error("[property-value-insights] Could not resolve resource from package_show (real-estate-transactions, nadlan)");
+    return {
+      message: "Official government real estate data source is temporarily unavailable.",
+      error: "DATA_SOURCE_UNAVAILABLE",
+      debug: {
+        raw_input_address: { city, street, house_number: houseNumber },
+        canonical_address: { city_key: canon.cityKey, street_key: canon.streetKey, house_key: canon.houseKey },
+        records_fetched: 0,
+        records_after_filter: 0,
+        exact_matches_count: 0,
+        api_error: "package_show returned no datastore resource for real-estate-transactions or nadlan",
+        records_returned: 0,
+      },
+    };
+  }
+
   const FETCH_LIMIT = 750;
   const sortParam = "תאריך_העסקה desc";
+  const datastoreUrl = `${resolved.baseUrl}/api/3/action/datastore_search`;
 
   try {
     const inputCanon = toCanonicalAddress(city, street, houseNumber);
 
-    // Single direct request: resource_id + limit=750 + sort (no q)
-    // GET https://data.gov.il/api/3/action/datastore_search?resource_id=...&limit=750&sort=...
-    const url = `${DATA_GOV_IL_DATASTORE_URL}?${new URLSearchParams({
-      resource_id: NADLAN_RESOURCE_ID,
+    // datastore_search with resolved resource_id
+    const url = `${datastoreUrl}?${new URLSearchParams({
+      resource_id: resolved.resourceId,
       limit: String(FETCH_LIMIT),
       sort: sortParam,
     }).toString()}`;
+
+    console.log(
+      `[property-value-insights] dataset_id=${resolved.datasetId} resource_id=${resolved.resourceId} datastore_active=${resolved.datastoreActive}`
+    );
 
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     const apiStatus = res.status;
@@ -508,6 +593,9 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
         house_key: inputCanon.houseKey,
       },
       raw_dataset_sample: first5,
+      dataset_id: resolved.datasetId,
+      resource_id_selected: resolved.resourceId,
+      datastore_active: resolved.datastoreActive,
     };
 
     // Only apply street/building filtering AFTER confirming records are returned
@@ -609,6 +697,9 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       api_error: apiError,
       records_returned: recordsReturned,
       raw_dataset_sample: rawRecords.slice(0, 5),
+      dataset_id: resolved.datasetId,
+      resource_id_selected: resolved.resourceId,
+      datastore_active: resolved.datastoreActive,
     };
 
     if (!houseNorm) {

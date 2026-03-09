@@ -51,6 +51,9 @@ type DebugPanelProps = {
       api_error?: string;
       records_returned?: number;
       raw_dataset_sample?: Record<string, unknown>[];
+      dataset_id?: string;
+      resource_id_selected?: string;
+      datastore_active?: boolean;
     };
     message?: string;
   } | null;
@@ -87,6 +90,15 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         )}
         {d?.api_error && (
           <div><span className="text-zinc-500">API error:</span> <span className="text-amber-300/90">{d.api_error}</span></div>
+        )}
+        {d?.dataset_id && (
+          <div><span className="text-zinc-500">Dataset ID:</span> {d.dataset_id}</div>
+        )}
+        {d?.resource_id_selected && (
+          <div><span className="text-zinc-500">Resource ID:</span> {d.resource_id_selected}</div>
+        )}
+        {d?.datastore_active != null && (
+          <div><span className="text-zinc-500">Datastore active:</span> {d.datastore_active ? "yes" : "no"}</div>
         )}
         <div><span className="text-zinc-500">Exact matches:</span> {d?.exact_matches_count ?? "—"}</div>
         <div><span className="text-zinc-500">Nearby matches:</span> {d?.nearby_matches_count ?? "—"}</div>
