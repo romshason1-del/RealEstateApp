@@ -128,6 +128,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(result, { status: 404 });
     }
 
+    if ("error" in result && result.error === "UNIT_REQUIRED") {
+      return NextResponse.json(result, { status: 400 });
+    }
+
     if ("address" in result && result.address) {
       CACHE.set(cacheKey, { data: result, ts: Date.now() });
     }

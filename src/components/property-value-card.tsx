@@ -80,8 +80,15 @@ type DebugPanelProps = {
       reason?: string;
       response_summary?: string;
       property_found?: boolean;
+      avm_value_found?: boolean;
+      avm_rent_found?: boolean;
+      sales_history_found?: boolean;
+      comps_found?: boolean;
       market_value_source?: string;
       price_per_m2_used?: number;
+      price_per_sqft_used?: number;
+      unit_required?: boolean;
+      fallback_level_used?: string;
       property_size_used?: number;
       transactions_count_5y?: number;
       latest_transaction_amount?: number;
@@ -153,11 +160,32 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         {d?.property_found != null && (
           <div><span className="text-zinc-500">Property found:</span> {d.property_found ? "true" : "false"}</div>
         )}
+        {d?.avm_value_found != null && (
+          <div><span className="text-zinc-500">AVM value found:</span> {d.avm_value_found ? "true" : "false"}</div>
+        )}
+        {d?.avm_rent_found != null && (
+          <div><span className="text-zinc-500">AVM rent found:</span> {d.avm_rent_found ? "true" : "false"}</div>
+        )}
+        {d?.sales_history_found != null && (
+          <div><span className="text-zinc-500">Sales history found:</span> {d.sales_history_found ? "true" : "false"}</div>
+        )}
+        {d?.comps_found != null && (
+          <div><span className="text-zinc-500">Comps found:</span> {d.comps_found ? "true" : "false"}</div>
+        )}
         {d?.market_value_source != null && (
           <div><span className="text-zinc-500">Market value source:</span> {String(d.market_value_source)}</div>
         )}
         {d?.price_per_m2_used != null && (
           <div><span className="text-zinc-500">Price per m² used:</span> {d.price_per_m2_used}</div>
+        )}
+        {d?.price_per_sqft_used != null && (
+          <div><span className="text-zinc-500">Price per sqft used:</span> {d.price_per_sqft_used}</div>
+        )}
+        {d?.unit_required != null && (
+          <div><span className="text-zinc-500">Unit required:</span> {d.unit_required ? "true" : "false"}</div>
+        )}
+        {d?.fallback_level_used != null && (
+          <div><span className="text-zinc-500">Fallback level used:</span> {String(d.fallback_level_used)}</div>
         )}
         {d?.property_size_used != null && (
           <div><span className="text-zinc-500">Property size used:</span> {d.property_size_used} m²</div>
@@ -167,9 +195,6 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         )}
         {d?.latest_transaction_amount != null && (
           <div><span className="text-zinc-500">Latest transaction amount:</span> {d.latest_transaction_amount}</div>
-        )}
-        {d?.fallback_level_used != null && (
-          <div><span className="text-zinc-500">Fallback level used:</span> {String(d.fallback_level_used)}</div>
         )}
         <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
         <div><span className="text-zinc-500">Records returned:</span> {d?.records_returned ?? "—"}</div>
@@ -260,6 +285,14 @@ export function PropertyValueCard({
 
   const [debugMode, setDebugMode] = React.useState(false);
   const hasPropertyData = insightsData?.address != null;
+  const hasUSData =
+    isUS &&
+    (insightsData?.avm_value != null ||
+      insightsData?.avm_rent != null ||
+      (insightsData?.last_sale != null && insightsData.last_sale.price > 0) ||
+      (insightsData?.sales_history != null && insightsData.sales_history.length > 0));
+  const unitRequired = isUS && (insightsData?.error === "UNIT_REQUIRED" || insightsData?.debug?.unit_required === true);
+  const noDataAvailable = isUS && insightsData?.message === "No Data Available" && !hasPropertyData && !unitRequired;
   const hasMatch = hasPropertyData && (insightsData?.match_quality === "exact_building" || insightsData?.match_quality === "nearby_building");
   const isNearbyBuilding = insightsData?.match_quality === "nearby_building";
   const latest = insightsData?.latest_transaction;
@@ -267,6 +300,13 @@ export function PropertyValueCard({
   const building = insightsData?.building_summary_last_3_years;
   const transactions5y = building?.transactions_count_last_5_years ?? building?.transactions_count_last_3_years ?? 0;
   const latestBuildingAmount = building?.latest_building_transaction_price ?? latest?.transaction_price ?? 0;
+
+  const avmValue = insightsData && "avm_value" in insightsData ? (insightsData as { avm_value?: number }).avm_value : undefined;
+  const avmRent = insightsData && "avm_rent" in insightsData ? (insightsData as { avm_rent?: number }).avm_rent : undefined;
+  const lastSale = insightsData && "last_sale" in insightsData ? (insightsData as { last_sale?: { price: number; date: string } }).last_sale : undefined;
+  const salesHistory = insightsData && "sales_history" in insightsData ? (insightsData as { sales_history?: Array<{ date: string; price: number }> }).sales_history : undefined;
+  const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
+  const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -351,6 +391,26 @@ export function PropertyValueCard({
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
+          ) : unitRequired ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-amber-300/90">
+                <Building2 className="size-3.5 shrink-0 sm:size-4" aria-hidden />
+                <span className="text-xs font-medium sm:text-sm">Unit number required</span>
+              </div>
+              <p className="text-[11px] text-zinc-400 sm:text-xs">
+                This building requires a unit number to retrieve property data.
+              </p>
+            </div>
+          ) : noDataAvailable ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-amber-300/90">
+                <FileText className="size-3.5 shrink-0 sm:size-4" aria-hidden />
+                <span className="text-xs font-medium sm:text-sm">No Data Available</span>
+              </div>
+              <p className="text-[11px] text-zinc-400 sm:text-xs">
+                No AVM estimate or sale history could be retrieved for this address.
+              </p>
+            </div>
           ) : !hasPropertyData ? (
             <div className="space-y-1.5">
               <div className="flex items-center gap-2 text-amber-300/90">
@@ -359,7 +419,7 @@ export function PropertyValueCard({
               </div>
               <p className="text-[11px] text-zinc-400 sm:text-xs">
                 {isUS
-                  ? "No property record could be retrieved for this address."
+                  ? insightsData?.message ?? "No property record could be retrieved for this address."
                   : "We only show data when there is a high-confidence match for the exact address."}
               </p>
               {insightsData?.debug && (
@@ -369,6 +429,113 @@ export function PropertyValueCard({
                     {JSON.stringify(sanitizeForDisplay(insightsData.debug), null, 2)}
                   </pre>
                 </details>
+              )}
+            </div>
+          ) : isUS ? (
+            <div className="space-y-2.5 sm:space-y-3 overflow-y-auto max-h-[50vh]">
+              {/* 1. Estimated Market Value - from AVM only */}
+              {avmValue != null && avmValue > 0 && (
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
+                    <Sparkles className="size-3.5" aria-hidden />
+                    Estimated Market Value
+                  </div>
+                  <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                    {formatCurrency(avmValue, currencySymbol)}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-violet-400/70">From RentCast AVM</div>
+                </div>
+              )}
+
+              {/* 2. Price per Sqft */}
+              {avmValue != null && avmValue > 0 && propertyDetails?.sqft != null && propertyDetails.sqft > 0 && (
+                <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-violet-400/80">Price per Sqft</div>
+                  <div className="mt-0.5 text-sm font-medium text-violet-300">
+                    {formatCurrency(avmValue / propertyDetails.sqft, currencySymbol)}/sqft
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Last Sale - never as market value */}
+              {lastSale != null && lastSale.price > 0 && (
+                <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400/90">
+                    <FileText className="size-3.5" aria-hidden />
+                    Last Sale
+                  </div>
+                  <div className="mt-0.5 text-sm font-medium text-amber-200">
+                    {formatCurrency(lastSale.price, currencySymbol)}
+                  </div>
+                  {lastSale.date && (
+                    <div className="mt-0.5 text-[10px] text-amber-400/70">
+                      {formatSaleDate(lastSale.date)}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. Estimated Rent */}
+              {avmRent != null && avmRent > 0 && (
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
+                    <Building2 className="size-3.5" aria-hidden />
+                    Estimated Rent
+                  </div>
+                  <div className="mt-0.5 text-sm font-medium text-emerald-300">
+                    {formatCurrency(avmRent, currencySymbol)}/mo
+                  </div>
+                </div>
+              )}
+
+              {/* 5. Property Details */}
+              {propertyDetails && (propertyDetails.beds != null || propertyDetails.baths != null || propertyDetails.sqft != null || propertyDetails.year_built != null || propertyDetails.property_type) && (
+                <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-zinc-400/90">Property Details</div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-300">
+                    {propertyDetails.beds != null && <span>{propertyDetails.beds} Beds</span>}
+                    {propertyDetails.baths != null && <span>{propertyDetails.baths} Baths</span>}
+                    {propertyDetails.sqft != null && <span>{propertyDetails.sqft.toLocaleString()} Sqft</span>}
+                    {propertyDetails.year_built != null && <span>Built {propertyDetails.year_built}</span>}
+                    {propertyDetails.property_type && <span>{propertyDetails.property_type}</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* 6. Sales History */}
+              {salesHistory != null && salesHistory.length > 0 && (
+                <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-emerald-400/90">Sales History</div>
+                  <div className="mt-1 space-y-0.5 max-h-24 overflow-y-auto">
+                    {salesHistory.slice(0, 10).map((s, i) => (
+                      <div key={i} className="flex justify-between text-xs text-zinc-300">
+                        <span>{formatSaleDate(s.date)}</span>
+                        <span>{formatCurrency(s.price, currencySymbol)}</span>
+                      </div>
+                    ))}
+                    {salesHistory.length > 10 && (
+                      <div className="text-[10px] text-zinc-500">+{salesHistory.length - 10} more</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 7. Nearby Comps */}
+              {nearbyComps != null && nearbyComps.count > 0 && (
+                <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-amber-400/90">Nearby Comparable Sales</div>
+                  <div className="mt-1 space-y-0.5 text-xs text-zinc-300">
+                    <div>Avg price: {formatCurrency(nearbyComps.avg_price, currencySymbol)}</div>
+                    {nearbyComps.avg_price_per_sqft > 0 && (
+                      <div>Avg price/sqft: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}</div>
+                    )}
+                    <div className="text-[10px] text-zinc-500">{nearbyComps.count} comps</div>
+                  </div>
+                </div>
+              )}
+
+              {!avmValue && !lastSale && !avmRent && !propertyDetails && (!salesHistory || salesHistory.length === 0) && !nearbyComps && (
+                <div className="text-sm text-zinc-400">No Data Available</div>
               )}
             </div>
           ) : (
