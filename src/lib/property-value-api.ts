@@ -41,6 +41,7 @@ export type PropertyValueInsightsResponse = {
     median_household_income: number;
     population: number;
   };
+  data_source?: "live" | "cache" | "mock";
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
     canonical_address?: { city_key: string; street_key: string; house_key: string };

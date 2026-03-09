@@ -334,6 +334,7 @@ export function PropertyValueCard({
   const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
   const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
+  const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -375,7 +376,14 @@ export function PropertyValueCard({
       <div className="pointer-events-auto flex max-h-[65vh] sm:max-h-[70vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
         <div className="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-2 border-b border-amber-400/15 bg-black/90 px-2.5 py-2 sm:p-3">
           <div className="min-w-0 flex-1">
-            <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
+            <div className="flex items-center gap-2">
+              <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
+              {dataSource === "mock" && (
+                <span className="rounded border border-amber-500/50 bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">
+                  Mock Data Mode
+                </span>
+              )}
+            </div>
             <div className="mt-0.5 truncate text-xs font-semibold text-white sm:text-sm">{toEnglishDisplay(address)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">

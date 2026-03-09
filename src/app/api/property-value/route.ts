@@ -10,8 +10,9 @@ import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
+import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 
-const CACHE = new Map<string, { data: unknown; ts: number }>();
+const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ADDRESS_LENGTH = 200;
 
@@ -89,9 +90,13 @@ export async function GET(request: NextRequest) {
   }
 
   const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip);
+  const isUS = (countryCode ?? "").toUpperCase() === "US";
+  const usMockMode = isUS && isUSMockEnabled();
+
   const cached = CACHE.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return NextResponse.json(cached.data);
+    const cachedResponse = { ...cached.data, data_source: "cache" as const };
+    return NextResponse.json(cachedResponse);
   }
 
   try {
@@ -134,9 +139,12 @@ export async function GET(request: NextRequest) {
     }
 
     let response = result as Record<string, unknown>;
+    const dataSource = usMockMode ? ("mock" as const) : ("live" as const);
+    response = { ...response, data_source: dataSource };
 
     if (
-      (countryCode ?? "").toUpperCase() === "US" &&
+      isUS &&
+      !usMockMode &&
       Number.isFinite(latitude) &&
       Number.isFinite(longitude)
     ) {

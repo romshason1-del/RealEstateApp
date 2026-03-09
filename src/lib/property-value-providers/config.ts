@@ -7,6 +7,11 @@ function env(key: string, defaultValue = ""): string {
   return (process.env[key] ?? defaultValue).trim();
 }
 
+function envBool(key: string): boolean {
+  const v = (process.env[key] ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes";
+}
+
 function envNumber(key: string, defaultValue: number): number {
   const v = parseInt(process.env[key] ?? "", 10);
   return Number.isFinite(v) ? v : defaultValue;
@@ -16,7 +21,7 @@ export const propertyProviderConfig = {
   /** Israel: "official" | "mock" | unset = not configured */
   israel: env("PROPERTY_PROVIDER_ISRAEL"),
 
-  /** United States: "rentcast" | unset = not configured */
+  /** United States: "rentcast" | "mock" | unset = not configured */
   us: env("PROPERTY_PROVIDER_US"),
 
   /** RentCast API (United States) */
@@ -57,4 +62,9 @@ export function isIsraelMockEnabled(): boolean {
 
 export function isUSRentcastConfigured(): boolean {
   return propertyProviderConfig.us === "rentcast" && Boolean(propertyProviderConfig.rentcast.apiKey);
+}
+
+/** US mock mode: PROPERTY_PROVIDER_US=mock or US_PROPERTY_DEBUG_MODE=true */
+export function isUSMockEnabled(): boolean {
+  return propertyProviderConfig.us === "mock" || envBool("US_PROPERTY_DEBUG_MODE");
 }
