@@ -44,6 +44,9 @@ export type PropertyValueInsightsResponse = {
     api_error?: string;
     records_returned?: number;
     raw_dataset_sample?: Record<string, unknown>[];
+    dataset_id?: string;
+    resource_id_selected?: string;
+    datastore_active?: boolean;
   };
   message?: string;
   error?: string;
