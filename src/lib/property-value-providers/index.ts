@@ -7,7 +7,7 @@ import type { PropertyDataProvider } from "./provider-interface";
 import { IsraelOfficialProvider } from "./israel-official-provider";
 import { MockProvider } from "./mock-provider";
 import { UnitedStatesRentcastProvider } from "./us-rentcast-provider";
-import { isIsraelMockEnabled, isUSRentcastConfigured } from "./config";
+import { isIsraelMockEnabled, isUSRentcastConfigured, propertyProviderConfig } from "./config";
 
 const israelOfficial = new IsraelOfficialProvider();
 const mockProvider = new MockProvider();
@@ -35,7 +35,7 @@ export function getPropertyDataProvider(countryCode: string): PropertyDataProvid
   return null;
 }
 
-export { IsraelOfficialProvider, MockProvider, UnitedStatesRentcastProvider };
+export { IsraelOfficialProvider, MockProvider, UnitedStatesRentcastProvider, isUSRentcastConfigured, propertyProviderConfig };
 export type { PropertyDataProvider } from "./provider-interface";
 export type {
   PropertyValueInput,

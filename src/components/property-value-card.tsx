@@ -56,6 +56,14 @@ type DebugPanelProps = {
       dataset_id?: string;
       resource_id_selected?: string;
       datastore_active?: boolean;
+      active_provider_id?: string;
+      provider_configured?: boolean;
+      PROPERTY_PROVIDER_US?: string;
+      RENTCAST_API_KEY_present?: boolean;
+      request_attempted?: boolean;
+      http_status?: number;
+      reason?: string;
+      response_summary?: string;
     };
     message?: string;
   } | null;
@@ -93,14 +101,38 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         <div><span className="text-zinc-500">Canonical city_key:</span> {apiCanon.city_key}</div>
         <div><span className="text-zinc-500">Canonical street_key:</span> {apiCanon.street_key}</div>
         <div><span className="text-zinc-500">Canonical house_key:</span> {apiCanon.house_key}</div>
+        {d?.active_provider_id != null && (
+          <div><span className="text-zinc-500">Active provider ID:</span> {String(d.active_provider_id)}</div>
+        )}
+        {d?.provider_configured != null && (
+          <div><span className="text-zinc-500">Provider configured:</span> {d.provider_configured ? "true" : "false"}</div>
+        )}
+        {d?.PROPERTY_PROVIDER_US != null && (
+          <div><span className="text-zinc-500">PROPERTY_PROVIDER_US:</span> {String(d.PROPERTY_PROVIDER_US)}</div>
+        )}
+        {d?.RENTCAST_API_KEY_present != null && (
+          <div><span className="text-zinc-500">RENTCAST_API_KEY present:</span> {d.RENTCAST_API_KEY_present ? "true" : "false"}</div>
+        )}
+        {d?.request_attempted != null && (
+          <div><span className="text-zinc-500">Request attempted:</span> {d.request_attempted ? "true" : "false"}</div>
+        )}
+        {d?.http_status != null && (
+          <div><span className="text-zinc-500">HTTP status:</span> {d.http_status}</div>
+        )}
+        {d?.api_error && (
+          <div><span className="text-zinc-500">API error:</span> <span className="text-amber-300/90">{String(d.api_error)}</span></div>
+        )}
+        {d?.reason && (
+          <div><span className="text-zinc-500">Reason:</span> <span className="text-amber-300/90">{String(d.reason)}</span></div>
+        )}
+        {d?.response_summary && (
+          <div><span className="text-zinc-500">Response summary:</span> {String(d.response_summary)}</div>
+        )}
         <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
         <div><span className="text-zinc-500">Records returned:</span> {d?.records_returned ?? "—"}</div>
         <div><span className="text-zinc-500">Candidate records:</span> {d?.records_after_filter ?? "—"}</div>
         {d?.api_status != null && (
           <div><span className="text-zinc-500">API status:</span> {d.api_status}</div>
-        )}
-        {d?.api_error && (
-          <div><span className="text-zinc-500">API error:</span> <span className="text-amber-300/90">{d.api_error}</span></div>
         )}
         {d?.dataset_id && (
           <div><span className="text-zinc-500">Dataset ID:</span> {d.dataset_id}</div>

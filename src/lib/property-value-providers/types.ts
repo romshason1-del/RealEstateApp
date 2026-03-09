@@ -56,11 +56,13 @@ export type PropertyValueInsightsSuccess = {
 
 export type PropertyValueInsightsNoMatch = {
   message: "no transaction found" | "no reliable exact match found";
+  debug?: PropertyValueInsightsDebug;
 };
 
 export type PropertyValueInsightsError = {
   message: string;
   error?: string;
+  debug?: PropertyValueInsightsDebug;
 };
 
 export type PropertyValueInsightsResult =
