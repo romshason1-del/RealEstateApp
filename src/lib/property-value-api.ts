@@ -10,7 +10,7 @@ import { toCanonicalAddress } from "./address-canonical";
 
 export type PropertyValueInsightsResponse = {
   address?: { city: string; street: string; house_number: string };
-  match_quality?: "exact_building" | "exact_property" | "no_reliable_match";
+  match_quality?: "exact_building" | "exact_property" | "nearby_building" | "no_reliable_match";
   latest_transaction?: {
     transaction_date: string;
     transaction_price: number;
@@ -34,6 +34,10 @@ export type PropertyValueInsightsResponse = {
     records_fetched?: number;
     records_after_filter?: number;
     exact_matches_count?: number;
+    nearby_matches_count?: number;
+    street_matches_found?: string[];
+    building_numbers_found?: string[];
+    distance_from_requested_m?: number;
     dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
     rejection_reason?: string;
   };
@@ -44,8 +48,21 @@ export type PropertyValueInsightsResponse = {
 const CACHE = new Map<string, { data: PropertyValueInsightsResponse; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-export async function fetchPropertyValueInsights(address: string): Promise<PropertyValueInsightsResponse> {
-  const key = address.trim().toLowerCase();
+export type FetchPropertyValueOptions = {
+  latitude?: number;
+  longitude?: number;
+};
+
+export async function fetchPropertyValueInsights(
+  address: string,
+  options?: FetchPropertyValueOptions
+): Promise<PropertyValueInsightsResponse> {
+  const lat = options?.latitude;
+  const lng = options?.longitude;
+  const key =
+    Number.isFinite(lat) && Number.isFinite(lng)
+      ? `${address.trim().toLowerCase()}|${lat}|${lng}`
+      : address.trim().toLowerCase();
   const cached = CACHE.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.data;
@@ -71,6 +88,12 @@ export async function fetchPropertyValueInsights(address: string): Promise<Prope
 
   try {
     const params = new URLSearchParams({ address });
+    if (options?.latitude != null && Number.isFinite(options.latitude)) {
+      params.set("latitude", String(options.latitude));
+    }
+    if (options?.longitude != null && Number.isFinite(options.longitude)) {
+      params.set("longitude", String(options.longitude));
+    }
     const res = await fetch(`/api/property-value?${params.toString()}`, {
       signal: AbortSignal.timeout(20000),
     });

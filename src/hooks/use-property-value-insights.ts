@@ -3,7 +3,16 @@
 import * as React from "react";
 import { fetchPropertyValueInsights, type PropertyValueInsightsResponse } from "@/lib/property-value-api";
 
-export function usePropertyValueInsights(address: string, isIsrael: boolean) {
+export type UsePropertyValueInsightsOptions = {
+  latitude?: number;
+  longitude?: number;
+};
+
+export function usePropertyValueInsights(
+  address: string,
+  isIsrael: boolean,
+  options?: UsePropertyValueInsightsOptions
+) {
   const [data, setData] = React.useState<PropertyValueInsightsResponse | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
 
@@ -17,7 +26,12 @@ export function usePropertyValueInsights(address: string, isIsrael: boolean) {
     let cancelled = false;
     setIsLoading(true);
 
-    fetchPropertyValueInsights(address)
+    const fetchOpts =
+      options?.latitude != null && options?.longitude != null && Number.isFinite(options.latitude) && Number.isFinite(options.longitude)
+        ? { latitude: options.latitude, longitude: options.longitude }
+        : undefined;
+
+    fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
         if (!cancelled) setData(res);
       })
@@ -32,7 +46,7 @@ export function usePropertyValueInsights(address: string, isIsrael: boolean) {
       });
 
     return () => { cancelled = true; };
-  }, [address, isIsrael]);
+  }, [address, isIsrael, options?.latitude, options?.longitude]);
 
   return { data, isLoading };
 }
