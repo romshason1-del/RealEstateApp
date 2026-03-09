@@ -31,6 +31,8 @@ export type CurrentEstimatedValue = {
   estimated_value: number;
   estimated_price_per_m2: number;
   estimation_method: string;
+  /** "street_median" = median of nearby sales; use "Estimated Street Value" label */
+  value_type?: "sale" | "rent" | "street_median";
 } | null;
 
 export type BuildingSummary = {

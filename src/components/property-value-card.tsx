@@ -265,6 +265,7 @@ export function PropertyValueCard({
 
   const source = insightsData && "source" in insightsData ? (insightsData as { source?: string }).source : undefined;
   const estimateIsRent = estimate && isLikelyRent(estimate.estimated_value, source);
+  const estimateIsStreetValue = estimate && "value_type" in estimate && estimate.value_type === "street_median";
 
   return (
     <div
@@ -371,12 +372,12 @@ export function PropertyValueCard({
                 )}
               </div>
 
-              {/* 2. Estimated Current Value / Estimated Rent */}
+              {/* 2. Estimated Current Value / Estimated Rent / Estimated Street Value */}
               {estimate && (
                 <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
                     <Sparkles className="size-3.5" aria-hidden />
-                    {estimateIsRent ? "Estimated Rent" : "Estimated Current Value"}
+                    {estimateIsStreetValue ? "Estimated Street Value" : estimateIsRent ? "Estimated Rent" : "Estimated Current Value"}
                   </div>
                   <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
                     {formatCurrency(estimate.estimated_value, currencySymbol)}
@@ -387,7 +388,11 @@ export function PropertyValueCard({
                     </div>
                   )}
                   <div className="mt-0.5 text-[10px] text-violet-400/70">
-                    {estimateIsRent ? "Estimated monthly rent from property data" : "Estimate based on official transaction data"}
+                    {estimateIsStreetValue
+                      ? "Median sale price of nearby properties within 200m"
+                      : estimateIsRent
+                        ? "Estimated monthly rent from property data"
+                        : "Estimate based on official transaction data"}
                   </div>
                 </div>
               )}

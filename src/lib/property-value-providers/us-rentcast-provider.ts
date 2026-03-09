@@ -25,6 +25,8 @@ type RentCastProperty = {
   lastSaleDate?: string;
   lastSalePrice?: number;
   squareFootage?: number;
+  latitude?: number;
+  longitude?: number;
   formattedAddress?: string;
   addressLine1?: string;
   city?: string;
@@ -33,6 +35,9 @@ type RentCastProperty = {
   history?: Record<string, { price?: number; date?: string }>;
   [key: string]: unknown;
 };
+
+/** 200m ≈ 0.124 miles */
+const NEARBY_RADIUS_MILES = 0.125;
 
 type RentCastResponse = RentCastProperty[] | { data?: RentCastProperty[] };
 
@@ -84,12 +89,27 @@ function buildAddressUrl(input: PropertyValueInput): string | null {
   return null;
 }
 
-function buildCoordinatesUrl(input: PropertyValueInput): string | null {
+function buildCoordinatesUrl(input: PropertyValueInput, radiusMiles = 0.1): string | null {
   const lat = input.latitude;
   const lng = input.longitude;
   if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const radius = 0.1; // miles
-  return `${RENTCAST_BASE_URL}/properties?latitude=${lat}&longitude=${lng}&radius=${radius}`;
+  return `${RENTCAST_BASE_URL}/properties?latitude=${lat}&longitude=${lng}&radius=${radiusMiles}&limit=50`;
+}
+
+function getCoordinates(prop: RentCastProperty, input: PropertyValueInput): { lat: number; lng: number } | null {
+  const lat = prop?.latitude ?? input.latitude;
+  const lng = prop?.longitude ?? input.longitude;
+  if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+    return { lat, lng };
+  }
+  return null;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 function parseDate(val: unknown): string {
@@ -166,6 +186,7 @@ function mapToInsights(prop: RentCastProperty, input: PropertyValueInput): Prope
             estimated_price_per_m2: pricePerM2,
             estimation_method:
               "Based on the latest official sale record. This is NOT an official appraisal.",
+            value_type: "sale" as const,
           }
         : null,
     building_summary_last_3_years:
@@ -183,6 +204,40 @@ function mapToInsights(prop: RentCastProperty, input: PropertyValueInput): Prope
             }
           : null,
     explanation: `Property record for ${city}, ${street} ${houseNumber}. Last sale: ${lastSaleDate || "Unknown"}.`,
+    source: "rentcast",
+  };
+}
+
+/** Build success result when property has no sale price but we have street median from nearby properties */
+function mapToInsightsWithStreetMedian(
+  prop: RentCastProperty,
+  input: PropertyValueInput,
+  medianPrice: number
+): PropertyValueInsightsSuccess {
+  const sqft = parseNumeric(prop.squareFootage);
+  const city = (prop.city ?? input.city ?? "").trim() || "Unknown";
+  const street = (prop.addressLine1 ?? input.street ?? "").trim() || "Unknown";
+  const houseNumber = (input.houseNumber ?? "").trim() || "";
+  const propertySizeM2 = sqft > 0 ? sqftToSqm(sqft) : 0;
+  const pricePerM2 = propertySizeM2 > 0 && medianPrice > 0 ? pricePerSqftToSqm(medianPrice / sqft) : 0;
+
+  return {
+    address: { city, street, house_number: houseNumber },
+    match_quality: "nearby_building",
+    latest_transaction: {
+      transaction_date: "",
+      transaction_price: 0,
+      property_size: propertySizeM2,
+      price_per_m2: pricePerM2,
+    },
+    current_estimated_value: {
+      estimated_value: Math.round(medianPrice),
+      estimated_price_per_m2: pricePerM2,
+      estimation_method: "Median sale price of nearby properties within 200m. No sale record for this exact property.",
+      value_type: "street_median",
+    },
+    building_summary_last_3_years: null,
+    explanation: `No sale record for this property. Estimated from median of ${Math.round(medianPrice).toLocaleString()} based on nearby sales within 200m.`,
     source: "rentcast",
   };
 }
@@ -331,28 +386,62 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
         };
       }
 
-      const mapped = mapToInsights(prop, input);
+      let mapped = mapToInsights(prop, input);
       if (!mapped) {
-        return {
-          message: "no transaction found",
-          debug: buildUSProviderDebug({
-            request_attempted: true,
-            http_status: httpStatus,
-            records_fetched: records.length,
-            records_returned: records.length,
-            exact_matches_count: 0,
-            response_summary: "Property record had no valid sale price",
-          }),
-        };
+        const coords = getCoordinates(prop, input);
+        if (coords) {
+          const nearbyUrl = buildCoordinatesUrl(
+            { ...input, latitude: coords.lat, longitude: coords.lng },
+            NEARBY_RADIUS_MILES
+          );
+          if (nearbyUrl) {
+            try {
+              const nearbyRes = await fetchWithTimeout(nearbyUrl);
+              if (nearbyRes.ok) {
+                const nearbyBody = (await nearbyRes.json().catch(() => null)) as RentCastResponse | null;
+                const nearbyRecords: RentCastProperty[] = nearbyBody
+                  ? Array.isArray(nearbyBody)
+                    ? nearbyBody
+                    : (nearbyBody as { data?: RentCastProperty[] }).data ?? []
+                  : [];
+                const salePrices = nearbyRecords
+                  .map((r) => parseNumeric(r.lastSalePrice))
+                  .filter((p) => p > 0);
+                const medianPrice = median(salePrices);
+                if (medianPrice > 0) {
+                  mapped = mapToInsightsWithStreetMedian(prop, input, medianPrice);
+                }
+              }
+            } catch {
+              /* fall through to no transaction found */
+            }
+          }
+        }
+        if (!mapped) {
+          return {
+            message: "no transaction found",
+            debug: buildUSProviderDebug({
+              request_attempted: true,
+              http_status: httpStatus,
+              records_fetched: records.length,
+              records_returned: records.length,
+              exact_matches_count: 0,
+              response_summary: "Property record had no valid sale price",
+            }),
+          };
+        }
       }
 
+      const isStreetMedian = mapped.current_estimated_value?.value_type === "street_median";
       const debug: PropertyValueInsightsDebug = buildUSProviderDebug({
         request_attempted: true,
         http_status: httpStatus,
         records_fetched: records.length,
         records_returned: 1,
-        exact_matches_count: 1,
-        response_summary: `Mapped 1 property: ${mapped.address.city}, ${mapped.address.street}`,
+        exact_matches_count: isStreetMedian ? 0 : 1,
+        response_summary: isStreetMedian
+          ? `Estimated street value from nearby sales: ${mapped.address.city}, ${mapped.address.street}`
+          : `Mapped 1 property: ${mapped.address.city}, ${mapped.address.street}`,
       });
       return { ...mapped, debug };
     } catch (err) {
