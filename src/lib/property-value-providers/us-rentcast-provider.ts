@@ -262,10 +262,10 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       const lastSale: { price: number; date: string } | undefined =
-        lastSalePrice > 0
-          ? { price: lastSalePrice, date: lastSaleDate }
-          : history5y[0]
-            ? { price: history5y[0].price, date: history5y[0].date }
+        history5y.length > 0
+          ? { price: history5y[0].price, date: history5y[0].date }
+          : lastSalePrice > 0
+            ? { price: lastSalePrice, date: lastSaleDate }
             : undefined;
 
       const pricePerSqft = avmValue && sqft > 0 ? avmValue / sqft : 0;

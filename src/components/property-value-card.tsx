@@ -329,8 +329,15 @@ export function PropertyValueCard({
 
   const avmValue = insightsData && "avm_value" in insightsData ? (insightsData as { avm_value?: number }).avm_value : undefined;
   const avmRent = insightsData && "avm_rent" in insightsData ? (insightsData as { avm_rent?: number }).avm_rent : undefined;
-  const lastSale = insightsData && "last_sale" in insightsData ? (insightsData as { last_sale?: { price: number; date: string } }).last_sale : undefined;
+  const lastSaleFromProvider = insightsData && "last_sale" in insightsData ? (insightsData as { last_sale?: { price: number; date: string } }).last_sale : undefined;
   const salesHistory = insightsData && "sales_history" in insightsData ? (insightsData as { sales_history?: Array<{ date: string; price: number }> }).sales_history : undefined;
+  const lastSale = React.useMemo(() => {
+    if (salesHistory != null && salesHistory.length > 0) {
+      const sorted = [...salesHistory].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return { price: sorted[0].price, date: sorted[0].date };
+    }
+    return lastSaleFromProvider;
+  }, [salesHistory, lastSaleFromProvider]);
   const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
   const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
@@ -541,8 +548,11 @@ export function PropertyValueCard({
                   </div>
                 </CollapsibleSection>
               )}
-              {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0) && (
-                <CollapsibleSection title="Neighborhood Stats">
+              <CollapsibleSection
+                title="Neighborhood Stats"
+                defaultOpen={Boolean(neighborhoodStats && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0))}
+              >
+                {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0) ? (
                   <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
                     {neighborhoodStats.median_home_value > 0 && (
                       <div>Median Home Value: {formatCurrency(neighborhoodStats.median_home_value, currencySymbol)}</div>
@@ -554,8 +564,10 @@ export function PropertyValueCard({
                       <div>Population: {neighborhoodStats.population.toLocaleString("en-US")}</div>
                     )}
                   </div>
-                </CollapsibleSection>
-              )}
+                ) : (
+                  <div className="text-[11px] sm:text-xs text-zinc-500">No data available for this location.</div>
+                )}
+              </CollapsibleSection>
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">
                   <DebugPanel
