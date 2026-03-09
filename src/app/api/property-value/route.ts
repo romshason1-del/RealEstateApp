@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
   let street = searchParams.get("street") ?? "";
   let houseNumber = searchParams.get("houseNumber") ?? searchParams.get("house_number") ?? "";
   const addressParam = searchParams.get("address") ?? "";
+  const countryCode = searchParams.get("countryCode") ?? searchParams.get("country") ?? "IL";
   const latParam = searchParams.get("latitude");
   const lngParam = searchParams.get("longitude");
   const latitude = latParam ? parseFloat(latParam) : undefined;
@@ -68,21 +69,26 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const result = await getPropertyValueInsights({
-      city: city.trim(),
-      street: street.trim(),
-      houseNumber: houseNumber.trim(),
-      latitude: Number.isFinite(latitude) ? latitude : undefined,
-      longitude: Number.isFinite(longitude) ? longitude : undefined,
-    });
+    const result = await getPropertyValueInsights(
+      {
+        city: city.trim(),
+        street: street.trim(),
+        houseNumber: houseNumber.trim(),
+        latitude: Number.isFinite(latitude) ? latitude : undefined,
+        longitude: Number.isFinite(longitude) ? longitude : undefined,
+      },
+      countryCode
+    );
 
     if ("message" in result && "error" in result && result.error) {
       const status =
         result.error === "INVALID_INPUT"
           ? 400
-          : result.error === "DATA_SOURCE_UNAVAILABLE"
+          : result.error === "PROVIDER_NOT_CONFIGURED" || result.error === "DATA_SOURCE_UNAVAILABLE"
             ? 503
-            : 502;
+            : result.error === "NO_PROVIDER"
+              ? 404
+              : 502;
       return NextResponse.json(result, { status });
     }
 
