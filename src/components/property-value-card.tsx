@@ -79,6 +79,13 @@ type DebugPanelProps = {
       http_status?: number;
       reason?: string;
       response_summary?: string;
+      property_found?: boolean;
+      market_value_source?: string;
+      price_per_m2_used?: number;
+      property_size_used?: number;
+      transactions_count_5y?: number;
+      latest_transaction_amount?: number;
+      fallback_level_used?: string;
     };
     message?: string;
   } | null;
@@ -142,6 +149,27 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         )}
         {d?.response_summary && (
           <div><span className="text-zinc-500">Response summary:</span> {String(d.response_summary)}</div>
+        )}
+        {d?.property_found != null && (
+          <div><span className="text-zinc-500">Property found:</span> {d.property_found ? "true" : "false"}</div>
+        )}
+        {d?.market_value_source != null && (
+          <div><span className="text-zinc-500">Market value source:</span> {String(d.market_value_source)}</div>
+        )}
+        {d?.price_per_m2_used != null && (
+          <div><span className="text-zinc-500">Price per m² used:</span> {d.price_per_m2_used}</div>
+        )}
+        {d?.property_size_used != null && (
+          <div><span className="text-zinc-500">Property size used:</span> {d.property_size_used} m²</div>
+        )}
+        {d?.transactions_count_5y != null && (
+          <div><span className="text-zinc-500">Transactions count 5y:</span> {d.transactions_count_5y}</div>
+        )}
+        {d?.latest_transaction_amount != null && (
+          <div><span className="text-zinc-500">Latest transaction amount:</span> {d.latest_transaction_amount}</div>
+        )}
+        {d?.fallback_level_used != null && (
+          <div><span className="text-zinc-500">Fallback level used:</span> {String(d.fallback_level_used)}</div>
         )}
         <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
         <div><span className="text-zinc-500">Records returned:</span> {d?.records_returned ?? "—"}</div>
@@ -231,11 +259,14 @@ export function PropertyValueCard({
   });
 
   const [debugMode, setDebugMode] = React.useState(false);
-  const hasMatch = insightsData?.address != null && (insightsData?.match_quality === "exact_building" || insightsData?.match_quality === "nearby_building");
+  const hasPropertyData = insightsData?.address != null;
+  const hasMatch = hasPropertyData && (insightsData?.match_quality === "exact_building" || insightsData?.match_quality === "nearby_building");
   const isNearbyBuilding = insightsData?.match_quality === "nearby_building";
   const latest = insightsData?.latest_transaction;
   const estimate = insightsData?.current_estimated_value;
   const building = insightsData?.building_summary_last_3_years;
+  const transactions5y = building?.transactions_count_last_5_years ?? building?.transactions_count_last_3_years ?? 0;
+  const latestBuildingAmount = building?.latest_building_transaction_price ?? latest?.transaction_price ?? 0;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -320,14 +351,16 @@ export function PropertyValueCard({
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
-          ) : !hasMatch ? (
+          ) : !hasPropertyData ? (
             <div className="space-y-1.5">
               <div className="flex items-center gap-2 text-amber-300/90">
                 <FileText className="size-3.5 shrink-0 sm:size-4" aria-hidden />
-                <span className="text-xs font-medium sm:text-sm">No reliable official transaction found for this exact building</span>
+                <span className="text-xs font-medium sm:text-sm">No property data found for this address</span>
               </div>
               <p className="text-[11px] text-zinc-400 sm:text-xs">
-                We only show data when there is a high-confidence match for the exact address. Street-level or nearby data is not used.
+                {isUS
+                  ? "No property record could be retrieved for this address."
+                  : "We only show data when there is a high-confidence match for the exact address."}
               </p>
               {insightsData?.debug && (
                 <details className="mt-2 text-[10px] text-zinc-500">
@@ -340,93 +373,61 @@ export function PropertyValueCard({
             </div>
           ) : (
             <div className="space-y-2.5 sm:space-y-3">
-              {/* 1. Latest Official Transaction */}
-              <div>
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
-                  <FileText className="size-3.5" aria-hidden />
-                  Latest Official Transaction
-                </div>
-                {latest && (
-                  <div className="mt-1 space-y-0.5 text-xs sm:text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Date</span>
-                      <span className="font-medium text-amber-200">{formatSaleDate(latest.transaction_date)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Price</span>
-                      <span className="font-semibold text-amber-400">{formatCurrency(latest.transaction_price, currencySymbol)}</span>
-                    </div>
-                    {latest.property_size > 0 && (
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-400">Size</span>
-                          <span className="text-white">{latest.property_size} m²</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-400">Price/m²</span>
-                          <span className="text-white">{formatCurrency(latest.price_per_m2, currencySymbol)}</span>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* 2. Estimated Current Value / Estimated Rent / Estimated Street Value */}
+              {/* Row 1: Market Value */}
               {estimate && (
                 <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
                     <Sparkles className="size-3.5" aria-hidden />
-                    {estimateIsStreetValue ? "Estimated Street Value" : estimateIsRent ? "Estimated Rent" : "Estimated Current Value"}
+                    Market Value
                   </div>
                   <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
                     {formatCurrency(estimate.estimated_value, currencySymbol)}
                   </div>
-                  {estimate.estimated_price_per_m2 > 0 && !estimateIsRent && (
-                    <div className="text-[11px] text-violet-400/80 sm:text-xs">
-                      {formatCurrency(estimate.estimated_price_per_m2, currencySymbol)}/ m²
-                    </div>
-                  )}
                   <div className="mt-0.5 text-[10px] text-violet-400/70">
                     {estimateIsStreetValue
-                      ? "Median sale price of nearby properties within 200m"
+                      ? "Estimated from provider data"
                       : estimateIsRent
                         ? "Estimated monthly rent from property data"
-                        : "Estimate based on official transaction data"}
+                        : "Estimated from provider data"}
                   </div>
                 </div>
               )}
 
-              {/* 3. Building Activity (Last 3 Years) */}
-              {building && building.transactions_count_last_3_years > 0 && (
-                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
-                    <Building2 className="size-3.5" aria-hidden />
-                    Building Activity (Last 3 Years)
-                  </div>
-                  <div className="mt-1 space-y-0.5 text-xs sm:text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Transactions</span>
-                      <span className="font-medium text-emerald-300">{building.transactions_count_last_3_years}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Latest building sale</span>
-                      <span className="font-medium text-emerald-300">{formatCurrency(building.latest_building_transaction_price, currencySymbol)}</span>
-                    </div>
-                    {building.average_apartment_value_today > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-zinc-400">Avg apartment value today</span>
-                        <span className="font-medium text-emerald-300">{formatCurrency(building.average_apartment_value_today, currencySymbol)}</span>
-                      </div>
-                    )}
-                  </div>
+              {/* Row 2: Transactions in Building (Last 5 Years) */}
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
+                  <Building2 className="size-3.5" aria-hidden />
+                  Transactions in Building (Last 5 Years)
                 </div>
-              )}
+                <div className="mt-0.5 text-sm font-medium text-emerald-300">
+                  {transactions5y > 0 ? transactions5y : "0"}
+                </div>
+              </div>
+
+              {/* Row 3: Latest Building Transaction */}
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400/90">
+                  <FileText className="size-3.5" aria-hidden />
+                  Latest Building Transaction
+                </div>
+                <div className="mt-0.5 text-sm font-medium text-amber-200">
+                  {latestBuildingAmount > 0
+                    ? formatCurrency(latestBuildingAmount, currencySymbol)
+                    : "No recent building transaction available"}
+                </div>
+                {latest?.transaction_date && (
+                  <div className="mt-0.5 text-[10px] text-amber-400/70">
+                    {formatSaleDate(latest.transaction_date)}
+                  </div>
+                )}
+              </div>
 
               <div className="flex shrink-0 items-center gap-2 pt-0.5">
                 {isNearbyBuilding ? (
                   <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                    Based on the closest verified transaction on this street.
+                    {latestBuildingAmount > 0
+                      ? "Based on the closest verified transaction on this street."
+                      : "Estimated from provider data"}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">

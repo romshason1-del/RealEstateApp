@@ -24,6 +24,7 @@ export type PropertyValueInsightsResponse = {
   } | null;
   building_summary_last_3_years?: {
     transactions_count_last_3_years: number;
+    transactions_count_last_5_years?: number;
     latest_building_transaction_price: number;
     average_apartment_value_today: number;
   } | null;
