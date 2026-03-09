@@ -61,16 +61,16 @@ export async function GET(request: NextRequest) {
   const longitude = lngParam ? parseFloat(lngParam) : undefined;
 
   if (addressParam) {
-    if (!city || !street) {
-      const code = (countryCode ?? "").toUpperCase();
-      if (code === "US") {
-        const parsed = parseUSAddressFromFullString(addressParam);
-        if (parsed.city) city = city || parsed.city;
-        if (parsed.street) street = street || parsed.street;
-        if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
-        if (parsed.state) state = state || parsed.state;
-        if (parsed.zip) zip = zip || parsed.zip;
-      } else {
+    const code = (countryCode ?? "").toUpperCase();
+    if (code === "US") {
+      const parsed = parseUSAddressFromFullString(addressParam);
+      city = parsed.city || city;
+      street = parsed.street || street;
+      houseNumber = parsed.houseNumber || houseNumber;
+      state = parsed.state || state;
+      zip = parsed.zip || zip;
+    } else {
+      if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);
         if (parsed.city) city = city || parsed.city;
         if (parsed.street) street = street || parsed.street;

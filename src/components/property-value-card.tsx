@@ -5,7 +5,7 @@ import { X, FileText, Sparkles, Building2, BadgeCheck, Bug } from "lucide-react"
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
-import { parseAddressFromFullString } from "@/lib/address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
 import { toCanonicalAddress } from "@/lib/address-canonical";
 import { toEnglishDisplay, sanitizeForDisplay } from "@/lib/display-utils";
 
@@ -30,9 +30,11 @@ function formatSaleDate(dateStr: string | null): string {
   }
 }
 
+type ParsedAddress = { city: string; street: string; houseNumber: string; state?: string; zip?: string; country?: string };
+
 type DebugPanelProps = {
   address: string;
-  parsed: { city: string; street: string; houseNumber: string };
+  parsed: ParsedAddress;
   canonical: { cityKey: string; streetKey: string; houseKey: string };
   insightsData: {
     debug?: {
@@ -79,6 +81,15 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         <div><span className="text-zinc-500">Parsed city:</span> {toEnglishDisplay(parsed.city)}</div>
         <div><span className="text-zinc-500">Parsed street:</span> {toEnglishDisplay(parsed.street)}</div>
         <div><span className="text-zinc-500">Parsed house number:</span> {toEnglishDisplay(parsed.houseNumber)}</div>
+        {parsed.state != null && parsed.state !== "" && (
+          <div><span className="text-zinc-500">Parsed state:</span> {parsed.state}</div>
+        )}
+        {parsed.zip != null && parsed.zip !== "" && (
+          <div><span className="text-zinc-500">Parsed zip:</span> {parsed.zip}</div>
+        )}
+        {parsed.country != null && parsed.country !== "" && (
+          <div><span className="text-zinc-500">Parsed country:</span> {parsed.country}</div>
+        )}
         <div><span className="text-zinc-500">Canonical city_key:</span> {apiCanon.city_key}</div>
         <div><span className="text-zinc-500">Canonical street_key:</span> {apiCanon.street_key}</div>
         <div><span className="text-zinc-500">Canonical house_key:</span> {apiCanon.house_key}</div>
@@ -179,7 +190,21 @@ export function PropertyValueCard({
   const estimate = insightsData?.current_estimated_value;
   const building = insightsData?.building_summary_last_3_years;
 
-  const parsedLocal = React.useMemo(() => parseAddressFromFullString(address), [address]);
+  const parsedLocal = React.useMemo((): ParsedAddress => {
+    if (countryCode === "US") {
+      const us = parseUSAddressFromFullString(address);
+      return {
+        city: us.city,
+        street: us.street,
+        houseNumber: us.houseNumber,
+        state: us.state,
+        zip: us.zip,
+        country: "US",
+      };
+    }
+    const g = parseAddressFromFullString(address);
+    return { city: g.city, street: g.street, houseNumber: g.houseNumber };
+  }, [address, countryCode]);
   const canonicalLocal = React.useMemo(
     () => toCanonicalAddress(parsedLocal.city, parsedLocal.street, parsedLocal.houseNumber),
     [parsedLocal]

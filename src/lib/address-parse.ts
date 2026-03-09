@@ -46,15 +46,16 @@ export function parseAddressFromFullString(address: string): { city: string; str
 }
 
 /**
- * US address format: "100 Ocean Dr, Miami Beach, FL 33139"
+ * US address format: "3 Ocean Dr, Miami Beach, FL 33139" or "3 Ocean Dr, Miami Beach, FL 33139, USA"
  * Extracts houseNumber, street, city, state, zip.
  * ZIP: 5 digits or 5+4. State: 2 letters before ZIP.
- * Does not treat ZIP as house number.
+ * Does not treat ZIP as house number. Strips trailing USA/United States/US.
  */
 export function parseUSAddressFromFullString(
   address: string
 ): { houseNumber: string; street: string; city: string; state: string; zip: string } {
-  const trimmed = address.trim().replace(/\s+/g, " ");
+  let trimmed = address.trim().replace(/\s+/g, " ");
+  trimmed = trimmed.replace(/,?\s*(USA|United States|US)\s*$/i, "").trim();
   if (!trimmed) return { houseNumber: "", street: "", city: "", state: "", zip: "" };
 
   const parts = trimmed.split(",").map((p) => p.trim()).filter(Boolean);
