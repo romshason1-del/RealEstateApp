@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { X, TrendingUp, BadgeCheck, Sparkles } from "lucide-react";
+import { X, FileText, Sparkles, Building2, BadgeCheck } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
-import { useIsraelRealEstate } from "@/hooks/use-israel-real-estate";
-import { formatSaleYear } from "@/lib/israel-real-estate";
+import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -16,6 +15,17 @@ export type PropertyValueCardProps = {
   isSaved?: boolean;
   onToggleSave?: () => void;
 };
+
+function formatSaleDate(dateStr: string | null): string {
+  if (!dateStr) return "";
+  try {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  } catch {
+    return dateStr;
+  }
+}
 
 export function PropertyValueCard({
   address,
@@ -31,26 +41,18 @@ export function PropertyValueCard({
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
   );
-  const { data: israelData, isLoading } = useIsraelRealEstate(address, isIsrael, mockData.areaSqm);
+  const { data: insightsData, isLoading } = usePropertyValueInsights(address, isIsrael);
 
-  const lastSalePrice = israelData?.lastSalePrice ?? null;
-  const lastSaleDate = israelData?.lastSaleDate ?? null;
-  const marketValue = israelData?.avgPrice ?? (israelData?.avgPricePerSqm != null ? Math.round(israelData.avgPricePerSqm * 100) : null);
-
-  React.useEffect(() => {
-    if (isIsrael && !isLoading && !lastSalePrice && !marketValue) {
-      console.error("[PropertyValueCard] Cannot show 900k - REASON: lastSalePrice=", lastSalePrice, "marketValue=", marketValue, "error=", israelData?.error, "address=", address.slice(0, 50));
-    }
-  }, [isIsrael, isLoading, lastSalePrice, marketValue, israelData?.error, address]);
+  const hasExactMatch = insightsData?.address != null && insightsData?.match_quality === "exact_building";
+  const latest = insightsData?.latest_transaction;
+  const estimate = insightsData?.current_estimated_value;
+  const building = insightsData?.building_summary_last_3_years;
 
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
     const id = requestAnimationFrame(() => setMounted(true));
     return () => cancelAnimationFrame(id);
   }, []);
-
-  const mainPrice = lastSalePrice ?? marketValue ?? mockData.valueNumber;
-  const showMainPrice = lastSalePrice != null || marketValue != null || !isIsrael;
 
   return (
     <div
@@ -59,7 +61,7 @@ export function PropertyValueCard({
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
     >
-      <div className="pointer-events-auto w-full max-w-[320px] rounded-2xl border border-amber-400/20 bg-black/85 p-4 shadow-2xl backdrop-blur-xl sm:max-w-[340px]">
+      <div className="pointer-events-auto w-full max-w-[360px] rounded-2xl border border-amber-400/20 bg-black/85 p-4 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
@@ -75,50 +77,121 @@ export function PropertyValueCard({
 
         <div className="mt-4 rounded-xl border border-amber-400/15 bg-amber-400/5 px-4 py-3">
           {isLoading && isIsrael ? (
-            <div className="text-sm text-amber-200/70">Loading…</div>
+            <div className="text-sm text-amber-200/70">Loading official data…</div>
+          ) : !isIsrael ? (
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Estimated Value</div>
+              <div className="text-2xl font-bold text-amber-400">{currencySymbol}{mockData.valueNumber.toLocaleString()}</div>
+              <div className="text-xs text-zinc-400">
+                {mockData.pricePerSqm.toLocaleString()} {currencySymbol}/ sqm
+                <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
+              </div>
+            </div>
+          ) : !hasExactMatch ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-amber-300/90">
+                <FileText className="size-4 shrink-0" aria-hidden />
+                <span className="text-sm font-medium">No reliable official transaction found for this exact building</span>
+              </div>
+              <p className="text-xs text-zinc-400">
+                We only show data when there is a high-confidence match for the exact address. Street-level or nearby data is not used.
+              </p>
+              {insightsData?.debug && (
+                <details className="mt-2 text-[10px] text-zinc-500">
+                  <summary>Debug info</summary>
+                  <pre className="mt-1 overflow-auto rounded bg-black/30 p-2">
+                    {JSON.stringify(insightsData.debug, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
           ) : (
-            <>
-              {/* Row 1: Last Recorded Deal - historical fact */}
-              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Last Recorded Deal</div>
-              <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
-                <span className="text-2xl font-bold tracking-tight text-amber-400 sm:text-[1.75rem]">
-                  {currencySymbol}{mainPrice.toLocaleString()}
-                </span>
-                {lastSalePrice != null && lastSaleDate && (
-                  <span className="text-sm font-medium text-zinc-400">From {formatSaleYear(lastSaleDate)}</span>
+            <div className="space-y-4">
+              {/* 1. Latest Official Transaction */}
+              <div>
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
+                  <FileText className="size-3.5" aria-hidden />
+                  Latest Official Transaction
+                </div>
+                {latest && (
+                  <div className="mt-1.5 space-y-0.5 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Date</span>
+                      <span className="font-medium text-amber-200">{formatSaleDate(latest.transaction_date)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Price</span>
+                      <span className="font-semibold text-amber-400">{currencySymbol}{latest.transaction_price.toLocaleString()}</span>
+                    </div>
+                    {latest.property_size > 0 && (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-zinc-400">Size</span>
+                          <span className="text-white">{latest.property_size} m²</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-zinc-400">Price/m²</span>
+                          <span className="text-white">{currencySymbol}{latest.price_per_m2.toLocaleString()}</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
 
-              {/* Row 2: Current Market Estimate - today value */}
-              {marketValue != null && isIsrael && (
-                <div className="mt-3 flex items-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
-                  <Sparkles className="size-4 shrink-0 text-violet-400" aria-hidden />
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-violet-400/90">Current Market Estimate</div>
-                    <div className="text-base font-semibold text-violet-300">{currencySymbol}{marketValue.toLocaleString()}</div>
+              {/* 2. Estimated Current Value */}
+              {estimate && (
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
+                    <Sparkles className="size-3.5" aria-hidden />
+                    Estimated Current Value
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-violet-300">
+                    {currencySymbol}{estimate.estimated_value.toLocaleString()}
+                  </div>
+                  {estimate.estimated_price_per_m2 > 0 && (
+                    <div className="text-xs text-violet-400/80">
+                      {currencySymbol}{estimate.estimated_price_per_m2.toLocaleString()}/ m²
+                    </div>
+                  )}
+                  <div className="mt-1 text-[10px] text-violet-400/70">
+                    Estimate based on official transaction data
                   </div>
                 </div>
               )}
 
-              {!isIsrael && (
-                <div className="mt-2 text-xs text-zinc-400">
-                  {mockData.pricePerSqm.toLocaleString()} {currencySymbol}<span className="ml-1 text-zinc-500">/ sqm</span>
-                  <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
+              {/* 3. Building Activity (Last 3 Years) */}
+              {building && building.transactions_count_last_3_years > 0 && (
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
+                    <Building2 className="size-3.5" aria-hidden />
+                    Building Activity (Last 3 Years)
+                  </div>
+                  <div className="mt-1.5 space-y-0.5 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Transactions</span>
+                      <span className="font-medium text-emerald-300">{building.transactions_count_last_3_years}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-400">Latest building sale</span>
+                      <span className="font-medium text-emerald-300">{currencySymbol}{building.latest_building_transaction_price.toLocaleString()}</span>
+                    </div>
+                    {building.average_apartment_value_today > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400">Avg apartment value today</span>
+                        <span className="font-medium text-emerald-300">{currencySymbol}{building.average_apartment_value_today.toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
-              <div className="mt-3 flex items-center gap-2">
-                {showMainPrice ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
-                    <BadgeCheck className="size-3" aria-hidden /> Official Data
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-300">
-                    <BadgeCheck className="size-3" aria-hidden /> Verified
-                  </span>
-                )}
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
+                  <BadgeCheck className="size-3" aria-hidden /> Exact Building Match
+                </span>
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>

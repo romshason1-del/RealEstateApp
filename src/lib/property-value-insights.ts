@@ -45,11 +45,26 @@ export type BuildingSummary = {
   average_apartment_value_today: number;
 } | null;
 
+export type MatchQuality = "exact_building" | "exact_property" | "no_reliable_match";
+
+export type PropertyValueInsightsDebug = {
+  input_address: { city: string; street: string; house_number: string };
+  normalized_address: { city: string; street: string; house_number: string };
+  records_fetched: number;
+  records_after_filter: number;
+  exact_matches_count: number;
+  latest_transaction_record?: Record<string, unknown>;
+  rejection_reason?: string;
+};
+
 export type PropertyValueInsightsSuccess = {
   address: { city: string; street: string; house_number: string };
+  match_quality: MatchQuality;
   latest_transaction: LatestTransaction;
   current_estimated_value: CurrentEstimatedValue;
   building_summary_last_3_years: BuildingSummary;
+  explanation?: string;
+  debug?: PropertyValueInsightsDebug;
   source: string;
 };
 
@@ -205,18 +220,18 @@ export function inferFieldMapping(record: Record<string, unknown>): FieldMapping
 // ---------------------------------------------------------------------------
 
 /**
- * Normalize house number: 10, 10.0, 10A, 10 A, 10א -> canonical form for exact match.
+ * Normalize house number: 18, 18.0, 18A, 18 A, 18א -> canonical form for exact match.
  */
 export function normalizeHouseNumber(val: string | undefined): string {
   if (val == null || typeof val !== "string") return "";
   const s = String(val).trim();
   if (!s) return "";
 
-  // Extract numeric part
+  // Extract numeric part (handles 18, 18.0)
   const numMatch = s.match(/^(\d+)/);
   const num = numMatch ? numMatch[1] : "";
 
-  // Extract optional suffix (A, B, א, ב, etc.)
+  // Extract optional suffix (A, B, א, ב, etc.) - handles 18A, 18 A, 18א
   const suffixMatch = s.slice(num.length).match(/^[\s.]*([A-Za-zא-ת])?/);
   const suffix = suffixMatch?.[1]?.trim() ?? "";
 
@@ -315,11 +330,20 @@ function extractHouseNumberFromAddress(addr: string): string {
 
 /**
  * Parse combined Israeli address string into city, street, house number.
- * Handles "דיזנגוף 10, תל אביב", "10 Dizengoff, Tel Aviv", "רחוב דיזנגוף 10 תל אביב".
+ * Handles "דיזנגוף 10, תל אביב", "10 Dizengoff, Tel Aviv", "רחוב דיזנגוף 10 תל אביב", "123 Dizengoff St, Tel Aviv".
  */
 function parseCombinedAddress(addr: string): { city: string; street: string; houseNumber: string } {
-  const trimmed = addr.replace(/^\s*רחוב\s+/i, "").trim();
+  const trimmed = addr
+    .replace(/^\s*רחוב\s+/i, "")
+    .replace(/\b(St|Street|Str|Ave|Avenue|Rd|Road)\b\.?/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const parts = trimmed.split(/[,،]/).map((p) => p.trim()).filter(Boolean);
+
+  if (parts[parts.length - 1]?.match(/^(Israel|ישראל)$/i)) {
+    parts.pop();
+  }
+
   const houseMatch = trimmed.match(/\b(\d+)\s*([A-Za-zא-ת])?\b/);
   const houseNumber = houseMatch ? (houseMatch[2] ? `${houseMatch[1]}${houseMatch[2]}` : houseMatch[1]) : "";
 
@@ -425,7 +449,18 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     const withGushParcel = rawRecords.filter((r) => hasGushAndParcel(r));
     const records = withGushParcel.length > 0 ? withGushParcel : rawRecords;
     if (records.length === 0) {
-      return { message: "no transaction found" };
+      console.log("[property-value-insights] REJECTED: no records fetched for", { city, street, houseNumber });
+      return {
+        message: "no transaction found",
+        debug: {
+          input_address: { city, street, house_number: (input.houseNumber ?? "").trim() },
+          normalized_address: { city: normalizeStreetOrCity(city), street: normalizeStreetOrCity(street), house_number: normalizeHouseNumber(houseNumber) },
+          records_fetched: rawRecords.length,
+          records_after_filter: 0,
+          exact_matches_count: 0,
+          rejection_reason: "No official transactions returned from government API for this address.",
+        },
+      };
     }
 
     // Infer field mapping from first record
@@ -475,21 +510,45 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     // Sort by date descending
     parsed.sort((a, b) => parseTransactionDate(b.saleDate) - parseTransactionDate(a.saleDate));
 
-    // Strict: match only exact building
+    // Strict: match only exact building - never use street-level or nearby data
     const houseNorm = normalizeHouseNumber(houseNumber);
+    const normalizedCity = normalizeStreetOrCity(city);
+    const normalizedStreet = normalizeStreetOrCity(street);
+
+    const debugBase: PropertyValueInsightsDebug = {
+      input_address: { city, street, house_number: houseNumber },
+      normalized_address: { city: normalizedCity, street: normalizedStreet, house_number: houseNorm },
+      records_fetched: rawRecords.length,
+      records_after_filter: parsed.length,
+      exact_matches_count: 0,
+    };
+
     if (!houseNorm) {
-      return { message: "no reliable exact match found" };
+      console.log("[property-value-insights] REJECTED: no house number in address", debugBase);
+      return {
+        message: "no reliable exact match found",
+        debug: { ...debugBase, rejection_reason: "House number is required for exact building match" },
+      };
     }
 
     const exactMatches = parsed.filter((t) =>
       recordMatchesExactBuilding(t.record, mapping, city, street, houseNumber)
     );
+    debugBase.exact_matches_count = exactMatches.length;
 
     if (exactMatches.length === 0) {
-      return { message: "no reliable exact match found" };
+      console.log("[property-value-insights] REJECTED: no exact building match", debugBase);
+      return {
+        message: "no reliable exact match found",
+        debug: {
+          ...debugBase,
+          rejection_reason: `No transactions matched exact address: ${normalizedCity}, ${normalizedStreet} ${houseNorm}. Records from nearby buildings were not used.`,
+        },
+      };
     }
 
     const latest = exactMatches[0];
+    debugBase.latest_transaction_record = latest.record;
     const latestDate = latest.saleDate ?? "";
     const latestPrice = latest.salePrice;
     const latestSize = latest.propertySize;
@@ -497,13 +556,14 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     const pricePerM2 =
       latestPrice > 0 && latestSize > 0 ? Math.round((latestPrice / latestSize) * 100) / 100 : 0;
 
-    // Current estimated value: ONLY from official transaction data, never guess
+    // Current estimated value: ONLY from latest exact transaction, never guess or use nearby data
     let currentEstimatedValue: CurrentEstimatedValue = null;
     if (latestPrice > 0 && latestSize > 0) {
+      const estimatedPricePerM2 = latestPrice / latestSize;
       currentEstimatedValue = {
-        estimated_value: Math.round(latestPrice), // Same as latest if we use that transaction
-        estimated_price_per_m2: pricePerM2,
-        estimation_method: "Based only on official government transaction data. This is NOT an official appraisal.",
+        estimated_value: Math.round(estimatedPricePerM2 * latestSize),
+        estimated_price_per_m2: Math.round(estimatedPricePerM2 * 100) / 100,
+        estimation_method: "Based only on the latest exact official transaction. This is NOT an official appraisal.",
       };
     }
 
@@ -529,8 +589,11 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       };
     }
 
+    const matchQuality: MatchQuality = exactMatches.length > 0 ? "exact_building" : "no_reliable_match";
+
     return {
       address: { city, street, house_number: houseNumber },
+      match_quality: matchQuality,
       latest_transaction: {
         transaction_date: latestDate,
         transaction_price: latestPrice,
@@ -539,6 +602,8 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       },
       current_estimated_value: currentEstimatedValue,
       building_summary_last_3_years: buildingSummary,
+      explanation: `Exact match for ${normalizedCity}, ${normalizedStreet} ${houseNumber}. ${exactMatches.length} official transaction(s) for this building.`,
+      debug: debugBase,
       source: "data.gov.il",
     };
   } catch (err) {
