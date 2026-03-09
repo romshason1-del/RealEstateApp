@@ -48,8 +48,6 @@ export class UnitedStatesMockProvider implements PropertyDataProvider {
     const avmValue = seeded(seed, 320000, 850000);
     const sqft = seeded(seed + 1, 1200, 3200);
     const pricePerSqft = Math.round(avmValue / sqft);
-    const lastSalePrice = seeded(seed + 2, 280000, avmValue);
-    const lastSaleDate = formatDate(new Date(Date.now() - seeded(seed + 3, 90, 800) * 24 * 60 * 60 * 1000));
     const avmRent = seeded(seed + 4, 2200, 6500);
 
     const beds = seeded(seed + 5, 2, 5);
@@ -61,12 +59,14 @@ export class UnitedStatesMockProvider implements PropertyDataProvider {
     const historyCount = seeded(seed + 8, 2, 6);
     const salesHistory = Array.from({ length: historyCount }, (_, i) => {
       const daysAgo = (i + 1) * seeded(seed + 9 + i, 180, 540);
-      const price = seeded(seed + 20 + i, 200000, lastSalePrice);
+      const price = seeded(seed + 20 + i, 200000, avmValue);
       return {
         date: formatDate(new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)),
         price,
       };
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const { price: lastSalePrice, date: lastSaleDate } = salesHistory[0];
 
     const compCount = seeded(seed + 30, 4, 12);
     const avgCompPrice = seeded(seed + 31, avmValue * 0.85, avmValue * 1.15);
