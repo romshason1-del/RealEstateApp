@@ -1,11 +1,14 @@
 /**
  * StreetIQ Property Value API
  * GET /api/property-value?city=...&street=...&houseNumber=...
+ * GET /api/property-value?address=... (parsed to city, street, houseNumber)
  * Uses only official Israeli government real estate data (data.gov.il).
+ * Returns results ONLY for exact building matches.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
+import { parseAddressFromFullString } from "@/lib/address-parse";
 
 const CACHE = new Map<string, { data: unknown; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -30,11 +33,19 @@ function validateInput(city: string, street: string): { valid: boolean; error?: 
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const city = searchParams.get("city") ?? "";
-  const street = searchParams.get("street") ?? "";
-  const houseNumber = searchParams.get("houseNumber") ?? searchParams.get("house_number") ?? "";
+  let city = searchParams.get("city") ?? "";
+  let street = searchParams.get("street") ?? "";
+  let houseNumber = searchParams.get("houseNumber") ?? searchParams.get("house_number") ?? "";
+  const addressParam = searchParams.get("address") ?? "";
 
-  const validation = validateInput(city, street);
+  if (addressParam && (!city || !street)) {
+    const parsed = parseAddressFromFullString(addressParam);
+    if (parsed.city) city = city || parsed.city;
+    if (parsed.street) street = street || parsed.street;
+    if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+  }
+
+  const validation = validateInput(city.trim(), street.trim());
   if (!validation.valid) {
     return NextResponse.json(
       { message: validation.error, error: "INVALID_INPUT" },
