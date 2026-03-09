@@ -484,6 +484,11 @@ export function PropertyValueCard({
                     <div className="mt-0.5 text-xs font-medium text-violet-300 sm:text-sm">
                       {formatCurrency(avmValue / propertyDetails.sqft, currencySymbol)}/sqft
                     </div>
+                    {nearbyComps?.avg_price_per_sqft != null && nearbyComps.avg_price_per_sqft > 0 && (
+                      <div className="mt-0.5 text-[10px] text-violet-400/70">
+                        Area Avg Price per Sqft: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}
+                      </div>
+                    )}
                   </div>
                 )}
                 {lastSale != null && lastSale.price > 0 && (
@@ -496,6 +501,14 @@ export function PropertyValueCard({
                       {formatCurrency(lastSale.price, currencySymbol)}
                       {lastSale.date ? ` · ${formatSaleDate(lastSale.date)}` : ""}
                     </div>
+                    {avmValue != null && avmValue > 0 && (() => {
+                      const diff = Math.abs(lastSale.price - avmValue) / avmValue;
+                      return diff > 0.25 ? (
+                        <div className="mt-0.5 text-[10px] text-amber-300/90">
+                          Market estimate differs significantly from the latest sale price.
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                 )}
                 {avmRent != null && avmRent > 0 && (
@@ -548,24 +561,29 @@ export function PropertyValueCard({
                   </div>
                 </CollapsibleSection>
               )}
-              <CollapsibleSection
-                title="Neighborhood Stats"
-                defaultOpen={Boolean(neighborhoodStats && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0))}
-              >
+              <CollapsibleSection title="Neighborhood Stats">
                 {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0) ? (
                   <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
                     {neighborhoodStats.median_home_value > 0 && (
                       <div>Median Home Value: {formatCurrency(neighborhoodStats.median_home_value, currencySymbol)}</div>
                     )}
                     {neighborhoodStats.median_household_income > 0 && (
-                      <div>Median Household Income: {formatCurrency(neighborhoodStats.median_household_income, currencySymbol)}</div>
+                      <div>Median Area Income: {formatCurrency(neighborhoodStats.median_household_income, currencySymbol)}</div>
                     )}
                     {neighborhoodStats.population > 0 && (
-                      <div>Population: {neighborhoodStats.population.toLocaleString("en-US")}</div>
+                      <div>Area Population: {neighborhoodStats.population.toLocaleString("en-US")}</div>
                     )}
+                    <div className="mt-1.5 pt-1 border-t border-zinc-500/20 text-[10px] text-zinc-500">
+                      Government area-level statistics from the U.S. Census Bureau.
+                    </div>
                   </div>
                 ) : (
-                  <div className="text-[11px] sm:text-xs text-zinc-500">No data available for this location.</div>
+                  <div className="space-y-1">
+                    <div className="text-[11px] sm:text-xs text-zinc-500">No government area data available.</div>
+                    <div className="mt-1 text-[10px] text-zinc-500">
+                      Government area-level statistics from the U.S. Census Bureau.
+                    </div>
+                  </div>
                 )}
               </CollapsibleSection>
               {debugMode && hasOfficialProvider && (
