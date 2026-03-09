@@ -6,6 +6,7 @@
  */
 
 import { parseAddressFromFullString } from "./address-parse";
+import { toCanonicalAddress } from "./address-canonical";
 
 export type PropertyValueInsightsResponse = {
   address?: { city: string; street: string; house_number: string };
@@ -28,11 +29,12 @@ export type PropertyValueInsightsResponse = {
   } | null;
   explanation?: string;
   debug?: {
-    input_address: { city: string; street: string; house_number: string };
-    normalized_address: { city: string; street: string; house_number: string };
-    records_fetched: number;
-    records_after_filter: number;
-    exact_matches_count: number;
+    raw_input_address: { city: string; street: string; house_number: string };
+    canonical_address?: { city_key: string; street_key: string; house_key: string };
+    records_fetched?: number;
+    records_after_filter?: number;
+    exact_matches_count?: number;
+    dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
     rejection_reason?: string;
   };
   message?: string;
@@ -54,8 +56,11 @@ export async function fetchPropertyValueInsights(address: string): Promise<Prope
     return {
       message: "no reliable exact match found",
       debug: {
-        input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber },
-        normalized_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber },
+        raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber },
+        canonical_address: (() => {
+          const c = toCanonicalAddress(parsed.city, parsed.street, parsed.houseNumber);
+          return { city_key: c.cityKey, street_key: c.streetKey, house_key: c.houseKey };
+        })(),
         records_fetched: 0,
         records_after_filter: 0,
         exact_matches_count: 0,
