@@ -25,6 +25,11 @@ export const propertyProviderConfig = {
     baseUrl: env("RENTCAST_API_BASE_URL") || "https://api.rentcast.io/v1",
   },
 
+  /** US Census Bureau (neighborhood stats) */
+  census: {
+    apiKey: env("CENSUS_API_KEY"),
+  },
+
   /** Israel Tax Authority API */
   israelTaxApi: {
     baseUrl: env("ISRAEL_TAX_API_BASE_URL"),

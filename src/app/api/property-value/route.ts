@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
+import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 
 const CACHE = new Map<string, { data: unknown; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -132,11 +133,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(result, { status: 400 });
     }
 
-    if ("address" in result && result.address) {
-      CACHE.set(cacheKey, { data: result, ts: Date.now() });
+    let response = result as Record<string, unknown>;
+
+    if (
+      (countryCode ?? "").toUpperCase() === "US" &&
+      Number.isFinite(latitude) &&
+      Number.isFinite(longitude)
+    ) {
+      try {
+        const neighborhoodStats = await fetchNeighborhoodStats(latitude!, longitude!);
+        if (neighborhoodStats) {
+          response = { ...response, neighborhood_stats: neighborhoodStats };
+        }
+      } catch {
+        // Census failure must not break the property card
+      }
     }
 
-    return NextResponse.json(result);
+    if ("address" in result && result.address) {
+      CACHE.set(cacheKey, { data: response, ts: Date.now() });
+    }
+
+    return NextResponse.json(response);
   } catch (err) {
     console.error("[property-value] Error:", err);
     return NextResponse.json(
