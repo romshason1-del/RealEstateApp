@@ -58,6 +58,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export type FetchPropertyValueOptions = {
   latitude?: number;
   longitude?: number;
+  countryCode?: string;
 };
 
 export async function fetchPropertyValueInsights(
@@ -95,6 +96,7 @@ export async function fetchPropertyValueInsights(
 
   try {
     const params = new URLSearchParams({ address });
+    if (options?.countryCode) params.set("countryCode", options.countryCode);
     if (options?.latitude != null && Number.isFinite(options.latitude)) {
       params.set("latitude", String(options.latitude));
     }

@@ -26,10 +26,15 @@ export function usePropertyValueInsights(
     let cancelled = false;
     setIsLoading(true);
 
-    const fetchOpts =
-      options?.latitude != null && options?.longitude != null && Number.isFinite(options.latitude) && Number.isFinite(options.longitude)
+    const fetchOpts = {
+      countryCode: "IL",
+      ...(options?.latitude != null &&
+      options?.longitude != null &&
+      Number.isFinite(options.latitude) &&
+      Number.isFinite(options.longitude)
         ? { latitude: options.latitude, longitude: options.longitude }
-        : undefined;
+        : {}),
+    };
 
     fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
