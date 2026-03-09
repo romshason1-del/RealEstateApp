@@ -1,10 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { X, FileText, Sparkles, Building2, BadgeCheck } from "lucide-react";
+import { X, FileText, Sparkles, Building2, BadgeCheck, Bug } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
+import { parseAddressFromFullString } from "@/lib/address-parse";
+import { toCanonicalAddress } from "@/lib/address-canonical";
+import { toEnglishDisplay, sanitizeForDisplay } from "@/lib/display-utils";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -27,6 +30,81 @@ function formatSaleDate(dateStr: string | null): string {
   }
 }
 
+type DebugPanelProps = {
+  address: string;
+  parsed: { city: string; street: string; houseNumber: string };
+  canonical: { cityKey: string; streetKey: string; houseKey: string };
+  insightsData: {
+    debug?: {
+      raw_input_address?: { city: string; street: string; house_number: string };
+      canonical_address?: { city_key: string; street_key: string; house_key: string };
+      records_fetched?: number;
+      records_after_filter?: number;
+      exact_matches_count?: number;
+      rejection_reason?: string;
+      dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
+    };
+    message?: string;
+  } | null;
+  latest?: { transaction_date: string; transaction_price: number; property_size: number; price_per_m2: number } | null;
+  currencySymbol: string;
+};
+
+function DebugPanel({ address, parsed, canonical, insightsData, latest, currencySymbol }: DebugPanelProps) {
+  const d = insightsData?.debug;
+  const apiCanon = d?.canonical_address ?? {
+    city_key: canonical.cityKey,
+    street_key: canonical.streetKey,
+    house_key: canonical.houseKey,
+  };
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="flex items-center gap-2 text-amber-300/90">
+        <Bug className="size-4 shrink-0" aria-hidden />
+        <span className="font-medium uppercase tracking-wider">Debug Mode</span>
+      </div>
+      <div className="space-y-1.5 font-mono text-xs text-zinc-300">
+        <div><span className="text-zinc-500">Input address:</span> {toEnglishDisplay(address)}</div>
+        <div><span className="text-zinc-500">Parsed city:</span> {toEnglishDisplay(parsed.city)}</div>
+        <div><span className="text-zinc-500">Parsed street:</span> {toEnglishDisplay(parsed.street)}</div>
+        <div><span className="text-zinc-500">Parsed house number:</span> {toEnglishDisplay(parsed.houseNumber)}</div>
+        <div><span className="text-zinc-500">Canonical city_key:</span> {apiCanon.city_key}</div>
+        <div><span className="text-zinc-500">Canonical street_key:</span> {apiCanon.street_key}</div>
+        <div><span className="text-zinc-500">Canonical house_key:</span> {apiCanon.house_key}</div>
+        <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
+        <div><span className="text-zinc-500">Candidate records:</span> {d?.records_after_filter ?? "—"}</div>
+        <div><span className="text-zinc-500">Exact matches:</span> {d?.exact_matches_count ?? "—"}</div>
+        {d?.rejection_reason && (
+          <div><span className="text-zinc-500">Rejection reason:</span> <span className="text-amber-300/90">{d.rejection_reason}</span></div>
+        )}
+      </div>
+      {latest && (
+        <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2">
+          <div className="text-[10px] uppercase tracking-wider text-emerald-400/90">Matched transaction</div>
+          <div className="mt-1 space-y-0.5 text-zinc-300">
+            <div>Date: {formatSaleDate(latest.transaction_date)}</div>
+            <div>Price: {currencySymbol}{latest.transaction_price.toLocaleString()}</div>
+            <div>Size: {latest.property_size} m²</div>
+            <div>Price/m²: {currencySymbol}{latest.price_per_m2.toLocaleString()}</div>
+          </div>
+        </div>
+      )}
+      {d?.dataset_sample && d.dataset_sample.length > 0 && (
+        <details className="text-zinc-400">
+          <summary>Dataset sample (first 5)</summary>
+          <div className="mt-1 space-y-0.5 font-mono text-[10px]">
+            {d.dataset_sample.map((s, i) => (
+              <div key={i}>
+                city: {toEnglishDisplay(s.city)} | street: {toEnglishDisplay(s.street)} | house: {toEnglishDisplay(s.house_number)} | canonical: {s.canonical.city_key}/{s.canonical.street_key}/{s.canonical.house_key}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function PropertyValueCard({
   address,
   position,
@@ -43,10 +121,17 @@ export function PropertyValueCard({
   );
   const { data: insightsData, isLoading } = usePropertyValueInsights(address, isIsrael);
 
+  const [debugMode, setDebugMode] = React.useState(false);
   const hasExactMatch = insightsData?.address != null && insightsData?.match_quality === "exact_building";
   const latest = insightsData?.latest_transaction;
   const estimate = insightsData?.current_estimated_value;
   const building = insightsData?.building_summary_last_3_years;
+
+  const parsedLocal = React.useMemo(() => parseAddressFromFullString(address), [address]);
+  const canonicalLocal = React.useMemo(
+    () => toCanonicalAddress(parsedLocal.city, parsedLocal.street, parsedLocal.houseNumber),
+    [parsedLocal]
+  );
 
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
@@ -65,9 +150,20 @@ export function PropertyValueCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
-            <div className="mt-1.5 truncate text-sm font-semibold text-white">{address}</div>
+            <div className="mt-1.5 truncate text-sm font-semibold text-white">{toEnglishDisplay(address)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {isIsrael && (
+              <button
+                type="button"
+                onClick={() => setDebugMode((d) => !d)}
+                aria-label={debugMode ? "Hide debug" : "Show debug"}
+                title={debugMode ? "Hide debug mode" : "Show debug mode"}
+                className={`rounded-full p-1.5 transition-colors ${debugMode ? "bg-amber-500/30 text-amber-300" : "text-zinc-500 hover:text-zinc-400"}`}
+              >
+                <Bug className="size-3.5" aria-hidden />
+              </button>
+            )}
             {onToggleSave && <HeartButton isSaved={isSaved} onToggle={onToggleSave} iconSize="size-3.5" />}
             <button type="button" onClick={onClose} aria-label="Close" className="rounded-full border border-white/10 p-1.5 text-zinc-400 transition-colors hover:border-white/20 hover:text-white">
               <X className="size-4" />
@@ -76,7 +172,16 @@ export function PropertyValueCard({
         </div>
 
         <div className="mt-4 rounded-xl border border-amber-400/15 bg-amber-400/5 px-4 py-3">
-          {isLoading && isIsrael ? (
+          {debugMode && isIsrael ? (
+            <DebugPanel
+              address={address}
+              parsed={parsedLocal}
+              canonical={canonicalLocal}
+              insightsData={insightsData}
+              latest={latest}
+              currencySymbol={currencySymbol}
+            />
+          ) : isLoading && isIsrael ? (
             <div className="text-sm text-amber-200/70">Loading official data…</div>
           ) : !isIsrael ? (
             <div className="space-y-2">
@@ -100,7 +205,7 @@ export function PropertyValueCard({
                 <details className="mt-2 text-[10px] text-zinc-500">
                   <summary>Debug info</summary>
                   <pre className="mt-1 overflow-auto rounded bg-black/30 p-2">
-                    {JSON.stringify(insightsData.debug, null, 2)}
+                    {JSON.stringify(sanitizeForDisplay(insightsData.debug), null, 2)}
                   </pre>
                 </details>
               )}

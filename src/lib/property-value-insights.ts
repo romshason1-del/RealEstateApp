@@ -2,7 +2,15 @@
  * StreetIQ Property Value Insights
  * Production-ready backend module for official Israeli government real estate data.
  * Uses ONLY data.gov.il official CKAN API. No scraping. No commercial sources.
+ * All user-facing output is English-only.
  */
+
+import {
+  toCanonicalAddress,
+  toHebrewCityForSearch,
+  cityKeyToEnglish,
+  hasHebrew,
+} from "./address-canonical";
 
 const DATA_GOV_IL_BASE = "https://data.gov.il/api/3/action";
 const FETCH_TIMEOUT_MS = 15000;
@@ -48,12 +56,12 @@ export type BuildingSummary = {
 export type MatchQuality = "exact_building" | "exact_property" | "no_reliable_match";
 
 export type PropertyValueInsightsDebug = {
-  input_address: { city: string; street: string; house_number: string };
-  normalized_address: { city: string; street: string; house_number: string };
+  raw_input_address: { city: string; street: string; house_number: string };
+  canonical_address: { city_key: string; street_key: string; house_key: string };
   records_fetched: number;
   records_after_filter: number;
   exact_matches_count: number;
-  latest_transaction_record?: Record<string, unknown>;
+  dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
   rejection_reason?: string;
 };
 
@@ -227,15 +235,12 @@ export function normalizeHouseNumber(val: string | undefined): string {
   const s = String(val).trim();
   if (!s) return "";
 
-  // Extract numeric part (handles 18, 18.0)
   const numMatch = s.match(/^(\d+)/);
   const num = numMatch ? numMatch[1] : "";
-
-  // Extract optional suffix (A, B, א, ב, etc.) - handles 18A, 18 A, 18א
   const suffixMatch = s.slice(num.length).match(/^[\s.]*([A-Za-zא-ת])?/);
   const suffix = suffixMatch?.[1]?.trim() ?? "";
 
-  if (!num) return s; // No number, return as-is for strict comparison
+  if (!num) return s;
   return suffix ? `${num}${suffix}` : num;
 }
 
@@ -267,6 +272,7 @@ function buildAddressKey(city: string, street: string, houseNumber: string): str
 
 /**
  * Check if record address exactly matches the requested building.
+ * Uses canonical address comparison to handle English (Google) vs Hebrew (dataset) format mismatch.
  * Never mix transactions from nearby buildings. No fuzzy matching.
  */
 export function recordMatchesExactBuilding(
@@ -301,19 +307,13 @@ export function recordMatchesExactBuilding(
     recHouse = recHouse || parsed.houseNumber;
   }
 
-  const targetCityNorm = normalizeStreetOrCity(targetCity).toLowerCase();
-  const targetStreetNorm = normalizeStreetOrCity(targetStreet).toLowerCase();
-  const targetHouseNorm = normalizeHouseNumber(targetHouseNumber);
+  // Canonical comparison: handles English input vs Hebrew dataset
+  const targetCanon = toCanonicalAddress(targetCity, targetStreet, targetHouseNumber);
+  const recCanon = toCanonicalAddress(recCity, recStreet, recHouse);
 
-  // City must match (exact after normalization)
-  if (recCity.toLowerCase() !== targetCityNorm) return false;
-
-  // Street must match (exact after normalization)
-  if (recStreet.toLowerCase() !== targetStreetNorm) return false;
-
-  // House number must match exactly (10, 10A, 10 א normalized)
-  const recHouseNorm = normalizeHouseNumber(recHouse);
-  if (recHouseNorm !== targetHouseNorm) return false;
+  if (targetCanon.cityKey !== recCanon.cityKey) return false;
+  if (targetCanon.streetKey !== recCanon.streetKey) return false;
+  if (targetCanon.houseKey !== recCanon.houseKey) return false;
 
   return true;
 }
@@ -424,20 +424,39 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
   };
 
   try {
-    // Fetch by street + city (street-level fetch to avoid 404)
-    const searchQuery = [street, city].filter(Boolean).join(" ");
-    const sortParam = "תאריך_העסקה desc";
-    const url = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(searchQuery)}&limit=200&sort=${encodeURIComponent(sortParam)}`;
+    const inputCanon = toCanonicalAddress(city, street, houseNumber);
+    const hebrewCity = toHebrewCityForSearch(inputCanon.cityKey);
 
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) {
+    // Search: use Hebrew city when available (dataset format); include street for both languages
+    const searchCity = hebrewCity || city;
+    const searchQuery = [street, searchCity].filter(Boolean).join(" ");
+    const sortParam = "תאריך_העסקה desc";
+    let url = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(searchQuery)}&limit=200&sort=${encodeURIComponent(sortParam)}`;
+
+    let res = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    let json: { success?: boolean; result?: { records?: Record<string, unknown>[] } } = {};
+
+    if (res.ok) {
+      json = (await res.json()) as typeof json;
+    }
+    const firstRecords = (json?.result?.records ?? []) as Record<string, unknown>[];
+
+    // If no records and we used Hebrew city, try with original city (some records may use English)
+    if (firstRecords.length === 0 && hebrewCity) {
+      const fallbackQuery = [street, city].filter(Boolean).join(" ");
+      const fallbackUrl = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(fallbackQuery)}&limit=200&sort=${encodeURIComponent(sortParam)}`;
+      const fallbackRes = await fetch(fallbackUrl, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (fallbackRes.ok) {
+        json = (await fallbackRes.json()) as typeof json;
+      }
+    }
+
+    if (!res.ok && (!json?.result?.records || (json.result.records as unknown[]).length === 0)) {
       return {
         message: "Official government API returned an error. Please try again later.",
         error: `API_${res.status}`,
       };
     }
-
-    const json = (await res.json()) as { success?: boolean; result?: { records?: Record<string, unknown>[] } };
     if (json?.success === false) {
       return {
         message: "Official government data request failed.",
@@ -449,12 +468,13 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     const withGushParcel = rawRecords.filter((r) => hasGushAndParcel(r));
     const records = withGushParcel.length > 0 ? withGushParcel : rawRecords;
     if (records.length === 0) {
+      const canon = toCanonicalAddress(city, street, houseNumber);
       console.log("[property-value-insights] REJECTED: no records fetched for", { city, street, houseNumber });
       return {
         message: "no transaction found",
         debug: {
-          input_address: { city, street, house_number: (input.houseNumber ?? "").trim() },
-          normalized_address: { city: normalizeStreetOrCity(city), street: normalizeStreetOrCity(street), house_number: normalizeHouseNumber(houseNumber) },
+          raw_input_address: { city, street, house_number: (input.houseNumber ?? "").trim() },
+          canonical_address: { city_key: canon.cityKey, street_key: canon.streetKey, house_key: canon.houseKey },
           records_fetched: rawRecords.length,
           records_after_filter: 0,
           exact_matches_count: 0,
@@ -515,19 +535,24 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     const normalizedCity = normalizeStreetOrCity(city);
     const normalizedStreet = normalizeStreetOrCity(street);
 
+    const inputCanonForMatch = toCanonicalAddress(city, street, houseNumber);
     const debugBase: PropertyValueInsightsDebug = {
-      input_address: { city, street, house_number: houseNumber },
-      normalized_address: { city: normalizedCity, street: normalizedStreet, house_number: houseNorm },
+      raw_input_address: { city, street, house_number: houseNumber },
+      canonical_address: {
+        city_key: inputCanonForMatch.cityKey,
+        street_key: inputCanonForMatch.streetKey,
+        house_key: inputCanonForMatch.houseKey,
+      },
       records_fetched: rawRecords.length,
       records_after_filter: parsed.length,
       exact_matches_count: 0,
     };
 
     if (!houseNorm) {
-      console.log("[property-value-insights] REJECTED: no house number in address", debugBase);
+      console.log("[property-value-insights] REJECTED: no house number", debugBase);
       return {
         message: "no reliable exact match found",
-        debug: { ...debugBase, rejection_reason: "House number is required for exact building match" },
+        debug: { ...debugBase, rejection_reason: "House number is required for exact building match." },
       };
     }
 
@@ -537,18 +562,38 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     debugBase.exact_matches_count = exactMatches.length;
 
     if (exactMatches.length === 0) {
+      debugBase.dataset_sample = parsed.slice(0, 5).map((t) => {
+        const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
+        return {
+          city: t.city,
+          street: t.street,
+          house_number: t.houseNumber,
+          canonical: { city_key: c.cityKey, street_key: c.streetKey, house_key: c.houseKey },
+        };
+      });
+      const mismatchHint = debugBase.dataset_sample?.length
+        ? ` Sample dataset values did not match canonical (city_key, street_key, house_key).`
+        : "";
       console.log("[property-value-insights] REJECTED: no exact building match", debugBase);
+      const sanitizedDebug = { ...debugBase };
+      if (sanitizedDebug.dataset_sample) {
+        sanitizedDebug.dataset_sample = sanitizedDebug.dataset_sample.map((s) => ({
+          city: hasHebrew(s.city) ? "[Hebrew]" : s.city,
+          street: hasHebrew(s.street) ? "[Hebrew]" : s.street,
+          house_number: s.house_number,
+          canonical: s.canonical,
+        }));
+      }
       return {
         message: "no reliable exact match found",
         debug: {
-          ...debugBase,
-          rejection_reason: `No transactions matched exact address: ${normalizedCity}, ${normalizedStreet} ${houseNorm}. Records from nearby buildings were not used.`,
+          ...sanitizedDebug,
+          rejection_reason: `No transactions matched the exact address. Input canonical: city_key=${inputCanonForMatch.cityKey}, street_key=${inputCanonForMatch.streetKey}, house_key=${inputCanonForMatch.houseKey}.${mismatchHint}`,
         },
       };
     }
 
     const latest = exactMatches[0];
-    debugBase.latest_transaction_record = latest.record;
     const latestDate = latest.saleDate ?? "";
     const latestPrice = latest.salePrice;
     const latestSize = latest.propertySize;
@@ -589,10 +634,12 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       };
     }
 
-    const matchQuality: MatchQuality = exactMatches.length > 0 ? "exact_building" : "no_reliable_match";
+    const matchQuality: MatchQuality = "exact_building";
+    const displayCity = cityKeyToEnglish(inputCanonForMatch.cityKey) || city;
+    const displayStreet = street; // Keep original; dataset street may be Hebrew but we display user's input
 
     return {
-      address: { city, street, house_number: houseNumber },
+      address: { city: displayCity, street: displayStreet, house_number: houseNumber },
       match_quality: matchQuality,
       latest_transaction: {
         transaction_date: latestDate,
@@ -602,7 +649,7 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       },
       current_estimated_value: currentEstimatedValue,
       building_summary_last_3_years: buildingSummary,
-      explanation: `Exact match for ${normalizedCity}, ${normalizedStreet} ${houseNumber}. ${exactMatches.length} official transaction(s) for this building.`,
+      explanation: `Exact match for ${displayCity}, ${displayStreet} ${houseNumber}. ${exactMatches.length} official transaction(s) for this building.`,
       debug: debugBase,
       source: "data.gov.il",
     };
