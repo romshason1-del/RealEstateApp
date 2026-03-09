@@ -47,11 +47,13 @@ export async function GET(request: NextRequest) {
   const latitude = latParam ? parseFloat(latParam) : undefined;
   const longitude = lngParam ? parseFloat(lngParam) : undefined;
 
-  if (addressParam && (!city || !street)) {
-    const parsed = parseAddressFromFullString(addressParam);
-    if (parsed.city) city = city || parsed.city;
-    if (parsed.street) street = street || parsed.street;
-    if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+  if (addressParam) {
+    if (!city || !street) {
+      const parsed = parseAddressFromFullString(addressParam);
+      if (parsed.city) city = city || parsed.city;
+      if (parsed.street) street = street || parsed.street;
+      if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+    }
   }
 
   const validation = validateInput(city.trim(), street.trim());
@@ -76,6 +78,7 @@ export async function GET(request: NextRequest) {
         houseNumber: houseNumber.trim(),
         latitude: Number.isFinite(latitude) ? latitude : undefined,
         longitude: Number.isFinite(longitude) ? longitude : undefined,
+        fullAddress: addressParam || undefined,
       },
       countryCode
     );

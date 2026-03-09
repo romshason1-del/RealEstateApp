@@ -6,18 +6,23 @@ import { fetchPropertyValueInsights, type PropertyValueInsightsResponse } from "
 export type UsePropertyValueInsightsOptions = {
   latitude?: number;
   longitude?: number;
+  countryCode?: string;
 };
+
+/** Countries that have an official property data provider */
+const PROVIDER_COUNTRIES = ["IL", "US"];
 
 export function usePropertyValueInsights(
   address: string,
-  isIsrael: boolean,
+  countryCode: string,
   options?: UsePropertyValueInsightsOptions
 ) {
   const [data, setData] = React.useState<PropertyValueInsightsResponse | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
+  const hasProvider = PROVIDER_COUNTRIES.includes((countryCode ?? "").toUpperCase());
 
   React.useEffect(() => {
-    if (!address.trim() || !isIsrael) {
+    if (!address.trim() || !hasProvider) {
       setData(null);
       setIsLoading(false);
       return;
@@ -27,7 +32,7 @@ export function usePropertyValueInsights(
     setIsLoading(true);
 
     const fetchOpts = {
-      countryCode: "IL",
+      countryCode: countryCode || "IL",
       ...(options?.latitude != null &&
       options?.longitude != null &&
       Number.isFinite(options.latitude) &&
@@ -51,7 +56,7 @@ export function usePropertyValueInsights(
       });
 
     return () => { cancelled = true; };
-  }, [address, isIsrael, options?.latitude, options?.longitude]);
+  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude]);
 
   return { data, isLoading };
 }

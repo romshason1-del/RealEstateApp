@@ -160,13 +160,16 @@ export function PropertyValueCard({
   onToggleSave,
 }: PropertyValueCardProps) {
   const isIsrael = countryCode === "IL";
+  const isUS = countryCode === "US";
+  const hasOfficialProvider = isIsrael || isUS;
   const mockData = React.useMemo(
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
   );
-  const { data: insightsData, isLoading } = usePropertyValueInsights(address, isIsrael, {
+  const { data: insightsData, isLoading } = usePropertyValueInsights(address, countryCode, {
     latitude: position?.lat,
     longitude: position?.lng,
+    countryCode,
   });
 
   const [debugMode, setDebugMode] = React.useState(false);
@@ -202,7 +205,7 @@ export function PropertyValueCard({
             <div className="mt-1.5 truncate text-sm font-semibold text-white">{toEnglishDisplay(address)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            {isIsrael && (
+            {hasOfficialProvider && (
               <button
                 type="button"
                 onClick={() => setDebugMode((d) => !d)}
@@ -221,7 +224,7 @@ export function PropertyValueCard({
         </div>
 
         <div className="mt-4 rounded-xl border border-amber-400/15 bg-amber-400/5 px-4 py-3">
-          {debugMode && isIsrael ? (
+          {debugMode && hasOfficialProvider ? (
             <DebugPanel
               address={address}
               parsed={parsedLocal}
@@ -230,9 +233,9 @@ export function PropertyValueCard({
               latest={latest}
               currencySymbol={currencySymbol}
             />
-          ) : isLoading && isIsrael ? (
+          ) : isLoading && hasOfficialProvider ? (
             <div className="text-sm text-amber-200/70">Loading official data…</div>
-          ) : !isIsrael ? (
+          ) : !hasOfficialProvider ? (
             <div className="space-y-2">
               <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Estimated Value</div>
               <div className="text-2xl font-bold text-amber-400">{currencySymbol}{mockData.valueNumber.toLocaleString()}</div>
