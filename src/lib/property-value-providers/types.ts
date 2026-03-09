@@ -42,13 +42,42 @@ export type BuildingSummary = {
   average_apartment_value_today: number;
 } | null;
 
-/** How market value was derived */
+/** How market value was derived. For US: only "avm" or "none" - never use last sale. */
 export type MarketValueSource =
+  | "avm"
   | "exact_transaction"
   | "exact_provider"
   | "price_per_m2_x_size"
   | "street_median"
   | "none";
+
+/** US: Last sale record (never used as market value) */
+export type LastSaleRecord = {
+  price: number;
+  date: string;
+};
+
+/** US: Property details from provider */
+export type PropertyDetails = {
+  beds?: number;
+  baths?: number;
+  sqft?: number;
+  year_built?: number;
+  property_type?: string;
+};
+
+/** US: Sales history entry */
+export type SalesHistoryEntry = {
+  date: string;
+  price: number;
+};
+
+/** US: Nearby comps summary */
+export type NearbyCompsSummary = {
+  avg_price: number;
+  avg_price_per_sqft: number;
+  count: number;
+};
 
 /** Data quality / fallback level */
 export type FallbackLevel =
@@ -68,13 +97,25 @@ export type PropertyValueInsightsSuccess = {
   latest_transaction: LatestTransaction;
   current_estimated_value: CurrentEstimatedValue;
   building_summary_last_3_years: BuildingSummary;
-  /** Market value source for debug/display */
   market_value_source?: MarketValueSource;
-  /** Fallback level used (exact_building, street_fallback, etc.) */
   fallback_level?: FallbackLevel;
   explanation?: string;
   debug?: PropertyValueInsightsDebug;
   source: string;
+  /** US: AVM market value only - never last sale */
+  avm_value?: number;
+  /** US: AVM rent estimate */
+  avm_rent?: number;
+  /** US: Last sale (never as market value) */
+  last_sale?: LastSaleRecord;
+  /** US: Sales history from property */
+  sales_history?: SalesHistoryEntry[];
+  /** US: Nearby comparable sales summary */
+  nearby_comps?: NearbyCompsSummary;
+  /** US: Property details */
+  property_details?: PropertyDetails;
+  /** US: Building requires unit number for condo/multi-unit */
+  unit_required?: boolean;
 };
 
 export type PropertyValueInsightsNoMatch = {

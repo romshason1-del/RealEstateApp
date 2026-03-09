@@ -29,6 +29,13 @@ export type PropertyValueInsightsResponse = {
     average_apartment_value_today: number;
   } | null;
   explanation?: string;
+  avm_value?: number;
+  avm_rent?: number;
+  last_sale?: { price: number; date: string };
+  sales_history?: Array<{ date: string; price: number }>;
+  nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number };
+  property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string };
+  unit_required?: boolean;
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
     canonical_address?: { city_key: string; street_key: string; house_key: string };
@@ -48,6 +55,15 @@ export type PropertyValueInsightsResponse = {
     dataset_id?: string;
     resource_id_selected?: string;
     datastore_active?: boolean;
+    property_found?: boolean;
+    avm_value_found?: boolean;
+    avm_rent_found?: boolean;
+    sales_history_found?: boolean;
+    comps_found?: boolean;
+    market_value_source?: string;
+    price_per_sqft_used?: number;
+    unit_required?: boolean;
+    fallback_level_used?: string;
   };
   message?: string;
   error?: string;
@@ -120,7 +136,7 @@ export async function fetchPropertyValueInsights(
       error: "PARSE_ERROR",
     }));
 
-    if (res.ok && data.address) {
+    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale)) {
       CACHE.set(key, { data, ts: Date.now() });
     }
 
