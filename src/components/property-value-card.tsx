@@ -30,6 +30,21 @@ function formatSaleDate(dateStr: string | null): string {
   }
 }
 
+/** Format currency with proper thousands separators (e.g. $1,250,000) */
+function formatCurrency(value: number, symbol: string): string {
+  if (!Number.isFinite(value)) return `${symbol}0`;
+  return `${symbol}${Math.round(value).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+}
+
+/** Heuristic: values in typical monthly rent range (500–25,000) are likely rent, not sale price */
+function isLikelyRent(value: number, source?: string): boolean {
+  if (!Number.isFinite(value) || value <= 0) return false;
+  if (source === "rentcast") {
+    return value >= 500 && value <= 25000;
+  }
+  return value >= 500 && value <= 25000;
+}
+
 type ParsedAddress = { city: string; street: string; houseNumber: string; state?: string; zip?: string; country?: string };
 
 type DebugPanelProps = {
@@ -79,7 +94,7 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
     house_key: canonical.houseKey,
   };
   return (
-    <div className="space-y-3 text-xs">
+    <div className="space-y-2 text-[11px] sm:text-xs">
       <div className="flex items-center gap-2 text-amber-300/90">
         <Bug className="size-4 shrink-0" aria-hidden />
         <span className="font-medium uppercase tracking-wider">Debug Mode</span>
@@ -159,13 +174,13 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         )}
       </div>
       {latest && (
-        <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2">
+        <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-1.5 sm:p-2">
           <div className="text-[10px] uppercase tracking-wider text-emerald-400/90">Matched transaction</div>
           <div className="mt-1 space-y-0.5 text-zinc-300">
             <div>Date: {formatSaleDate(latest.transaction_date)}</div>
-            <div>Price: {currencySymbol}{latest.transaction_price.toLocaleString()}</div>
+            <div>Price: {formatCurrency(latest.transaction_price, currencySymbol)}</div>
             <div>Size: {latest.property_size} m²</div>
-            <div>Price/m²: {currencySymbol}{latest.price_per_m2.toLocaleString()}</div>
+            <div>Price/m²: {formatCurrency(latest.price_per_m2, currencySymbol)}</div>
           </div>
         </div>
       )}
@@ -248,6 +263,9 @@ export function PropertyValueCard({
     return () => cancelAnimationFrame(id);
   }, []);
 
+  const source = insightsData && "source" in insightsData ? (insightsData as { source?: string }).source : undefined;
+  const estimateIsRent = estimate && isLikelyRent(estimate.estimated_value, source);
+
   return (
     <div
       className={[
@@ -255,11 +273,11 @@ export function PropertyValueCard({
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
     >
-      <div className="pointer-events-auto w-full max-w-[360px] rounded-2xl border border-amber-400/20 bg-black/85 p-4 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
-        <div className="flex items-start justify-between gap-3">
+      <div className="pointer-events-auto flex max-h-[70vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
+        <div className="flex shrink-0 items-start justify-between gap-2 p-3 sm:p-4">
           <div className="min-w-0 flex-1">
             <div className="text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
-            <div className="mt-1.5 truncate text-sm font-semibold text-white">{toEnglishDisplay(address)}</div>
+            <div className="mt-1 truncate text-sm font-semibold text-white sm:text-base">{toEnglishDisplay(address)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {hasOfficialProvider && (
@@ -280,7 +298,7 @@ export function PropertyValueCard({
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-amber-400/15 bg-amber-400/5 px-4 py-3">
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl border-t border-amber-400/15 bg-amber-400/5 px-3 py-2.5 sm:px-4 sm:py-3">
           {debugMode && hasOfficialProvider ? (
             <DebugPanel
               address={address}
@@ -291,23 +309,23 @@ export function PropertyValueCard({
               currencySymbol={currencySymbol}
             />
           ) : isLoading && hasOfficialProvider ? (
-            <div className="text-sm text-amber-200/70">Loading official data…</div>
+            <div className="py-2 text-sm text-amber-200/70">Loading official data…</div>
           ) : !hasOfficialProvider ? (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Estimated Value</div>
-              <div className="text-2xl font-bold text-amber-400">{currencySymbol}{mockData.valueNumber.toLocaleString()}</div>
+              <div className="text-lg font-bold text-amber-400 sm:text-xl">{formatCurrency(mockData.valueNumber, currencySymbol)}</div>
               <div className="text-xs text-zinc-400">
                 {mockData.pricePerSqm.toLocaleString()} {currencySymbol}/ sqm
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
           ) : !hasMatch ? (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <div className="flex items-center gap-2 text-amber-300/90">
-                <FileText className="size-4 shrink-0" aria-hidden />
-                <span className="text-sm font-medium">No reliable official transaction found for this exact building</span>
+                <FileText className="size-3.5 shrink-0 sm:size-4" aria-hidden />
+                <span className="text-xs font-medium sm:text-sm">No reliable official transaction found for this exact building</span>
               </div>
-              <p className="text-xs text-zinc-400">
+              <p className="text-[11px] text-zinc-400 sm:text-xs">
                 We only show data when there is a high-confidence match for the exact address. Street-level or nearby data is not used.
               </p>
               {insightsData?.debug && (
@@ -320,7 +338,7 @@ export function PropertyValueCard({
               )}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-2.5 sm:space-y-3">
               {/* 1. Latest Official Transaction */}
               <div>
                 <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
@@ -328,14 +346,14 @@ export function PropertyValueCard({
                   Latest Official Transaction
                 </div>
                 {latest && (
-                  <div className="mt-1.5 space-y-0.5 text-sm">
+                  <div className="mt-1 space-y-0.5 text-xs sm:text-sm">
                     <div className="flex justify-between">
                       <span className="text-zinc-400">Date</span>
                       <span className="font-medium text-amber-200">{formatSaleDate(latest.transaction_date)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-zinc-400">Price</span>
-                      <span className="font-semibold text-amber-400">{currencySymbol}{latest.transaction_price.toLocaleString()}</span>
+                      <span className="font-semibold text-amber-400">{formatCurrency(latest.transaction_price, currencySymbol)}</span>
                     </div>
                     {latest.property_size > 0 && (
                       <>
@@ -345,7 +363,7 @@ export function PropertyValueCard({
                         </div>
                         <div className="flex justify-between">
                           <span className="text-zinc-400">Price/m²</span>
-                          <span className="text-white">{currencySymbol}{latest.price_per_m2.toLocaleString()}</span>
+                          <span className="text-white">{formatCurrency(latest.price_per_m2, currencySymbol)}</span>
                         </div>
                       </>
                     )}
@@ -353,60 +371,60 @@ export function PropertyValueCard({
                 )}
               </div>
 
-              {/* 2. Estimated Current Value */}
+              {/* 2. Estimated Current Value / Estimated Rent */}
               {estimate && (
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
                     <Sparkles className="size-3.5" aria-hidden />
-                    Estimated Current Value
+                    {estimateIsRent ? "Estimated Rent" : "Estimated Current Value"}
                   </div>
-                  <div className="mt-1 text-base font-semibold text-violet-300">
-                    {currencySymbol}{estimate.estimated_value.toLocaleString()}
+                  <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                    {formatCurrency(estimate.estimated_value, currencySymbol)}
                   </div>
-                  {estimate.estimated_price_per_m2 > 0 && (
-                    <div className="text-xs text-violet-400/80">
-                      {currencySymbol}{estimate.estimated_price_per_m2.toLocaleString()}/ m²
+                  {estimate.estimated_price_per_m2 > 0 && !estimateIsRent && (
+                    <div className="text-[11px] text-violet-400/80 sm:text-xs">
+                      {formatCurrency(estimate.estimated_price_per_m2, currencySymbol)}/ m²
                     </div>
                   )}
-                  <div className="mt-1 text-[10px] text-violet-400/70">
-                    Estimate based on official transaction data
+                  <div className="mt-0.5 text-[10px] text-violet-400/70">
+                    {estimateIsRent ? "Estimated monthly rent from property data" : "Estimate based on official transaction data"}
                   </div>
                 </div>
               )}
 
               {/* 3. Building Activity (Last 3 Years) */}
               {building && building.transactions_count_last_3_years > 0 && (
-                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
                     <Building2 className="size-3.5" aria-hidden />
                     Building Activity (Last 3 Years)
                   </div>
-                  <div className="mt-1.5 space-y-0.5 text-sm">
+                  <div className="mt-1 space-y-0.5 text-xs sm:text-sm">
                     <div className="flex justify-between">
                       <span className="text-zinc-400">Transactions</span>
                       <span className="font-medium text-emerald-300">{building.transactions_count_last_3_years}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-zinc-400">Latest building sale</span>
-                      <span className="font-medium text-emerald-300">{currencySymbol}{building.latest_building_transaction_price.toLocaleString()}</span>
+                      <span className="font-medium text-emerald-300">{formatCurrency(building.latest_building_transaction_price, currencySymbol)}</span>
                     </div>
                     {building.average_apartment_value_today > 0 && (
                       <div className="flex justify-between">
                         <span className="text-zinc-400">Avg apartment value today</span>
-                        <span className="font-medium text-emerald-300">{currencySymbol}{building.average_apartment_value_today.toLocaleString()}</span>
+                        <span className="font-medium text-emerald-300">{formatCurrency(building.average_apartment_value_today, currencySymbol)}</span>
                       </div>
                     )}
                   </div>
                 </div>
               )}
 
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2 pt-0.5">
                 {isNearbyBuilding ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-300">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
                     Based on the closest verified transaction on this street.
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
                     <BadgeCheck className="size-3" aria-hidden /> Exact Building Match
                   </span>
                 )}
