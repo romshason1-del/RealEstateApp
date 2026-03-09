@@ -62,12 +62,12 @@ function CollapsibleSection({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between px-2.5 py-1.5 sm:px-3 sm:py-2 text-left text-[10px] uppercase tracking-wider text-zinc-400/90 hover:bg-zinc-500/10 transition-colors"
+        className="flex w-full items-center justify-between px-2 py-0.5 sm:px-3 sm:py-1.5 text-left text-[9px] uppercase tracking-wider text-zinc-400/90 hover:bg-zinc-500/10 transition-colors"
       >
         <span>{title}{count != null && count > 0 ? ` (${count})` : ""}</span>
-        {open ? <ChevronUp className="size-3.5 shrink-0" /> : <ChevronDown className="size-3.5 shrink-0" />}
+        {open ? <ChevronUp className="size-3 shrink-0" /> : <ChevronDown className="size-3 shrink-0" />}
       </button>
-      {open && <div className="border-t border-zinc-500/20 px-2.5 py-1.5 sm:px-3 sm:py-2">{children}</div>}
+      {open && <div className="border-t border-zinc-500/20 px-2 py-1 sm:px-3 sm:py-1.5">{children}</div>}
     </div>
   );
 }
@@ -381,18 +381,18 @@ export function PropertyValueCard({
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
     >
-      <div className="pointer-events-auto flex max-h-[65vh] sm:max-h-[70vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
-        <div className="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-2 border-b border-amber-400/15 bg-black/90 px-2.5 py-2 sm:p-3">
+      <div className="pointer-events-auto flex max-h-[55vh] sm:max-h-[65vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
+        <div className="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-2 border-b border-amber-400/15 bg-black/90 px-2 py-1.5 sm:px-3 sm:py-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
+              <div className="text-[9px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
               {dataSource === "mock" && (
                 <span className="rounded border border-amber-500/50 bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">
                   Mock Data Mode
                 </span>
               )}
             </div>
-            <div className="mt-0.5 truncate text-xs font-semibold text-white sm:text-sm">{toEnglishDisplay(address)}</div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-white">{toEnglishDisplay(address)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {hasOfficialProvider && (
@@ -413,7 +413,7 @@ export function PropertyValueCard({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl bg-amber-400/5 px-2.5 py-2 sm:px-3 sm:py-2.5">
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl bg-amber-400/5 px-2 py-1.5 sm:px-3 sm:py-2.5">
           {isLoading && hasOfficialProvider ? (
             <div className="py-1.5 text-xs sm:text-sm text-amber-200/70">Loading official data…</div>
           ) : !hasOfficialProvider ? (
@@ -465,24 +465,24 @@ export function PropertyValueCard({
               )}
             </div>
           ) : isUS ? (
-            <div className="space-y-1.5 sm:space-y-2">
+            <div className="space-y-1.5">
               {/* Default visible summary */}
-              <div className="space-y-1.5 sm:space-y-2">
+              <div className="space-y-1">
                 {avmValue != null && avmValue > 0 && (
-                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                    <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-violet-400/90">
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                    <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
                       <Sparkles className="size-3 shrink-0" aria-hidden />
                       Estimated Market Value
                     </div>
-                    <div className="mt-0.5 text-sm font-semibold text-violet-300 sm:text-base">
+                    <div className="mt-0.5 text-sm font-semibold text-violet-300">
                       {formatCurrency(avmValue, currencySymbol)}
                     </div>
                   </div>
                 )}
                 {avmValue != null && avmValue > 0 && propertyDetails?.sqft != null && propertyDetails.sqft > 0 && (
-                  <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                    <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-violet-400/80">Price per Sqft</div>
-                    <div className="mt-0.5 text-xs font-medium text-violet-300 sm:text-sm">
+                  <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                    <div className="text-[9px] uppercase tracking-wider text-violet-400/80">Price per Sqft</div>
+                    <div className="mt-0.5 text-sm font-medium text-violet-300">
                       {formatCurrency(avmValue / propertyDetails.sqft, currencySymbol)}/sqft
                     </div>
                     {nearbyComps?.avg_price_per_sqft != null && nearbyComps.avg_price_per_sqft > 0 && (
@@ -493,12 +493,12 @@ export function PropertyValueCard({
                   </div>
                 )}
                 {lastSale != null && lastSale.price > 0 && (
-                  <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                    <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-amber-400/90">
+                  <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                    <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
                       <FileText className="size-3 shrink-0" aria-hidden />
                       Last Sale
                     </div>
-                    <div className="mt-0.5 text-xs font-medium text-amber-200 sm:text-sm">
+                    <div className="mt-0.5 text-sm font-medium text-amber-200">
                       {formatCurrency(lastSale.price, currencySymbol)}
                       {lastSale.date ? ` · ${formatSaleDate(lastSale.date)}` : ""}
                     </div>
@@ -513,12 +513,12 @@ export function PropertyValueCard({
                   </div>
                 )}
                 {avmRent != null && avmRent > 0 && (
-                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                    <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-emerald-400/90">
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                    <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-emerald-400/90">
                       <Building2 className="size-3 shrink-0" aria-hidden />
                       Estimated Rent
                     </div>
-                    <div className="mt-0.5 text-xs font-medium text-emerald-300 sm:text-sm">
+                    <div className="mt-0.5 text-sm font-medium text-emerald-300">
                       {formatCurrency(avmRent, currencySymbol)}/mo
                     </div>
                   </div>
@@ -627,17 +627,17 @@ export function PropertyValueCard({
               )}
             </div>
           ) : (
-            <div className="space-y-1.5 sm:space-y-2">
+            <div className="space-y-1.5">
               {estimate && (
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                  <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-violet-400/90">
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                  <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
                     <Sparkles className="size-3 shrink-0" aria-hidden />
                     Market Value
                   </div>
-                  <div className="mt-0.5 text-sm font-semibold text-violet-300 sm:text-base">
+                  <div className="mt-0.5 text-sm font-semibold text-violet-300">
                     {formatCurrency(estimate.estimated_value, currencySymbol)}
                   </div>
-                  <div className="mt-0.5 text-[9px] sm:text-[10px] text-violet-400/70">
+                  <div className="mt-0.5 text-[9px] text-violet-400/70">
                     {estimateIsStreetValue
                       ? "Estimated from provider data"
                       : estimateIsRent
@@ -646,21 +646,21 @@ export function PropertyValueCard({
                   </div>
                 </div>
               )}
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-emerald-400/90">
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-emerald-400/90">
                   <Building2 className="size-3 shrink-0" aria-hidden />
                   Transactions in Building (Last 5 Years)
                 </div>
-                <div className="mt-0.5 text-xs font-medium text-emerald-300 sm:text-sm">
+                <div className="mt-0.5 text-sm font-medium text-emerald-300">
                   {transactions5y > 0 ? transactions5y : "0"}
                 </div>
               </div>
-              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
-                <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-amber-400/90">
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
                   <FileText className="size-3 shrink-0" aria-hidden />
                   Latest Building Transaction
                 </div>
-                <div className="mt-0.5 text-xs font-medium text-amber-200 sm:text-sm">
+                <div className="mt-0.5 text-sm font-medium text-amber-200">
                   {latestBuildingAmount > 0
                     ? formatCurrency(latestBuildingAmount, currencySymbol)
                     : "No recent building transaction available"}
