@@ -36,6 +36,11 @@ export type PropertyValueInsightsResponse = {
   nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number };
   property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string };
   unit_required?: boolean;
+  neighborhood_stats?: {
+    median_home_value: number;
+    median_household_income: number;
+    population: number;
+  };
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
     canonical_address?: { city_key: string; street_key: string; house_key: string };
@@ -136,7 +141,7 @@ export async function fetchPropertyValueInsights(
       error: "PARSE_ERROR",
     }));
 
-    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale)) {
+    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.neighborhood_stats)) {
       CACHE.set(key, { data, ts: Date.now() });
     }
 

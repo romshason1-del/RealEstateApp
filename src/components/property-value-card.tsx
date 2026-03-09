@@ -333,6 +333,7 @@ export function PropertyValueCard({
   const salesHistory = insightsData && "sales_history" in insightsData ? (insightsData as { sales_history?: Array<{ date: string; price: number }> }).sales_history : undefined;
   const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
   const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
+  const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -528,6 +529,21 @@ export function PropertyValueCard({
                     <div>Avg price: {formatCurrency(nearbyComps.avg_price, currencySymbol)}</div>
                     {nearbyComps.avg_price_per_sqft > 0 && (
                       <div>Avg price/sqft: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}</div>
+                    )}
+                  </div>
+                </CollapsibleSection>
+              )}
+              {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0) && (
+                <CollapsibleSection title="Neighborhood Stats">
+                  <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
+                    {neighborhoodStats.median_home_value > 0 && (
+                      <div>Median Home Value: {formatCurrency(neighborhoodStats.median_home_value, currencySymbol)}</div>
+                    )}
+                    {neighborhoodStats.median_household_income > 0 && (
+                      <div>Median Household Income: {formatCurrency(neighborhoodStats.median_household_income, currencySymbol)}</div>
+                    )}
+                    {neighborhoodStats.population > 0 && (
+                      <div>Population: {neighborhoodStats.population.toLocaleString("en-US")}</div>
                     )}
                   </div>
                 </CollapsibleSection>
