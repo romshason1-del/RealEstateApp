@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { X, FileText, Sparkles, Building2, BadgeCheck, Bug } from "lucide-react";
+import { X, FileText, Sparkles, Building2, BadgeCheck, Bug, ChevronDown, ChevronUp } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
@@ -43,6 +43,33 @@ function isLikelyRent(value: number, source?: string): boolean {
     return value >= 500 && value <= 25000;
   }
   return value >= 500 && value <= 25000;
+}
+
+function CollapsibleSection({
+  title,
+  children,
+  defaultOpen = false,
+  count,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  count?: number;
+}) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between px-2.5 py-1.5 sm:px-3 sm:py-2 text-left text-[10px] uppercase tracking-wider text-zinc-400/90 hover:bg-zinc-500/10 transition-colors"
+      >
+        <span>{title}{count != null && count > 0 ? ` (${count})` : ""}</span>
+        {open ? <ChevronUp className="size-3.5 shrink-0" /> : <ChevronDown className="size-3.5 shrink-0" />}
+      </button>
+      {open && <div className="border-t border-zinc-500/20 px-2.5 py-1.5 sm:px-3 sm:py-2">{children}</div>}
+    </div>
+  );
 }
 
 type ParsedAddress = { city: string; street: string; houseNumber: string; state?: string; zip?: string; country?: string };
@@ -344,11 +371,11 @@ export function PropertyValueCard({
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
     >
-      <div className="pointer-events-auto flex max-h-[70vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
-        <div className="flex shrink-0 items-start justify-between gap-2 p-3 sm:p-4">
+      <div className="pointer-events-auto flex max-h-[65vh] sm:max-h-[70vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
+        <div className="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-2 border-b border-amber-400/15 bg-black/90 px-2.5 py-2 sm:p-3">
           <div className="min-w-0 flex-1">
-            <div className="text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
-            <div className="mt-1 truncate text-sm font-semibold text-white sm:text-base">{toEnglishDisplay(address)}</div>
+            <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-white sm:text-sm">{toEnglishDisplay(address)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {hasOfficialProvider && (
@@ -369,145 +396,122 @@ export function PropertyValueCard({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl border-t border-amber-400/15 bg-amber-400/5 px-3 py-2.5 sm:px-4 sm:py-3">
-          {debugMode && hasOfficialProvider ? (
-            <DebugPanel
-              address={address}
-              parsed={parsedLocal}
-              canonical={canonicalLocal}
-              insightsData={insightsData}
-              latest={latest}
-              currencySymbol={currencySymbol}
-            />
-          ) : isLoading && hasOfficialProvider ? (
-            <div className="py-2 text-sm text-amber-200/70">Loading official data…</div>
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl bg-amber-400/5 px-2.5 py-2 sm:px-3 sm:py-2.5">
+          {isLoading && hasOfficialProvider ? (
+            <div className="py-1.5 text-xs sm:text-sm text-amber-200/70">Loading official data…</div>
           ) : !hasOfficialProvider ? (
-            <div className="space-y-1.5">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Estimated Value</div>
-              <div className="text-lg font-bold text-amber-400 sm:text-xl">{formatCurrency(mockData.valueNumber, currencySymbol)}</div>
-              <div className="text-xs text-zinc-400">
+            <div className="space-y-1">
+              <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Estimated Value</div>
+              <div className="text-base font-bold text-amber-400 sm:text-lg">{formatCurrency(mockData.valueNumber, currencySymbol)}</div>
+              <div className="text-[11px] sm:text-xs text-zinc-400">
                 {mockData.pricePerSqm.toLocaleString()} {currencySymbol}/ sqm
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
           ) : unitRequired ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-amber-300/90">
-                <Building2 className="size-3.5 shrink-0 sm:size-4" aria-hidden />
-                <span className="text-xs font-medium sm:text-sm">Unit number required</span>
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-amber-300/90">
+                <Building2 className="size-3 shrink-0" aria-hidden />
+                <span className="text-xs font-medium">Unit number required</span>
               </div>
-              <p className="text-[11px] text-zinc-400 sm:text-xs">
+              <p className="text-[11px] text-zinc-400">
                 This building requires a unit number to retrieve property data.
               </p>
             </div>
           ) : noDataAvailable ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-amber-300/90">
-                <FileText className="size-3.5 shrink-0 sm:size-4" aria-hidden />
-                <span className="text-xs font-medium sm:text-sm">No Data Available</span>
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-amber-300/90">
+                <FileText className="size-3 shrink-0" aria-hidden />
+                <span className="text-xs font-medium">No Data Available</span>
               </div>
-              <p className="text-[11px] text-zinc-400 sm:text-xs">
+              <p className="text-[11px] text-zinc-400">
                 No AVM estimate or sale history could be retrieved for this address.
               </p>
             </div>
           ) : !hasPropertyData ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-amber-300/90">
-                <FileText className="size-3.5 shrink-0 sm:size-4" aria-hidden />
-                <span className="text-xs font-medium sm:text-sm">No property data found for this address</span>
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-amber-300/90">
+                <FileText className="size-3 shrink-0" aria-hidden />
+                <span className="text-xs font-medium">No property data found for this address</span>
               </div>
-              <p className="text-[11px] text-zinc-400 sm:text-xs">
+              <p className="text-[11px] text-zinc-400">
                 {isUS
                   ? insightsData?.message ?? "No property record could be retrieved for this address."
                   : "We only show data when there is a high-confidence match for the exact address."}
               </p>
               {insightsData?.debug && (
-                <details className="mt-2 text-[10px] text-zinc-500">
-                  <summary>Debug info</summary>
-                  <pre className="mt-1 overflow-auto rounded bg-black/30 p-2">
+                <CollapsibleSection title="Debug Info">
+                  <pre className="max-h-32 overflow-auto rounded bg-black/30 p-2 font-mono text-[10px]">
                     {JSON.stringify(sanitizeForDisplay(insightsData.debug), null, 2)}
                   </pre>
-                </details>
+                </CollapsibleSection>
               )}
             </div>
           ) : isUS ? (
-            <div className="space-y-2.5 sm:space-y-3 overflow-y-auto max-h-[50vh]">
-              {/* 1. Estimated Market Value - from AVM only */}
-              {avmValue != null && avmValue > 0 && (
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
-                    <Sparkles className="size-3.5" aria-hidden />
-                    Estimated Market Value
-                  </div>
-                  <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
-                    {formatCurrency(avmValue, currencySymbol)}
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-violet-400/70">From RentCast AVM</div>
-                </div>
-              )}
-
-              {/* 2. Price per Sqft */}
-              {avmValue != null && avmValue > 0 && propertyDetails?.sqft != null && propertyDetails.sqft > 0 && (
-                <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-violet-400/80">Price per Sqft</div>
-                  <div className="mt-0.5 text-sm font-medium text-violet-300">
-                    {formatCurrency(avmValue / propertyDetails.sqft, currencySymbol)}/sqft
-                  </div>
-                </div>
-              )}
-
-              {/* 3. Last Sale - never as market value */}
-              {lastSale != null && lastSale.price > 0 && (
-                <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400/90">
-                    <FileText className="size-3.5" aria-hidden />
-                    Last Sale
-                  </div>
-                  <div className="mt-0.5 text-sm font-medium text-amber-200">
-                    {formatCurrency(lastSale.price, currencySymbol)}
-                  </div>
-                  {lastSale.date && (
-                    <div className="mt-0.5 text-[10px] text-amber-400/70">
-                      {formatSaleDate(lastSale.date)}
+            <div className="space-y-1.5 sm:space-y-2">
+              {/* Default visible summary */}
+              <div className="space-y-1.5 sm:space-y-2">
+                {avmValue != null && avmValue > 0 && (
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                    <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-violet-400/90">
+                      <Sparkles className="size-3 shrink-0" aria-hidden />
+                      Estimated Market Value
                     </div>
-                  )}
-                </div>
-              )}
-
-              {/* 4. Estimated Rent */}
-              {avmRent != null && avmRent > 0 && (
-                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
-                    <Building2 className="size-3.5" aria-hidden />
-                    Estimated Rent
+                    <div className="mt-0.5 text-sm font-semibold text-violet-300 sm:text-base">
+                      {formatCurrency(avmValue, currencySymbol)}
+                    </div>
                   </div>
-                  <div className="mt-0.5 text-sm font-medium text-emerald-300">
-                    {formatCurrency(avmRent, currencySymbol)}/mo
+                )}
+                {avmValue != null && avmValue > 0 && propertyDetails?.sqft != null && propertyDetails.sqft > 0 && (
+                  <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                    <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-violet-400/80">Price per Sqft</div>
+                    <div className="mt-0.5 text-xs font-medium text-violet-300 sm:text-sm">
+                      {formatCurrency(avmValue / propertyDetails.sqft, currencySymbol)}/sqft
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+                {lastSale != null && lastSale.price > 0 && (
+                  <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                    <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-amber-400/90">
+                      <FileText className="size-3 shrink-0" aria-hidden />
+                      Last Sale
+                    </div>
+                    <div className="mt-0.5 text-xs font-medium text-amber-200 sm:text-sm">
+                      {formatCurrency(lastSale.price, currencySymbol)}
+                      {lastSale.date ? ` · ${formatSaleDate(lastSale.date)}` : ""}
+                    </div>
+                  </div>
+                )}
+                {avmRent != null && avmRent > 0 && (
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                    <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-emerald-400/90">
+                      <Building2 className="size-3 shrink-0" aria-hidden />
+                      Estimated Rent
+                    </div>
+                    <div className="mt-0.5 text-xs font-medium text-emerald-300 sm:text-sm">
+                      {formatCurrency(avmRent, currencySymbol)}/mo
+                    </div>
+                  </div>
+                )}
+              </div>
 
-              {/* 5. Property Details */}
+              {/* Collapsible sections */}
               {propertyDetails && (propertyDetails.beds != null || propertyDetails.baths != null || propertyDetails.sqft != null || propertyDetails.year_built != null || propertyDetails.property_type) && (
-                <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-400/90">Property Details</div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-300">
+                <CollapsibleSection title="Property Details">
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] sm:text-xs text-zinc-300">
                     {propertyDetails.beds != null && <span>{propertyDetails.beds} Beds</span>}
                     {propertyDetails.baths != null && <span>{propertyDetails.baths} Baths</span>}
                     {propertyDetails.sqft != null && <span>{propertyDetails.sqft.toLocaleString()} Sqft</span>}
                     {propertyDetails.year_built != null && <span>Built {propertyDetails.year_built}</span>}
                     {propertyDetails.property_type && <span>{propertyDetails.property_type}</span>}
                   </div>
-                </div>
+                </CollapsibleSection>
               )}
-
-              {/* 6. Sales History */}
               {salesHistory != null && salesHistory.length > 0 && (
-                <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-emerald-400/90">Sales History</div>
-                  <div className="mt-1 space-y-0.5 max-h-24 overflow-y-auto">
+                <CollapsibleSection title="Sales History" count={salesHistory.length}>
+                  <div className="space-y-0.5 max-h-24 overflow-y-auto">
                     {salesHistory.slice(0, 10).map((s, i) => (
-                      <div key={i} className="flex justify-between text-xs text-zinc-300">
+                      <div key={i} className="flex justify-between text-[11px] sm:text-xs text-zinc-300">
                         <span>{formatSaleDate(s.date)}</span>
                         <span>{formatCurrency(s.price, currencySymbol)}</span>
                       </div>
@@ -516,40 +520,46 @@ export function PropertyValueCard({
                       <div className="text-[10px] text-zinc-500">+{salesHistory.length - 10} more</div>
                     )}
                   </div>
-                </div>
+                </CollapsibleSection>
               )}
-
-              {/* 7. Nearby Comps */}
               {nearbyComps != null && nearbyComps.count > 0 && (
-                <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="text-[10px] uppercase tracking-wider text-amber-400/90">Nearby Comparable Sales</div>
-                  <div className="mt-1 space-y-0.5 text-xs text-zinc-300">
+                <CollapsibleSection title="Nearby Comparable Sales" count={nearbyComps.count}>
+                  <div className="space-y-0.5 text-[11px] sm:text-xs text-zinc-300">
                     <div>Avg price: {formatCurrency(nearbyComps.avg_price, currencySymbol)}</div>
                     {nearbyComps.avg_price_per_sqft > 0 && (
                       <div>Avg price/sqft: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}</div>
                     )}
-                    <div className="text-[10px] text-zinc-500">{nearbyComps.count} comps</div>
                   </div>
-                </div>
+                </CollapsibleSection>
               )}
-
+              {debugMode && hasOfficialProvider && (
+                <CollapsibleSection title="Debug Info">
+                  <DebugPanel
+                    address={address}
+                    parsed={parsedLocal}
+                    canonical={canonicalLocal}
+                    insightsData={insightsData}
+                    latest={latest}
+                    currencySymbol={currencySymbol}
+                  />
+                </CollapsibleSection>
+              )}
               {!avmValue && !lastSale && !avmRent && !propertyDetails && (!salesHistory || salesHistory.length === 0) && !nearbyComps && (
-                <div className="text-sm text-zinc-400">No Data Available</div>
+                <div className="text-xs text-zinc-400">No Data Available</div>
               )}
             </div>
           ) : (
-            <div className="space-y-2.5 sm:space-y-3">
-              {/* Row 1: Market Value */}
+            <div className="space-y-1.5 sm:space-y-2">
               {estimate && (
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-violet-400/90">
-                    <Sparkles className="size-3.5" aria-hidden />
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                  <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-violet-400/90">
+                    <Sparkles className="size-3 shrink-0" aria-hidden />
                     Market Value
                   </div>
-                  <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                  <div className="mt-0.5 text-sm font-semibold text-violet-300 sm:text-base">
                     {formatCurrency(estimate.estimated_value, currencySymbol)}
                   </div>
-                  <div className="mt-0.5 text-[10px] text-violet-400/70">
+                  <div className="mt-0.5 text-[9px] sm:text-[10px] text-violet-400/70">
                     {estimateIsStreetValue
                       ? "Estimated from provider data"
                       : estimateIsRent
@@ -558,49 +568,56 @@ export function PropertyValueCard({
                   </div>
                 </div>
               )}
-
-              {/* Row 2: Transactions in Building (Last 5 Years) */}
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
-                  <Building2 className="size-3.5" aria-hidden />
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-emerald-400/90">
+                  <Building2 className="size-3 shrink-0" aria-hidden />
                   Transactions in Building (Last 5 Years)
                 </div>
-                <div className="mt-0.5 text-sm font-medium text-emerald-300">
+                <div className="mt-0.5 text-xs font-medium text-emerald-300 sm:text-sm">
                   {transactions5y > 0 ? transactions5y : "0"}
                 </div>
               </div>
-
-              {/* Row 3: Latest Building Transaction */}
-              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 sm:px-3 sm:py-2">
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400/90">
-                  <FileText className="size-3.5" aria-hidden />
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-1 sm:px-2.5 sm:py-1.5">
+                <div className="flex items-center gap-1 text-[9px] sm:text-[10px] uppercase tracking-wider text-amber-400/90">
+                  <FileText className="size-3 shrink-0" aria-hidden />
                   Latest Building Transaction
                 </div>
-                <div className="mt-0.5 text-sm font-medium text-amber-200">
+                <div className="mt-0.5 text-xs font-medium text-amber-200 sm:text-sm">
                   {latestBuildingAmount > 0
                     ? formatCurrency(latestBuildingAmount, currencySymbol)
                     : "No recent building transaction available"}
+                  {latest?.transaction_date && (
+                    <span className="ml-1 text-[10px] text-amber-400/70">
+                      · {formatSaleDate(latest.transaction_date)}
+                    </span>
+                  )}
                 </div>
-                {latest?.transaction_date && (
-                  <div className="mt-0.5 text-[10px] text-amber-400/70">
-                    {formatSaleDate(latest.transaction_date)}
-                  </div>
-                )}
               </div>
-
               <div className="flex shrink-0 items-center gap-2 pt-0.5">
                 {isNearbyBuilding ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-medium text-amber-300">
                     {latestBuildingAmount > 0
                       ? "Based on the closest verified transaction on this street."
                       : "Estimated from provider data"}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-400">
-                    <BadgeCheck className="size-3" aria-hidden /> Exact Building Match
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-medium uppercase tracking-wider text-emerald-400">
+                    <BadgeCheck className="size-2.5" aria-hidden /> Exact Building Match
                   </span>
                 )}
               </div>
+              {debugMode && hasOfficialProvider && (
+                <CollapsibleSection title="Debug Info">
+                  <DebugPanel
+                    address={address}
+                    parsed={parsedLocal}
+                    canonical={canonicalLocal}
+                    insightsData={insightsData}
+                    latest={latest}
+                    currencySymbol={currencySymbol}
+                  />
+                </CollapsibleSection>
+              )}
             </div>
           )}
         </div>
