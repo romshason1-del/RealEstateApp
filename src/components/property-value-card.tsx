@@ -47,6 +47,10 @@ type DebugPanelProps = {
       distance_from_requested_m?: number;
       rejection_reason?: string;
       dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
+      api_status?: number;
+      api_error?: string;
+      records_returned?: number;
+      raw_dataset_sample?: Record<string, unknown>[];
     };
     message?: string;
   } | null;
@@ -76,7 +80,14 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         <div><span className="text-zinc-500">Canonical street_key:</span> {apiCanon.street_key}</div>
         <div><span className="text-zinc-500">Canonical house_key:</span> {apiCanon.house_key}</div>
         <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
+        <div><span className="text-zinc-500">Records returned:</span> {d?.records_returned ?? "—"}</div>
         <div><span className="text-zinc-500">Candidate records:</span> {d?.records_after_filter ?? "—"}</div>
+        {d?.api_status != null && (
+          <div><span className="text-zinc-500">API status:</span> {d.api_status}</div>
+        )}
+        {d?.api_error && (
+          <div><span className="text-zinc-500">API error:</span> <span className="text-amber-300/90">{d.api_error}</span></div>
+        )}
         <div><span className="text-zinc-500">Exact matches:</span> {d?.exact_matches_count ?? "—"}</div>
         <div><span className="text-zinc-500">Nearby matches:</span> {d?.nearby_matches_count ?? "—"}</div>
         {d?.street_matches_found && d.street_matches_found.length > 0 && (
@@ -103,9 +114,17 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
           </div>
         </div>
       )}
+      {d?.raw_dataset_sample && d.raw_dataset_sample.length > 0 && (
+        <details className="text-zinc-400">
+          <summary>Raw dataset sample (first 5)</summary>
+          <pre className="mt-1 max-h-40 overflow-auto rounded bg-black/30 p-2 font-mono text-[10px]">
+            {JSON.stringify(d.raw_dataset_sample, null, 2)}
+          </pre>
+        </details>
+      )}
       {d?.dataset_sample && d.dataset_sample.length > 0 && (
         <details className="text-zinc-400">
-          <summary>Dataset sample (first 5)</summary>
+          <summary>Dataset sample (parsed)</summary>
           <div className="mt-1 space-y-0.5 font-mono text-[10px]">
             {d.dataset_sample.map((s, i) => (
               <div key={i}>

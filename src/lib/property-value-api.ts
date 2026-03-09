@@ -40,6 +40,10 @@ export type PropertyValueInsightsResponse = {
     distance_from_requested_m?: number;
     dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
     rejection_reason?: string;
+    api_status?: number;
+    api_error?: string;
+    records_returned?: number;
+    raw_dataset_sample?: Record<string, unknown>[];
   };
   message?: string;
   error?: string;

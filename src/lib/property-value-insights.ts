@@ -18,8 +18,10 @@ const DATA_GOV_IL_BASE = "https://data.gov.il/api/3/action";
 const FETCH_TIMEOUT_MS = 15000;
 const THREE_YEARS_MS = 3 * 365.25 * 24 * 60 * 60 * 1000;
 
-// Known nadlan resource (validated fallback if discovery fails)
+// Israeli Real Estate Transactions (Nadlan) - data.gov.il CKAN datastore
+// Resource ID from: https://data.gov.il/dataset/nadlan (or package_search)
 const KNOWN_NADLAN_RESOURCE_ID = "ad6680ef-5d46-4654-be8d-7301292a8e48";
+const DATA_GOV_IL_DATASTORE_URL = "https://data.gov.il/api/3/action/datastore_search";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +71,14 @@ export type PropertyValueInsightsDebug = {
   distance_from_requested_m?: number;
   dataset_sample?: Array<{ city: string; street: string; house_number: string; canonical: { city_key: string; street_key: string; house_key: string } }>;
   rejection_reason?: string;
+  /** HTTP status of last API response */
+  api_status?: number;
+  /** Error message from API if request failed */
+  api_error?: string;
+  /** Number of records returned by API (before any filtering) */
+  records_returned?: number;
+  /** First 5 raw records from dataset for structure verification */
+  raw_dataset_sample?: Record<string, unknown>[];
 };
 
 const PROXIMITY_RADIUS_M = 25;
@@ -139,42 +149,44 @@ export async function discoverRealEstateResource(): Promise<string | null> {
     "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
   };
 
+  // 1. Try known resource first (most reliable)
   try {
-    // Search for real estate / nadlan packages
-    const searchUrl = `${DATA_GOV_IL_BASE}/package_search?q=nadlan+OR+עסקאות+הנדלן+OR+real+estate+transactions`;
+    const testUrl = `${DATA_GOV_IL_DATASTORE_URL}?resource_id=${KNOWN_NADLAN_RESOURCE_ID}&limit=1`;
+    const res = await fetch(testUrl, { headers, signal: AbortSignal.timeout(8000) });
+    const body = (await res.json().catch(() => ({}))) as { success?: boolean; error?: { message?: string } };
+    if (res.ok && body?.success !== false) {
+      console.log("[property-value-insights] Using known resource_id:", KNOWN_NADLAN_RESOURCE_ID);
+      return KNOWN_NADLAN_RESOURCE_ID;
+    }
+    console.warn("[property-value-insights] Known resource failed:", res.status, body?.error?.message ?? body);
+  } catch (e) {
+    console.warn("[property-value-insights] Known resource fetch error:", e instanceof Error ? e.message : e);
+  }
+
+  // 2. Fallback: package_search for nadlan
+  try {
+    const searchUrl = `${DATA_GOV_IL_BASE}/package_search?q=nadlan`;
     const res = await fetch(searchUrl, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) return null;
-
-    const json = (await res.json()) as { result?: { results?: Array<{ resources?: Array<{ id?: string }> }> } };
+    const json = (await res.json().catch(() => ({}))) as { result?: { results?: Array<{ resources?: Array<{ id?: string }> }> } };
     const packages = json?.result?.results ?? [];
-
     for (const pkg of packages) {
-      const resources = pkg.resources ?? [];
-      for (const r of resources) {
+      for (const r of pkg.resources ?? []) {
         const id = r?.id;
         if (id && typeof id === "string") {
-          // Validate: try a minimal fetch
-          const testUrl = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${id}&limit=1`;
+          const testUrl = `${DATA_GOV_IL_DATASTORE_URL}?resource_id=${id}&limit=1`;
           const testRes = await fetch(testUrl, { headers, signal: AbortSignal.timeout(5000) });
           if (testRes.ok) {
             const testJson = (await testRes.json()) as { success?: boolean };
-            if (testJson?.success !== false) return id;
+            if (testJson?.success !== false) {
+              console.log("[property-value-insights] Using discovered resource_id:", id);
+              return id;
+            }
           }
         }
       }
     }
-
-    // Fallback: use known resource if discovery fails (validated at runtime)
-    const fallbackRes = await fetch(
-      `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${KNOWN_NADLAN_RESOURCE_ID}&limit=1`,
-      { headers, signal: AbortSignal.timeout(5000) }
-    );
-    if (fallbackRes.ok) {
-      const fallbackJson = (await fallbackRes.json()) as { success?: boolean };
-      if (fallbackJson?.success !== false) return KNOWN_NADLAN_RESOURCE_ID;
-    }
   } catch {
-    // Silent fail, return null
+    // Silent
   }
   return null;
 }
@@ -501,12 +513,22 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     };
   }
 
-  // Discover resource dynamically
   const resourceId = await discoverRealEstateResource();
   if (!resourceId) {
+    const canon = toCanonicalAddress(city, street, houseNumber);
+    console.error("[property-value-insights] Discovery failed. Tried known resource:", KNOWN_NADLAN_RESOURCE_ID);
     return {
       message: "Official government real estate data source is temporarily unavailable.",
       error: "DATA_SOURCE_UNAVAILABLE",
+      debug: {
+        raw_input_address: { city, street, house_number: houseNumber },
+        canonical_address: { city_key: canon.cityKey, street_key: canon.streetKey, house_key: canon.houseKey },
+        records_fetched: 0,
+        records_after_filter: 0,
+        exact_matches_count: 0,
+        api_error: "Resource discovery failed. Check console for details.",
+        records_returned: 0,
+      },
     };
   }
 
@@ -524,13 +546,21 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     const normalizedStreet = normalizeStreetForSearch(street);
     const hebrewStreet = toHebrewStreetForSearch(normalizedStreet);
 
-    // Search strategy: street-first (dataset often uses Hebrew). Fetch 500-1000 records before filtering.
     const sortParam = "תאריך_העסקה desc";
-    const buildUrl = (q: string) =>
-      `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(q)}&limit=${FETCH_LIMIT}&sort=${encodeURIComponent(sortParam)}`;
+    const buildUrl = (q?: string) => {
+      const params = new URLSearchParams({
+        resource_id: resourceId,
+        limit: String(FETCH_LIMIT),
+        sort: sortParam,
+      });
+      if (q) params.set("q", q);
+      return `${DATA_GOV_IL_DATASTORE_URL}?${params.toString()}`;
+    };
 
     let rawRecords: Record<string, unknown>[] = [];
     const seenIds = new Set<string>();
+    let lastStatus = 0;
+    let lastError: string | undefined;
 
     const addRecords = (records: Record<string, unknown>[]) => {
       for (const r of records) {
@@ -542,64 +572,93 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       }
     };
 
-    // 1. Primary: Hebrew street + city (dataset format)
-    const searchTerms1 = [hebrewStreet || normalizedStreet, hebrewCity || city].filter(Boolean);
-    if (searchTerms1.length > 0) {
-      const url1 = buildUrl(searchTerms1.join(" "));
-      const res1 = await fetch(url1, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (res1.ok) {
-        const json1 = (await res1.json()) as { result?: { records?: Record<string, unknown>[] } };
-        addRecords(json1?.result?.records ?? []);
+    const fetchAndLog = async (url: string, label: string) => {
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      lastStatus = res.status;
+      const body = (await res.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: { message?: string };
+        result?: { records?: Record<string, unknown>[]; total?: number };
+      };
+      const records = body?.result?.records ?? [];
+      const total = body?.result?.total;
+      if (!res.ok || body?.success === false) {
+        lastError = body?.error?.message ?? (res.ok ? "success=false" : `HTTP ${res.status}`);
+      }
+      console.log(
+        `[property-value-insights] API ${label}: status=${res.status} records=${records.length} total=${total ?? "—"} error=${lastError ?? "—"}`
+      );
+      return { res, body, records };
+    };
+
+    // 0. Probe: fetch without q to confirm connection (limit=750)
+    const probeUrl = buildUrl();
+    const { body: probeBody, records: probeRecords } = await fetchAndLog(probeUrl, "probe (no filter)");
+    addRecords(probeRecords);
+    if (probeRecords.length > 0) {
+      console.log("[property-value-insights] Raw dataset sample (first 5):", JSON.stringify(probeRecords.slice(0, 5), null, 2));
+    }
+
+    // 1. Primary: Hebrew street + city (if probe returned few, try search)
+    if (rawRecords.length < 100) {
+      const searchTerms1 = [hebrewStreet || normalizedStreet, hebrewCity || city].filter(Boolean);
+      if (searchTerms1.length > 0) {
+        const { records: r1 } = await fetchAndLog(buildUrl(searchTerms1.join(" ")), "search street+city");
+        addRecords(r1);
       }
     }
 
-    // 2. Fallback: street-only (broader - catches records where city format differs)
+    // 2. Fallback: street-only
     if (rawRecords.length < 100) {
       const streetQuery = hebrewStreet || normalizedStreet;
       if (streetQuery) {
-        const url2 = buildUrl(streetQuery);
-        const res2 = await fetch(url2, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-        if (res2.ok) {
-          const json2 = (await res2.json()) as { result?: { records?: Record<string, unknown>[] } };
-          addRecords(json2?.result?.records ?? []);
-        }
+        const { records: r2 } = await fetchAndLog(buildUrl(streetQuery), "search street only");
+        addRecords(r2);
       }
     }
 
-    // 3. Fallback: English street + city (some records may use English)
+    // 3. Fallback: English street + city
     if (rawRecords.length < 100 && hebrewStreet) {
       const searchTerms3 = [normalizedStreet, hebrewCity || city].filter(Boolean);
       if (searchTerms3.length > 0) {
-        const url3 = buildUrl(searchTerms3.join(" "));
-        const res3 = await fetch(url3, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-        if (res3.ok) {
-          const json3 = (await res3.json()) as { result?: { records?: Record<string, unknown>[] } };
-          addRecords(json3?.result?.records ?? []);
-        }
+        const { records: r3 } = await fetchAndLog(buildUrl(searchTerms3.join(" ")), "search English street+city");
+        addRecords(r3);
       }
     }
+
+    const debugForFailure = {
+      api_status: lastStatus || undefined,
+      api_error: lastError,
+      records_returned: rawRecords.length,
+      records_fetched: rawRecords.length,
+      records_after_filter: 0,
+      exact_matches_count: 0,
+      raw_input_address: { city, street, house_number: houseNumber },
+      canonical_address: {
+        city_key: inputCanon.cityKey,
+        street_key: inputCanon.streetKey,
+        house_key: inputCanon.houseKey,
+      },
+      raw_dataset_sample: rawRecords.slice(0, 5),
+    };
 
     if (rawRecords.length === 0) {
       return {
         message: "Official government API returned an error. Please try again later.",
         error: "API_NO_RECORDS",
+        debug: debugForFailure,
       };
     }
 
     const withGushParcel = rawRecords.filter((r) => hasGushAndParcel(r));
     const records = withGushParcel.length > 0 ? withGushParcel : rawRecords;
     if (records.length === 0) {
-      const canon = toCanonicalAddress(city, street, houseNumber);
-      console.log("[property-value-insights] REJECTED: no records fetched for", { city, street, houseNumber });
+      console.log("[property-value-insights] REJECTED: no valid records after filter", { city, street, houseNumber });
       return {
         message: "no transaction found",
         debug: {
-          raw_input_address: { city, street, house_number: (input.houseNumber ?? "").trim() },
-          canonical_address: { city_key: canon.cityKey, street_key: canon.streetKey, house_key: canon.houseKey },
-          records_fetched: rawRecords.length,
-          records_after_filter: 0,
-          exact_matches_count: 0,
-          rejection_reason: "No official transactions returned from government API for this address.",
+          ...debugForFailure,
+          rejection_reason: "Records returned but none passed GUSH/PARCEL filter. Check raw_dataset_sample for structure.",
         },
       };
     }
@@ -677,6 +736,10 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       exact_matches_count: 0,
       street_matches_found: streetNamesFound,
       building_numbers_found: buildingNumbersFound,
+      api_status: lastStatus || undefined,
+      api_error: lastError,
+      records_returned: rawRecords.length,
+      raw_dataset_sample: rawRecords.slice(0, 5),
     };
 
     if (!houseNorm) {
