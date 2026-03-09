@@ -93,6 +93,33 @@ const CITY_ALIASES: Record<string, string> = {
   "אילת": "eilat",
 };
 
+// Street canonicalization: Hebrew/English variants -> same key for matching
+const STREET_ALIASES: Record<string, string> = {
+  rothschild: "rothschild", רוטשילד: "rothschild",
+  dizengoff: "dizengoff", דיזנגוף: "dizengoff",
+  allenby: "allenby", אלנבי: "allenby",
+  "ben yehuda": "ben_yehuda", "בן יהודה": "ben_yehuda",
+  "ibn gabirol": "ibn_gabirol", "אבן גבירול": "ibn_gabirol",
+  weizmann: "weizmann", ויצמן: "weizmann",
+  hashalom: "hashalom", השלום: "hashalom",
+  "ahad ha'am": "ahad_haam", "אחד העם": "ahad_haam",
+  "ben gurion": "ben_gurion", "בן גוריון": "ben_gurion",
+  herzl: "herzl", הרצל: "herzl",
+  jabotinsky: "jabotinsky", "ז'בוטינסקי": "jabotinsky",
+  bograshov: "bograshov", בוגרשוב: "bograshov",
+  lilienblum: "lilienblum", ליליינבלום: "lilienblum",
+  "nahalat binyamin": "nahalat_binyamin", "נחלת בנימין": "nahalat_binyamin",
+  sheinkin: "sheinkin", שנקין: "sheinkin",
+  yafo: "yafo", יפו: "yafo", jaffa: "yafo",
+  "king george": "king_george", "המלך ג'ורג'": "king_george",
+  balfour: "balfour", בלפור: "balfour",
+  frishman: "frishman", פרישמן: "frishman",
+  gordon: "gordon", גורדון: "gordon",
+  arlozorov: "arlozorov", ארלוזורוב: "arlozorov",
+  agron: "agron", אגרון: "agron",
+  "emek refaim": "emek_refaim", "עמק רפאים": "emek_refaim",
+};
+
 // Hebrew to ASCII transliteration (ISO 259 simplified)
 const HEBREW_TO_ASCII: Record<string, string> = {
   א: "a", ב: "b", ג: "g", ד: "d", ה: "h", ו: "v", ז: "z", ח: "ch", ט: "t",
@@ -153,15 +180,27 @@ export function hasHebrew(text: string): boolean {
   return /[\u0590-\u05FF]/.test(text || "");
 }
 
-/** Normalize street name to canonical form for matching. Handles Hebrew and English. */
-export function toCanonicalStreetKey(street: string): string {
+/** Remove street prefixes/suffixes for search and comparison: St, Street, רחוב, רח' */
+export function normalizeStreetForSearch(street: string): string {
   if (!street || typeof street !== "string") return "";
-  let s = street
+  return String(street)
     .replace(/^\s*רחוב\s+/i, "")
+    .replace(/^\s*רח['׳]\s*/i, "")
     .replace(/\b(St|Street|Str|Ave|Avenue|Rd|Road)\b\.?/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Normalize street name to canonical form for matching. Handles Hebrew and English. */
+export function toCanonicalStreetKey(street: string): string {
+  if (!street || typeof street !== "string") return "";
+  let s = normalizeStreetForSearch(street);
   if (!s) return "";
+
+  // Strip trailing numbers for alias lookup (e.g. "רוטשילד 10" -> "רוטשילד")
+  const baseForAlias = s.replace(/\s+\d+.*$/, "").trim() || s;
+  const aliasKey = STREET_ALIASES[baseForAlias] ?? STREET_ALIASES[baseForAlias.toLowerCase()];
+  if (aliasKey) return aliasKey;
 
   if (hasHebrew(s)) {
     s = hebrewToAscii(s);
@@ -200,6 +239,45 @@ export function toCanonicalAddress(city: string, street: string, houseNumber: st
     streetKey: toCanonicalStreetKey(street),
     houseKey: toCanonicalHouseKey(houseNumber),
   };
+}
+
+/** Get Hebrew street name for API search (dataset often uses Hebrew). Common Israeli streets. */
+export function toHebrewStreetForSearch(street: string): string {
+  const key = street.trim().toLowerCase().replace(/\s+/g, " ");
+  const map: Record<string, string> = {
+    rothschild: "רוטשילד",
+    "rothschild st": "רוטשילד",
+    dizengoff: "דיזנגוף",
+    "dizengoff st": "דיזנגוף",
+    allenby: "אלנבי",
+    "ben yehuda": "בן יהודה",
+    "ibn gabirol": "אבן גבירול",
+    weizmann: "ויצמן",
+    hashalom: "השלום",
+    "ahad ha'am": "אחד העם",
+    "ahad haam": "אחד העם",
+    "ben gurion": "בן גוריון",
+    "herzl": "הרצל",
+    "jabotinsky": "ז'בוטינסקי",
+    "jabotinsky st": "ז'בוטינסקי",
+    "bograshov": "בוגרשוב",
+    "florentin": "פלורנטין",
+    "lilienblum": "ליליינבלום",
+    "nahalat binyamin": "נחלת בנימין",
+    "sheinkin": "שנקין",
+    "yafo": "יפו",
+    "king george": "המלך ג'ורג'",
+    "balfour": "בלפור",
+    "frishman": "פרישמן",
+    "gordon": "גורדון",
+    "arlozorov": "ארלוזורוב",
+    "haifa": "חיפה",
+    "jerusalem": "ירושלים",
+    "agron": "אגרון",
+    "emek refaim": "עמק רפאים",
+    "jaffa": "יפו",
+  };
+  return map[key] ?? "";
 }
 
 /** Get Hebrew city name for API search (dataset often uses Hebrew). */
