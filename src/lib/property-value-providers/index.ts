@@ -7,11 +7,13 @@ import type { PropertyDataProvider } from "./provider-interface";
 import { IsraelOfficialProvider } from "./israel-official-provider";
 import { MockProvider } from "./mock-provider";
 import { UnitedStatesRentcastProvider } from "./us-rentcast-provider";
-import { isIsraelMockEnabled, isUSRentcastConfigured, propertyProviderConfig } from "./config";
+import { UnitedStatesMockProvider } from "./us-mock-provider";
+import { isIsraelMockEnabled, isUSMockEnabled, isUSRentcastConfigured, propertyProviderConfig } from "./config";
 
 const israelOfficial = new IsraelOfficialProvider();
 const mockProvider = new MockProvider();
 const usRentcast = new UnitedStatesRentcastProvider();
+const usMock = new UnitedStatesMockProvider();
 
 /**
  * Get the property data provider for the given country code.
@@ -28,14 +30,19 @@ export function getPropertyDataProvider(countryCode: string): PropertyDataProvid
     return israelOfficial;
   }
 
-  if (code === "US" && isUSRentcastConfigured()) {
-    return usRentcast;
+  if (code === "US") {
+    if (isUSMockEnabled()) {
+      return usMock;
+    }
+    if (isUSRentcastConfigured()) {
+      return usRentcast;
+    }
   }
 
   return null;
 }
 
-export { IsraelOfficialProvider, MockProvider, UnitedStatesRentcastProvider, isUSRentcastConfigured, propertyProviderConfig };
+export { IsraelOfficialProvider, MockProvider, UnitedStatesRentcastProvider, UnitedStatesMockProvider, isUSMockEnabled, isUSRentcastConfigured, propertyProviderConfig };
 export type { PropertyDataProvider } from "./provider-interface";
 export type {
   PropertyValueInput,
