@@ -1,0 +1,14 @@
+{
+  "name": "streetiq-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts",
+    "dev": "tsx server.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "tsx": "^4.19.0"
+  }
+}
