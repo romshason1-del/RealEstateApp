@@ -23,19 +23,34 @@ export function HeartButton({
   className = "",
   iconSize = "size-3.5",
 }: HeartButtonProps) {
-  const handleClick = React.useCallback(() => {
-    onToggle();
-  }, [onToggle]);
+  const [optimisticSaved, setOptimisticSaved] = React.useState(isSaved);
+
+  React.useEffect(() => {
+    setOptimisticSaved(isSaved);
+  }, [isSaved]);
+
+  const displaySaved = optimisticSaved;
+
+  const handleClick = React.useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !displaySaved;
+      setOptimisticSaved(next);
+      onToggle();
+    },
+    [displaySaved, onToggle]
+  );
 
   return (
     <button
       type="button"
       onClick={handleClick}
       className={`heart-save-btn rounded-full border border-amber-400/30 p-1 focus:outline-none focus:ring-0 focus:shadow-none hover:border-amber-400/50 ${className}`}
-      aria-label={ariaLabel ?? (isSaved ? "Remove from favorites" : "Add to favorites")}
+      aria-label={ariaLabel ?? (displaySaved ? "Remove from favorites" : "Add to favorites")}
     >
       <Heart
-        className={`heart-save-icon ${iconSize} ${isSaved ? "heart-saved" : "heart-unsaved"}`}
+        className={`heart-save-icon heart-save-icon-instant ${iconSize} ${displaySaved ? "heart-saved" : "heart-unsaved"}`}
       />
     </button>
   );
