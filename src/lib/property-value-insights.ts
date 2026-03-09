@@ -8,6 +8,8 @@
 import {
   toCanonicalAddress,
   toHebrewCityForSearch,
+  toHebrewStreetForSearch,
+  normalizeStreetForSearch,
   cityKeyToEnglish,
   hasHebrew,
 } from "./address-canonical";
@@ -514,48 +516,76 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
   };
 
+  const FETCH_LIMIT = 750;
+
   try {
     const inputCanon = toCanonicalAddress(city, street, houseNumber);
     const hebrewCity = toHebrewCityForSearch(inputCanon.cityKey);
+    const normalizedStreet = normalizeStreetForSearch(street);
+    const hebrewStreet = toHebrewStreetForSearch(normalizedStreet);
 
-    // Search: use Hebrew city when available (dataset format); include street for both languages
-    const searchCity = hebrewCity || city;
-    const searchQuery = [street, searchCity].filter(Boolean).join(" ");
+    // Search strategy: street-first (dataset often uses Hebrew). Fetch 500-1000 records before filtering.
     const sortParam = "תאריך_העסקה desc";
-    let url = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(searchQuery)}&limit=200&sort=${encodeURIComponent(sortParam)}`;
+    const buildUrl = (q: string) =>
+      `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(q)}&limit=${FETCH_LIMIT}&sort=${encodeURIComponent(sortParam)}`;
 
-    let res = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    let json: { success?: boolean; result?: { records?: Record<string, unknown>[] } } = {};
+    let rawRecords: Record<string, unknown>[] = [];
+    const seenIds = new Set<string>();
 
-    if (res.ok) {
-      json = (await res.json()) as typeof json;
-    }
-    const firstRecords = (json?.result?.records ?? []) as Record<string, unknown>[];
+    const addRecords = (records: Record<string, unknown>[]) => {
+      for (const r of records) {
+        const id = String(r._id ?? JSON.stringify(r));
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          rawRecords.push(r);
+        }
+      }
+    };
 
-    // If no records and we used Hebrew city, try with original city (some records may use English)
-    if (firstRecords.length === 0 && hebrewCity) {
-      const fallbackQuery = [street, city].filter(Boolean).join(" ");
-      const fallbackUrl = `${DATA_GOV_IL_BASE}/datastore_search?resource_id=${resourceId}&q=${encodeURIComponent(fallbackQuery)}&limit=200&sort=${encodeURIComponent(sortParam)}`;
-      const fallbackRes = await fetch(fallbackUrl, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (fallbackRes.ok) {
-        json = (await fallbackRes.json()) as typeof json;
+    // 1. Primary: Hebrew street + city (dataset format)
+    const searchTerms1 = [hebrewStreet || normalizedStreet, hebrewCity || city].filter(Boolean);
+    if (searchTerms1.length > 0) {
+      const url1 = buildUrl(searchTerms1.join(" "));
+      const res1 = await fetch(url1, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (res1.ok) {
+        const json1 = (await res1.json()) as { result?: { records?: Record<string, unknown>[] } };
+        addRecords(json1?.result?.records ?? []);
       }
     }
 
-    if (!res.ok && (!json?.result?.records || (json.result.records as unknown[]).length === 0)) {
+    // 2. Fallback: street-only (broader - catches records where city format differs)
+    if (rawRecords.length < 100) {
+      const streetQuery = hebrewStreet || normalizedStreet;
+      if (streetQuery) {
+        const url2 = buildUrl(streetQuery);
+        const res2 = await fetch(url2, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+        if (res2.ok) {
+          const json2 = (await res2.json()) as { result?: { records?: Record<string, unknown>[] } };
+          addRecords(json2?.result?.records ?? []);
+        }
+      }
+    }
+
+    // 3. Fallback: English street + city (some records may use English)
+    if (rawRecords.length < 100 && hebrewStreet) {
+      const searchTerms3 = [normalizedStreet, hebrewCity || city].filter(Boolean);
+      if (searchTerms3.length > 0) {
+        const url3 = buildUrl(searchTerms3.join(" "));
+        const res3 = await fetch(url3, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+        if (res3.ok) {
+          const json3 = (await res3.json()) as { result?: { records?: Record<string, unknown>[] } };
+          addRecords(json3?.result?.records ?? []);
+        }
+      }
+    }
+
+    if (rawRecords.length === 0) {
       return {
         message: "Official government API returned an error. Please try again later.",
-        error: `API_${res.status}`,
-      };
-    }
-    if (json?.success === false) {
-      return {
-        message: "Official government data request failed.",
-        error: "API_ERROR",
+        error: "API_NO_RECORDS",
       };
     }
 
-    const rawRecords = (json?.result?.records ?? []) as Record<string, unknown>[];
     const withGushParcel = rawRecords.filter((r) => hasGushAndParcel(r));
     const records = withGushParcel.length > 0 ? withGushParcel : rawRecords;
     if (records.length === 0) {
@@ -621,12 +651,20 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     // Sort by date descending
     parsed.sort((a, b) => parseTransactionDate(b.saleDate) - parseTransactionDate(a.saleDate));
 
+    // Limit to relevant city when we have it (canonical matching after fetch)
+    const inputCanonForMatch = toCanonicalAddress(city, street, houseNumber);
+    const parsedInCity = inputCanonForMatch.cityKey
+      ? parsed.filter((t) => toCanonicalAddress(t.city, t.street, t.houseNumber).cityKey === inputCanonForMatch.cityKey)
+      : parsed;
+
+    // Debug: street names and building numbers found in dataset
+    const streetNamesFound = [...new Set(parsedInCity.map((t) => t.street))].filter(Boolean).slice(0, 15);
+    const buildingNumbersFound = [...new Set(parsedInCity.map((t) => t.houseNumber))].filter(Boolean).slice(0, 25);
+    console.log("[property-value-insights] Records fetched:", rawRecords.length, "| In city:", parsedInCity.length, "| Streets:", streetNamesFound.length, "| Buildings:", buildingNumbersFound.length);
+
     // Strict: match only exact building - never use street-level or nearby data
     const houseNorm = normalizeHouseNumber(houseNumber);
-    const normalizedCity = normalizeStreetOrCity(city);
-    const normalizedStreet = normalizeStreetOrCity(street);
 
-    const inputCanonForMatch = toCanonicalAddress(city, street, houseNumber);
     const debugBase: PropertyValueInsightsDebug = {
       raw_input_address: { city, street, house_number: houseNumber },
       canonical_address: {
@@ -635,8 +673,10 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
         house_key: inputCanonForMatch.houseKey,
       },
       records_fetched: rawRecords.length,
-      records_after_filter: parsed.length,
+      records_after_filter: parsedInCity.length,
       exact_matches_count: 0,
+      street_matches_found: streetNamesFound,
+      building_numbers_found: buildingNumbersFound,
     };
 
     if (!houseNorm) {
@@ -647,7 +687,7 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       };
     }
 
-    const exactMatches = parsed.filter((t) =>
+    const exactMatches = parsedInCity.filter((t) =>
       recordMatchesExactBuilding(t.record, mapping, city, street, houseNumber)
     );
     debugBase.exact_matches_count = exactMatches.length;
@@ -656,18 +696,10 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
     let matchQuality: MatchQuality = "exact_building";
 
     if (exactMatches.length === 0) {
-      const nearbyMatches = parsed.filter((t) =>
+      const nearbyMatches = parsedInCity.filter((t) =>
         recordMatchesNearbyBuilding(t.record, mapping, city, street, houseNumber)
       );
       debugBase.nearby_matches_count = nearbyMatches.length;
-      debugBase.street_matches_found = [...new Set(parsed.filter((t) => {
-        const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
-        return c.streetKey === inputCanonForMatch.streetKey;
-      }).map((t) => t.street))].slice(0, 10);
-      debugBase.building_numbers_found = [...new Set(parsed.filter((t) => {
-        const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
-        return c.streetKey === inputCanonForMatch.streetKey;
-      }).map((t) => t.houseNumber))].slice(0, 20);
 
       console.log("[property-value-insights] No exact match. Street matches:", debugBase.street_matches_found?.length ?? 0, "Building numbers:", debugBase.building_numbers_found ?? []);
 
@@ -678,7 +710,7 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       } else if (input.latitude != null && input.longitude != null && Number.isFinite(input.latitude) && Number.isFinite(input.longitude)) {
         const inputLat = input.latitude;
         const inputLng = input.longitude;
-        const withCoords = parsed.filter((t) => {
+        const withCoords = parsedInCity.filter((t) => {
           const coords = extractCoordinatesFromRecord(t.record);
           if (!coords) return false;
           const dist = haversineDistanceMeters(inputLat, inputLng, coords.lat, coords.lng);
@@ -706,7 +738,7 @@ export async function getPropertyValueInsights(input: PropertyValueInput): Promi
       }
 
       if (matches.length === 0) {
-        debugBase.dataset_sample = parsed.slice(0, 5).map((t) => {
+        debugBase.dataset_sample = parsedInCity.slice(0, 5).map((t) => {
           const c = toCanonicalAddress(t.city, t.street, t.houseNumber);
           return {
             city: t.city,
