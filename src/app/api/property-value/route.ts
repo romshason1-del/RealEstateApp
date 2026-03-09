@@ -8,14 +8,25 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
-import { parseAddressFromFullString } from "@/lib/address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
 
 const CACHE = new Map<string, { data: unknown; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ADDRESS_LENGTH = 200;
 
-function buildCacheKey(city: string, street: string, houseNumber: string, lat?: number, lng?: number): string {
-  const base = [city.trim().toLowerCase(), street.trim().toLowerCase(), houseNumber.trim()].join("|");
+function buildCacheKey(
+  city: string,
+  street: string,
+  houseNumber: string,
+  lat?: number,
+  lng?: number,
+  state?: string,
+  zip?: string
+): string {
+  const parts = [city.trim().toLowerCase(), street.trim().toLowerCase(), houseNumber.trim()];
+  if (state) parts.push(state.trim().toUpperCase());
+  if (zip) parts.push(zip.trim());
+  const base = parts.join("|");
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
     return `${base}|${lat}|${lng}`;
   }
@@ -40,6 +51,8 @@ export async function GET(request: NextRequest) {
   let city = searchParams.get("city") ?? "";
   let street = searchParams.get("street") ?? "";
   let houseNumber = searchParams.get("houseNumber") ?? searchParams.get("house_number") ?? "";
+  let state = searchParams.get("state") ?? "";
+  let zip = searchParams.get("zip") ?? searchParams.get("zipCode") ?? "";
   const addressParam = searchParams.get("address") ?? "";
   const countryCode = searchParams.get("countryCode") ?? searchParams.get("country") ?? "IL";
   const latParam = searchParams.get("latitude");
@@ -49,10 +62,20 @@ export async function GET(request: NextRequest) {
 
   if (addressParam) {
     if (!city || !street) {
-      const parsed = parseAddressFromFullString(addressParam);
-      if (parsed.city) city = city || parsed.city;
-      if (parsed.street) street = street || parsed.street;
-      if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+      const code = (countryCode ?? "").toUpperCase();
+      if (code === "US") {
+        const parsed = parseUSAddressFromFullString(addressParam);
+        if (parsed.city) city = city || parsed.city;
+        if (parsed.street) street = street || parsed.street;
+        if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+        if (parsed.state) state = state || parsed.state;
+        if (parsed.zip) zip = zip || parsed.zip;
+      } else {
+        const parsed = parseAddressFromFullString(addressParam);
+        if (parsed.city) city = city || parsed.city;
+        if (parsed.street) street = street || parsed.street;
+        if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+      }
     }
   }
 
@@ -64,7 +87,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude);
+  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip);
   const cached = CACHE.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return NextResponse.json(cached.data);
@@ -76,6 +99,8 @@ export async function GET(request: NextRequest) {
         city: city.trim(),
         street: street.trim(),
         houseNumber: houseNumber.trim(),
+        state: state.trim() || undefined,
+        zip: zip.trim() || undefined,
         latitude: Number.isFinite(latitude) ? latitude : undefined,
         longitude: Number.isFinite(longitude) ? longitude : undefined,
         fullAddress: addressParam || undefined,
