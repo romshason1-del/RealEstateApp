@@ -44,3 +44,50 @@ export function parseAddressFromFullString(address: string): { city: string; str
 
   return { city, street: normalizeStreetOrCity(street), houseNumber };
 }
+
+/**
+ * US address format: "100 Ocean Dr, Miami Beach, FL 33139"
+ * Extracts houseNumber, street, city, state, zip.
+ * ZIP: 5 digits or 5+4. State: 2 letters before ZIP.
+ * Does not treat ZIP as house number.
+ */
+export function parseUSAddressFromFullString(
+  address: string
+): { houseNumber: string; street: string; city: string; state: string; zip: string } {
+  const trimmed = address.trim().replace(/\s+/g, " ");
+  if (!trimmed) return { houseNumber: "", street: "", city: "", state: "", zip: "" };
+
+  const parts = trimmed.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) {
+    const first = parts[0] ?? "";
+    const hnMatch = first.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
+    return {
+      houseNumber: hnMatch ? hnMatch[1] : "",
+      street: hnMatch ? hnMatch[2].trim() : first,
+      city: "",
+      state: "",
+      zip: "",
+    };
+  }
+
+  const lastPart = parts[parts.length - 1] ?? "";
+  const stateZipMatch = lastPart.match(/^([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+  let city = "";
+  let state = "";
+  let zip = "";
+
+  if (stateZipMatch) {
+    state = stateZipMatch[1].toUpperCase();
+    zip = stateZipMatch[2];
+    city = parts.length >= 2 ? (parts[parts.length - 2] ?? "").trim() : "";
+  } else {
+    city = lastPart;
+  }
+
+  const streetPart = parts[0] ?? "";
+  const hnMatch = streetPart.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
+  const houseNumber = hnMatch ? hnMatch[1] : "";
+  const street = hnMatch ? hnMatch[2].trim() : streetPart;
+
+  return { houseNumber, street, city, state, zip };
+}

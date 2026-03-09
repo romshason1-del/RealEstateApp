@@ -9,6 +9,10 @@ export type PropertyValueInput = {
   street?: string;
   houseNumber?: string;
   apartmentNumber?: string;
+  /** US: 2-letter state code (e.g. FL) */
+  state?: string;
+  /** US: ZIP code (e.g. 33139) */
+  zip?: string;
   latitude?: number;
   longitude?: number;
   resolvedAddress?: { city: string; street: string; houseNumber?: string; apartmentNumber?: string };

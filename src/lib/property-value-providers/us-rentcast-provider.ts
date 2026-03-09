@@ -40,16 +40,27 @@ function isConfigured(): boolean {
 }
 
 function buildAddressUrl(input: PropertyValueInput): string | null {
+  const street = (input.street ?? "").trim();
+  const city = (input.city ?? "").trim();
+  const houseNumber = (input.houseNumber ?? "").trim();
+  const state = (input.state ?? "").trim();
+  const zip = (input.zip ?? "").trim();
+
+  if (!street || !city) return null;
+
+  const streetPart = [houseNumber, street].filter(Boolean).join(" ");
+  const addr =
+    state && zip ? `${streetPart}, ${city}, ${state} ${zip}` : streetPart ? `${streetPart}, ${city}` : null;
+  if (addr) {
+    return `${RENTCAST_BASE_URL}/properties?address=${encodeURIComponent(addr)}`;
+  }
+
   const fullAddr = (input.fullAddress ?? "").trim();
   if (fullAddr) {
     return `${RENTCAST_BASE_URL}/properties?address=${encodeURIComponent(fullAddr)}`;
   }
-  const street = (input.street ?? "").trim();
-  const city = (input.city ?? "").trim();
-  const houseNumber = (input.houseNumber ?? "").trim();
-  if (!street || !city) return null;
-  const addr = [houseNumber, street].filter(Boolean).join(" ");
-  return `${RENTCAST_BASE_URL}/properties?address=${encodeURIComponent(`${addr}, ${city}`)}`;
+
+  return null;
 }
 
 function buildCoordinatesUrl(input: PropertyValueInput): string | null {
