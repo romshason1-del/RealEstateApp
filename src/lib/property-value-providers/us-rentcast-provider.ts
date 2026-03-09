@@ -214,7 +214,7 @@ async function fetchWithTimeout(url: string): Promise<Response> {
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${RENTCAST_API_KEY}`,
+        "X-Api-Key": RENTCAST_API_KEY,
       },
       signal: controller.signal,
     });
