@@ -147,3 +147,16 @@ export async function saveToFile(): Promise<boolean> {
 }
 
 export const CACHE_TTL_DAYS = 21;
+
+/** Get sample cache keys for logging (1 ZIP, 1 city). */
+export function getSampleCacheKeys(): { zip?: string; city?: string } {
+  const entries = Array.from(memory.entries());
+  const zip = entries.find(([k]) => k.startsWith("zip:"))?.[0]?.replace("zip:", "");
+  const city = entries.find(([k]) => k.startsWith("city:"))?.[0]?.replace("city:", "");
+  return { zip, city };
+}
+
+/** Get total cache entry count. */
+export function getCacheSize(): number {
+  return memory.size;
+}
