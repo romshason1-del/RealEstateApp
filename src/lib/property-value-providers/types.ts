@@ -132,6 +132,12 @@ export type PropertyValueInsightsSuccess = {
     has_building_match: boolean;
     /** Area average price (postcode or fallback level). Null if no area data. */
     average_area_price: number | null;
+    /** Area median price (Land Registry only; HPI reports average). Null when from HPI. */
+    median_area_price?: number | null;
+    /** Price trend (YoY change). From HPI or derived from transactions. */
+    price_trend?: { change_1y_percent: number; ref_month?: string } | null;
+    /** Data source for area metrics: "land_registry" | "HPI" */
+    area_data_source?: "land_registry" | "HPI";
     /** Number of transactions used for area average (last 5 years). */
     area_transaction_count: number;
     /** Fallback level when postcode returned 0: street | locality | outward_postcode | postcode_area | postcode | none */
