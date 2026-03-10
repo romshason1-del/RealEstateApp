@@ -376,6 +376,14 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
+  const dataSources = insightsData && "data_sources" in insightsData ? (insightsData as { data_sources?: ("RentCast" | "Zillow" | "Redfin")[] }).data_sources : undefined;
+  const usMatchConfidence = insightsData && "us_match_confidence" in insightsData ? (insightsData as { us_match_confidence?: "high" | "medium" | "low" }).us_match_confidence : undefined;
+  const estimatedAreaPrice = insightsData && "estimated_area_price" in insightsData ? (insightsData as { estimated_area_price?: number | null }).estimated_area_price : undefined;
+  const medianSalePrice = insightsData && "median_sale_price" in insightsData ? (insightsData as { median_sale_price?: number | null }).median_sale_price : undefined;
+  const medianPricePerSqft = insightsData && "median_price_per_sqft" in insightsData ? (insightsData as { median_price_per_sqft?: number | null }).median_price_per_sqft : undefined;
+  const usMarketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { change_1y_percent: number } }).market_trend : undefined;
+  const inventorySignal = insightsData && "inventory_signal" in insightsData ? (insightsData as { inventory_signal?: number | null }).inventory_signal : undefined;
+  const daysOnMarket = insightsData && "days_on_market" in insightsData ? (insightsData as { days_on_market?: number | null }).days_on_market : undefined;
   const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; median_area_price?: number | null; price_trend?: { change_1y_percent: number; ref_month?: string } | null; area_data_source?: "land_registry" | "HPI"; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area"; match_confidence?: "high" | "medium" | "low" } }).uk_land_registry : undefined;
   const ukLandRegistryFallback =
     isUK && insightsData != null && !ukLandRegistryRaw
@@ -535,6 +543,69 @@ export function PropertyValueCard({
             </div>
           ) : isUS ? (
             <div className="space-y-1.5">
+              {(dataSources != null && dataSources.length > 0) || usMatchConfidence ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {dataSources != null && dataSources.length > 0 && (
+                    <div className="flex items-center gap-1">
+                      {dataSources.map((s) => (
+                        <span
+                          key={s}
+                          className="inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium bg-zinc-500/20 text-zinc-400"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {usMatchConfidence && (
+                    <span
+                      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider ${
+                        usMatchConfidence === "high"
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : usMatchConfidence === "medium"
+                            ? "bg-amber-500/20 text-amber-400"
+                            : "bg-zinc-500/20 text-zinc-400"
+                      }`}
+                      title={
+                        usMatchConfidence === "high"
+                          ? "RentCast property-level + market data"
+                          : usMatchConfidence === "medium"
+                            ? "Zillow + Redfin agreement"
+                            : "Single-source regional"
+                      }
+                    >
+                      {usMatchConfidence} confidence
+                    </span>
+                  )}
+                </div>
+              ) : null}
+              {!avmValue && ((estimatedAreaPrice ?? medianSalePrice) != null || usMarketTrend != null) ? (
+                <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                  <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">US Market Data</div>
+                  <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                    {(estimatedAreaPrice ?? medianSalePrice) != null && (estimatedAreaPrice ?? medianSalePrice)! > 0
+                      ? formatCurrency((estimatedAreaPrice ?? medianSalePrice)!, currencySymbol)
+                      : "Area-level market data"}
+                  </div>
+                  {usMarketTrend != null && (
+                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                      {usMarketTrend.change_1y_percent >= 0 ? "+" : ""}{usMarketTrend.change_1y_percent}% YoY
+                    </div>
+                  )}
+                  {medianPricePerSqft != null && medianPricePerSqft > 0 && (
+                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                      {formatCurrency(medianPricePerSqft, currencySymbol)}/sqft median
+                    </div>
+                  )}
+                  {(inventorySignal != null || daysOnMarket != null) && (
+                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                      {inventorySignal != null && inventorySignal >= 0 && `${inventorySignal} for sale`}
+                      {inventorySignal != null && daysOnMarket != null && " · "}
+                      {daysOnMarket != null && daysOnMarket > 0 && `${daysOnMarket} days on market`}
+                    </div>
+                  )}
+                </div>
+              ) : null}
               {/* Default visible summary */}
               <div className="space-y-1">
                 {avmValue != null && avmValue > 0 && (

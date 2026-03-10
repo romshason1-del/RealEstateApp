@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# US market data cache (Zillow/Redfin)
+.us-market-cache.json
+
 # vercel
 .vercel
 

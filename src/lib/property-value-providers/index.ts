@@ -8,6 +8,7 @@ import { IsraelOfficialProvider } from "./israel-official-provider";
 import { MockProvider } from "./mock-provider";
 import { UnitedStatesRentcastProvider } from "./us-rentcast-provider";
 import { UnitedStatesMockProvider } from "./us-mock-provider";
+import { USOrchestratorProvider } from "./us-orchestrator";
 import { UKLandRegistryProvider } from "./uk-land-registry-provider";
 import { isIsraelMockEnabled, isUSMockEnabled, isUSRentcastConfigured, propertyProviderConfig } from "./config";
 
@@ -16,6 +17,7 @@ const ukLandRegistry = new UKLandRegistryProvider();
 const mockProvider = new MockProvider();
 const usRentcast = new UnitedStatesRentcastProvider();
 const usMock = new UnitedStatesMockProvider();
+const usOrchestrator = new USOrchestratorProvider();
 
 /**
  * Get the property data provider for the given country code.
@@ -33,12 +35,7 @@ export function getPropertyDataProvider(countryCode: string): PropertyDataProvid
   }
 
   if (code === "US") {
-    if (isUSMockEnabled()) {
-      return usMock;
-    }
-    if (isUSRentcastConfigured()) {
-      return usRentcast;
-    }
+    return usOrchestrator;
   }
 
   if (code === "UK" || code === "GB") {
