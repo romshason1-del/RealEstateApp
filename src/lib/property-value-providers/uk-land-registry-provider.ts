@@ -17,6 +17,56 @@ import type {
 const SPARQL_ENDPOINT = "http://landregistry.data.gov.uk/landregistry/query";
 const FIVE_YEARS_MS = 5 * 365.25 * 24 * 60 * 60 * 1000;
 
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const GOOGLE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json";
+
+/** UK postcode pattern (outward + inward, e.g. SW1A 2AA, W11 3QY) */
+const UK_POSTCODE_REGEX = /[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}/i;
+
+/**
+ * Resolve postcode from address using geocoding (Nominatim or Google).
+ * Returns normalized UK postcode or null if not found.
+ */
+async function resolvePostcodeFromAddress(address: string): Promise<string | null> {
+  const q = address.trim();
+  if (!q || q.length < 5) return null;
+
+  // Try Google first if API key available
+  const googleKey = typeof process !== "undefined" ? process.env?.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY : undefined;
+  if (googleKey) {
+    try {
+      const url = `${GOOGLE_GEOCODE_URL}?address=${encodeURIComponent(q)}&region=gb&key=${googleKey}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const data = (await res.json()) as { results?: Array<{ address_components?: Array<{ long_name: string; types: string[] }> }> };
+        const comps = data?.results?.[0]?.address_components ?? [];
+        const postal = comps.find((c) => c.types.includes("postal_code"));
+        const pc = postal?.long_name?.trim();
+        if (pc && UK_POSTCODE_REGEX.test(pc.replace(/\s/g, ""))) return normalizeUKPostcode(pc);
+      }
+    } catch {
+      // Fall through to Nominatim
+    }
+  }
+
+  // Nominatim (free, no API key)
+  try {
+    const url = `${NOMINATIM_URL}?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=1`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "StreetIQ-PropertyValue/1.0 (UK Land Registry lookup)" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as Array<{ address?: { postcode?: string } }>;
+      const pc = data?.[0]?.address?.postcode?.trim();
+      if (pc && UK_POSTCODE_REGEX.test(pc.replace(/\s/g, ""))) return normalizeUKPostcode(pc);
+    }
+  } catch {
+    // Geocoding failed
+  }
+  return null;
+}
+
 /** UK street abbreviations to full form for normalization */
 const STREET_ABBREVS: [RegExp, string][] = [
   [/\bst\b/gi, "street"],
@@ -330,20 +380,29 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
   readonly name = "UK Land Registry (Price Paid Data)";
 
   async getInsights(input: PropertyValueInput): Promise<PropertyValueInsightsResult> {
-    const postcode = (input.postcode ?? input.zip ?? "").trim().replace(/\s+/g, " ");
+    let postcode = (input.postcode ?? input.zip ?? "").trim().replace(/\s+/g, " ");
     const street = (input.street ?? "").trim();
     const city = (input.city ?? "").trim();
     const houseNumber = (input.houseNumber ?? "").trim();
+    const fullAddress = (input.fullAddress ?? "").trim();
 
-    const hasPostcode = !!postcode.trim();
-    const hasStreetAndCity = !!(street.trim() && city.trim());
-    if (!hasPostcode && !hasStreetAndCity) {
+    const hasStreetAndCity = !!(street && city);
+    const hasGeocodeableAddress = !!(fullAddress || (street && city) || city);
+    if (!postcode && !hasStreetAndCity && !hasGeocodeableAddress) {
       return {
         message: "UK Land Registry requires a postcode or street and town to look up transactions.",
         error: "INVALID_INPUT",
       } as PropertyValueInsightsError;
     }
 
+    // Resolve postcode via geocoding when missing
+    if (!postcode && hasGeocodeableAddress) {
+      const geocodeQuery = fullAddress || [houseNumber, street, city].filter(Boolean).join(", ");
+      const resolved = await resolvePostcodeFromAddress(geocodeQuery);
+      if (resolved) postcode = resolved;
+    }
+
+    const hasPostcode = !!postcode.trim();
     const normalizedPostcode = hasPostcode ? normalizeUKPostcode(postcode) : "";
     let query: string;
     let queryMode: string;
@@ -446,7 +505,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       addrTown: string;
     };
 
-    function processBindingsToItems(raw: Record<string, SparqlBinding>[]): Tx[] {
+    function processBindingsToItems(raw: Record<string, SparqlBinding>[], strict = true): Tx[] {
       const seen = new Set<string>();
       const out: Tx[] = [];
       for (const b of raw) {
@@ -458,7 +517,8 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         const saon = getBinding(b, "saon");
         const addrStreet = getBinding(b, "street");
         const addrTown = getBinding(b, "town");
-        if (amount <= 0 || !isValidTransaction(category)) continue;
+        if (amount <= 0) continue;
+        if (strict && !isValidTransaction(category)) continue;
         const dedupeKey = `${paon}|${saon}|${addrStreet}|${dateStr}|${amount}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
@@ -478,7 +538,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return out;
     }
 
-    let items = processBindingsToItems(bindings);
+    let items = processBindingsToItems(bindings, true);
     for (const step of fallbacks) {
       if (items.length > 0) break;
       query = step.query;
@@ -496,7 +556,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         if (resFb.ok) {
           const jsonFb = await resFb.json();
           bindings = jsonFb?.results?.bindings ?? [];
-          items = processBindingsToItems(bindings);
+          items = processBindingsToItems(bindings, true);
         }
       } catch {
         // Fallback failed, try next
@@ -516,6 +576,11 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           postcode_results_count: 0,
         },
       } as PropertyValueInsightsNoMatch;
+    }
+
+    // When raw results exist but all filtered out, use relaxed filtering for area-level metrics
+    if (items.length === 0 && bindings.length > 0) {
+      items = processBindingsToItems(bindings, false);
     }
 
     if (items.length === 0) {

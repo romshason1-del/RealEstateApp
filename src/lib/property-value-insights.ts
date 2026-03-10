@@ -53,7 +53,9 @@ export async function getPropertyValueInsights(
 
   if (isUK) {
     const hasStreetAndCity = !!(street.trim() && city.trim());
-    if (!postcode && !hasStreetAndCity) {
+    const fullAddress = (input.fullAddress ?? "").trim();
+    const hasGeocodeableAddress = !!(fullAddress || hasStreetAndCity);
+    if (!postcode && !hasGeocodeableAddress) {
       return {
         message: "UK Land Registry requires a postcode or street and town to look up transactions.",
         error: "INVALID_INPUT",
