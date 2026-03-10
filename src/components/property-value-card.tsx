@@ -5,7 +5,7 @@ import { X, FileText, Sparkles, Building2, BadgeCheck, Bug, ChevronDown, Chevron
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
-import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "@/lib/address-parse";
 import { toCanonicalAddress } from "@/lib/address-canonical";
 import { toEnglishDisplay, sanitizeForDisplay } from "@/lib/display-utils";
 
@@ -298,7 +298,8 @@ export function PropertyValueCard({
 }: PropertyValueCardProps) {
   const isIsrael = countryCode === "IL";
   const isUS = countryCode === "US";
-  const hasOfficialProvider = isIsrael || isUS;
+  const isUK = countryCode === "UK" || countryCode === "GB";
+  const hasOfficialProvider = isIsrael || isUS || isUK;
   const mockData = React.useMemo(
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
@@ -343,6 +344,7 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
+  const ukLandRegistry = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { latest_transaction: { price: number; date: string; property_type?: string }; transactions_last_5_years: number; average_price_area: number } }).uk_land_registry : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -354,6 +356,16 @@ export function PropertyValueCard({
         state: us.state,
         zip: us.zip,
         country: "US",
+      };
+    }
+    if (countryCode === "UK" || countryCode === "GB") {
+      const uk = parseUKAddressFromFullString(address);
+      return {
+        city: uk.city,
+        street: uk.street,
+        houseNumber: "",
+        zip: uk.postcode,
+        country: "UK",
       };
     }
     const g = parseAddressFromFullString(address);
@@ -445,16 +457,22 @@ export function PropertyValueCard({
                 No AVM estimate or sale history could be retrieved for this address.
               </p>
             </div>
-          ) : !hasPropertyData ? (
+          ) : !hasPropertyData && !ukLandRegistry ? (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-amber-300/90">
                 <FileText className="size-3 shrink-0" aria-hidden />
-                <span className="text-xs font-medium">No property data found for this address</span>
+                <span className="text-xs font-medium">
+                  {isUK && insightsData?.message === "no transaction found"
+                    ? "No UK Land Registry transaction found."
+                    : "No property data found for this address"}
+                </span>
               </div>
               <p className="text-[11px] text-zinc-400">
-                {isUS
-                  ? insightsData?.message ?? "No property record could be retrieved for this address."
-                  : "We only show data when there is a high-confidence match for the exact address."}
+                {isUK && insightsData?.message === "no transaction found"
+                  ? "No UK Land Registry transaction found."
+                  : isUS
+                    ? insightsData?.message ?? "No property record could be retrieved for this address."
+                    : "We only show data when there is a high-confidence match for the exact address."}
               </p>
               {insightsData?.debug && (
                 <CollapsibleSection title="Debug Info">
@@ -624,6 +642,52 @@ export function PropertyValueCard({
               )}
               {!avmValue && !lastSale && !avmRent && !propertyDetails && (!salesHistory || salesHistory.length === 0) && !nearbyComps && (
                 <div className="text-xs text-zinc-400">No Data Available</div>
+              )}
+            </div>
+          ) : isUK && ukLandRegistry ? (
+            <div className="space-y-1.5">
+              <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">UK Land Registry Data</div>
+              <div className="space-y-1">
+                <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                  <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
+                    <FileText className="size-3 shrink-0" aria-hidden />
+                    Latest Transaction
+                  </div>
+                  <div className="mt-0.5 text-sm font-medium text-amber-200">
+                    {formatCurrency(ukLandRegistry.latest_transaction.price, currencySymbol)}
+                    {ukLandRegistry.latest_transaction.date ? ` · ${formatSaleDate(ukLandRegistry.latest_transaction.date)}` : ""}
+                  </div>
+                  {ukLandRegistry.latest_transaction.property_type && (
+                    <div className="mt-0.5 text-[10px] text-amber-400/70">{ukLandRegistry.latest_transaction.property_type}</div>
+                  )}
+                </div>
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                  <div className="text-[9px] uppercase tracking-wider text-emerald-400/90">Transactions (Last 5 Years)</div>
+                  <div className="mt-0.5 text-sm font-medium text-emerald-300">
+                    {ukLandRegistry.transactions_last_5_years}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                  <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Average Area Price</div>
+                  <div className="mt-0.5 text-sm font-medium text-violet-300">
+                    {formatCurrency(ukLandRegistry.average_price_area, currencySymbol)}
+                  </div>
+                </div>
+              </div>
+              <div className="pt-0.5 text-[10px] text-zinc-500">
+                HM Land Registry Price Paid Data. Government open data.
+              </div>
+              {debugMode && hasOfficialProvider && (
+                <CollapsibleSection title="Debug Info">
+                  <DebugPanel
+                    address={address}
+                    parsed={parsedLocal}
+                    canonical={canonicalLocal}
+                    insightsData={insightsData}
+                    latest={latest}
+                    currencySymbol={currencySymbol}
+                  />
+                </CollapsibleSection>
               )}
             </div>
           ) : (

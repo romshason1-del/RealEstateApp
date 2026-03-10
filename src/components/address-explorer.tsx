@@ -303,6 +303,18 @@ function resolveCountryProfile(address: string): CountryProfile {
     };
   }
 
+  if (
+    /united kingdom|uk|england|scotland|wales|london|manchester|birmingham|leeds|glasgow|bristol|edinburgh/.test(
+      normalizedAddress,
+    )
+  ) {
+    return {
+      countryCode: "UK",
+      currencySymbol: "£",
+      providerLabel: "HM Land Registry",
+    };
+  }
+
   return {
     countryCode: "INTL",
     currencySymbol: "$",
