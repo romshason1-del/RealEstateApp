@@ -80,6 +80,10 @@ type DebugPanelProps = {
   canonical: { cityKey: string; streetKey: string; houseKey: string };
   insightsData: {
     debug?: {
+      postcode_results_count?: number;
+      exact_building_matches_count?: number;
+      fuzzy_building_matches_count?: number;
+      address_match_mode?: string;
       raw_input_address?: { city: string; street: string; house_number: string };
       canonical_address?: { city_key: string; street_key: string; house_key: string };
       records_fetched?: number;
@@ -250,6 +254,18 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         )}
         {d?.rejection_reason && (
           <div><span className="text-zinc-500">Rejection reason:</span> <span className="text-amber-300/90">{d.rejection_reason}</span></div>
+        )}
+        {d?.postcode_results_count != null && (
+          <div><span className="text-zinc-500">Postcode results:</span> {d.postcode_results_count}</div>
+        )}
+        {d?.exact_building_matches_count != null && (
+          <div><span className="text-zinc-500">Exact building matches:</span> {d.exact_building_matches_count}</div>
+        )}
+        {d?.fuzzy_building_matches_count != null && (
+          <div><span className="text-zinc-500">Fuzzy building matches:</span> {d.fuzzy_building_matches_count}</div>
+        )}
+        {d?.address_match_mode != null && (
+          <div><span className="text-zinc-500">Address match mode:</span> {String(d.address_match_mode)}</div>
         )}
       </div>
       {latest && (
@@ -683,8 +699,12 @@ export function PropertyValueCard({
                       ? formatCurrency(ukLandRegistry.average_area_price, currencySymbol)
                       : "No area transaction data available."}
                   </div>
-                  {ukLandRegistry.transactions_in_building < 2 && ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0 && (
-                    <div className="mt-0.5 text-[10px] text-zinc-500">Postcode-level (building has &lt;2 transactions)</div>
+                  {(ukLandRegistry.transactions_in_building < 2 || ukLandRegistry.building_average_price == null) && ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0 && (
+                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                      {ukLandRegistry.transactions_in_building === 0
+                        ? "Postcode-level (no building match)"
+                        : "Postcode-level (building has &lt;2 transactions)"}
+                    </div>
                   )}
                 </div>
               </div>
