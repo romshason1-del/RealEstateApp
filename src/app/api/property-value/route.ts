@@ -175,6 +175,7 @@ export async function GET(request: NextRequest) {
             area_transaction_count: 0,
             area_fallback_level: "none" as const,
             fallback_level_used: "area" as const,
+            match_confidence: "low" as const,
           },
           data_source: "live" as const,
         };

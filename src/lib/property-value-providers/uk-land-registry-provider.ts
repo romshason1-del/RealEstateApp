@@ -132,6 +132,19 @@ function isValidTransaction(category: string): boolean {
   return !INVALID_CATEGORY_PATTERNS.some((p) => p.test(cat));
 }
 
+/** Filter outliers using IQR (interquartile range). Returns values within Q1 - 1.5*IQR and Q3 + 1.5*IQR. */
+function filterOutliersIQR(sortedAmounts: number[]): number[] {
+  if (sortedAmounts.length < 4) return sortedAmounts;
+  const q1Idx = Math.floor(sortedAmounts.length * 0.25);
+  const q3Idx = Math.floor(sortedAmounts.length * 0.75);
+  const q1 = sortedAmounts[q1Idx] ?? 0;
+  const q3 = sortedAmounts[q3Idx] ?? 0;
+  const iqr = q3 - q1;
+  const lower = q1 - 1.5 * iqr;
+  const upper = q3 + 1.5 * iqr;
+  return sortedAmounts.filter((a) => a >= lower && a <= upper);
+}
+
 /**
  * Normalize UK postcode for Land Registry query.
  * Format: outward (2-4 chars) + space + inward (3 chars). E.g. BA1 1BN, SL7 1AW.
@@ -145,9 +158,14 @@ function normalizeUKPostcode(postcode: string): string {
   return s.trim();
 }
 
-/** Build SPARQL query using exact postcode match (VALUES) */
+/** Build SPARQL query using exact postcode match (VALUES). Tries both spaced and compact formats for Land Registry compatibility. */
 function buildSparqlQueryExact(postcode: string): string {
   const normalized = normalizeUKPostcode(postcode);
+  const compact = normalized.replace(/\s/g, "");
+  const valuesClause =
+    normalized.includes(" ") && compact !== normalized
+      ? `VALUES ?postcode {"${normalized}"^^xsd:string "${compact}"^^xsd:string}`
+      : `VALUES ?postcode {"${normalized}"^^xsd:string}`;
   return `
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
@@ -156,7 +174,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
 WHERE {
-  VALUES ?postcode {"${normalized}"^^xsd:string}
+  ${valuesClause}
   ?addr lrcommon:postcode ?postcode.
   ?transx lrppi:propertyAddress ?addr ;
           lrppi:pricePaid ?amount ;
@@ -462,11 +480,12 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
 
     let bindings = json?.results?.bindings ?? [];
     type FallbackStep = { query: string; mode: string };
+    // Prioritize postcode-level fallbacks (outward, area) before street/locality for geographically relevant area data
     const fallbacks: FallbackStep[] = [
-      ...(street && city && queryMode !== "street" ? [{ query: buildSparqlQueryStreetTown(street, city), mode: "street" }] : []),
-      ...(city && queryMode !== "locality" ? [{ query: buildSparqlQueryTown(city), mode: "locality" }] : []),
       ...(hasPostcode && queryMode !== "outward_postcode" ? [{ query: buildSparqlQueryOutward(normalizedPostcode), mode: "outward_postcode" }] : []),
       ...(hasPostcode && queryMode !== "postcode_area" ? [{ query: buildSparqlQueryArea(normalizedPostcode), mode: "postcode_area" }] : []),
+      ...(street && city && queryMode !== "street" ? [{ query: buildSparqlQueryStreetTown(street, city), mode: "street" }] : []),
+      ...(city && queryMode !== "locality" ? [{ query: buildSparqlQueryTown(city), mode: "locality" }] : []),
     ].filter((s): s is FallbackStep => typeof (s as FallbackStep).query === "string" && (s as FallbackStep).query.length > 0);
 
     for (const step of fallbacks) {
@@ -631,8 +650,15 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
 
     let averageAreaPrice: number | null = null;
     if (postcode5y.length > 0) {
-      const sum = postcode5y.reduce((s, t) => s + t.amount, 0);
-      averageAreaPrice = Math.round(sum / postcode5y.length);
+      const amounts = postcode5y.map((t) => t.amount).sort((a, b) => a - b);
+      const filtered = filterOutliersIQR(amounts);
+      if (filtered.length > 0) {
+        const sum = filtered.reduce((s, a) => s + a, 0);
+        averageAreaPrice = Math.round(sum / filtered.length);
+      } else {
+        const sum = amounts.reduce((s, a) => s + a, 0);
+        averageAreaPrice = Math.round(sum / amounts.length);
+      }
     }
 
     let addressMatchMode: AddressMatchMode = "none";
@@ -660,6 +686,13 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         : queryMode === "street" || queryMode === "locality"
           ? "locality"
           : "area";
+
+    const matchConfidence: "high" | "medium" | "low" =
+      hasBuildingMatch
+        ? "high"
+        : queryMode === "exact" || queryMode === "outward_postcode" || queryMode === "street" || queryMode === "locality"
+          ? "medium"
+          : "low";
 
     const ukDebug: PropertyValueInsightsDebug = {
       normalized_postcode: normalizedPostcode,
@@ -700,6 +733,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       area_transaction_count: postcode5y.length,
       area_fallback_level: areaFallbackLevel,
       fallback_level_used: fallbackLevelUsed,
+      match_confidence: matchConfidence,
     };
 
     const effectiveLatest = hasBuildingMatch ? latestBuilding : (latestFromArea ?? latestBuilding);

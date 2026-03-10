@@ -138,6 +138,8 @@ export type PropertyValueInsightsSuccess = {
     area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none";
     /** Display level used: building | postcode | locality | area */
     fallback_level_used?: "building" | "postcode" | "locality" | "area";
+    /** Confidence label: high = building match, medium = postcode/locality fallback, low = area-only fallback */
+    match_confidence?: "high" | "medium" | "low";
   };
 }
 
