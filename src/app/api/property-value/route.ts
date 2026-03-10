@@ -153,12 +153,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(result, { status });
     }
 
+    const isUK = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB";
+
     if ("message" in result && result.message === "no transaction found") {
-      return NextResponse.json(result, { status: 404 });
+      if (isUK && result && typeof result === "object" && "uk_land_registry" in result && (result as { uk_land_registry?: unknown }).uk_land_registry) {
+        // UK: never return 404 when we have uk_land_registry (postcode data exists)
+      } else {
+        return NextResponse.json(result, { status: 404 });
+      }
     }
 
     if ("message" in result && result.message === "no reliable exact match found") {
-      return NextResponse.json(result, { status: 404 });
+      if (isUK && result && typeof result === "object" && "uk_land_registry" in result && (result as { uk_land_registry?: unknown }).uk_land_registry) {
+        // UK: never return 404 when we have uk_land_registry
+      } else {
+        return NextResponse.json(result, { status: 404 });
+      }
     }
 
     if ("error" in result && result.error === "UNIT_REQUIRED") {
