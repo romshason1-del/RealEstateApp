@@ -93,6 +93,7 @@ export async function GET(request: NextRequest) {
       street = parsed.street || street;
       city = parsed.city || city;
       postcode = parsed.postcode || postcode;
+      houseNumber = parsed.houseNumber || houseNumber;
     } else {
       if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);

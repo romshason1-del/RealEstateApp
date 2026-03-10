@@ -1,6 +1,7 @@
 /**
  * UK Land Registry Price Paid Data Provider
  * Uses HM Land Registry SPARQL endpoint: https://landregistry.data.gov.uk/
+ * Building-level filtering with area fallback.
  */
 
 import type { PropertyDataProvider } from "./provider-interface";
@@ -14,6 +15,15 @@ import type {
 
 const SPARQL_ENDPOINT = "http://landregistry.data.gov.uk/landregistry/query";
 const FIVE_YEARS_MS = 5 * 365.25 * 24 * 60 * 60 * 1000;
+
+/** Exclude: Additional (transfers, buy-to-let, repossessions), lease extensions, non-standard */
+const INVALID_CATEGORY_PATTERNS = [
+  /additional/i,
+  /transfer/i,
+  /lease\s*extension/i,
+  /repossession/i,
+  /power\s*of\s*sale/i,
+];
 
 type SparqlBinding = { value?: string };
 type SparqlResult = { results?: { bindings?: Record<string, SparqlBinding>[] } };
@@ -29,6 +39,12 @@ function parseDate(val: unknown): string {
   if (val == null || val === "") return "";
   const d = new Date(String(val));
   return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : "";
+}
+
+function isValidTransaction(category: string): boolean {
+  const cat = (category ?? "").trim();
+  if (!cat) return true;
+  return !INVALID_CATEGORY_PATTERNS.some((p) => p.test(cat));
 }
 
 function buildSparqlQuery(postcode: string): string {
@@ -63,6 +79,48 @@ function getBinding(binding: Record<string, SparqlBinding>, key: string): string
   return b?.value ?? "";
 }
 
+function normalizeForMatch(s: string): string {
+  return (s ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s]/g, "")
+    .trim();
+}
+
+/** Check if a Land Registry record matches the requested building (paon + street [+ town]). */
+function matchesBuilding(
+  paon: string,
+  addrStreet: string,
+  addrTown: string,
+  houseNumber: string,
+  street: string,
+  city: string
+): boolean {
+  const paonNorm = normalizeForMatch(paon);
+  const streetNorm = normalizeForMatch(addrStreet);
+  const townNorm = normalizeForMatch(addrTown);
+  const hnNorm = normalizeForMatch(houseNumber);
+  const reqStreetNorm = normalizeForMatch(street);
+  const reqCityNorm = normalizeForMatch(city);
+
+  const paonMatches =
+    !hnNorm ||
+    paonNorm === hnNorm ||
+    paonNorm.startsWith(hnNorm) ||
+    hnNorm.startsWith(paonNorm) ||
+    (paonNorm && paonNorm.includes(hnNorm));
+
+  const streetMatches =
+    !reqStreetNorm ||
+    streetNorm.includes(reqStreetNorm) ||
+    reqStreetNorm.includes(streetNorm) ||
+    streetNorm === reqStreetNorm;
+
+  const townMatches = !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
+
+  return Boolean(paonMatches && streetMatches && townMatches);
+}
+
 export class UKLandRegistryProvider implements PropertyDataProvider {
   readonly id = "uk-land-registry";
   readonly name = "UK Land Registry (Price Paid Data)";
@@ -71,6 +129,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const postcode = (input.postcode ?? input.zip ?? "").trim().replace(/\s+/g, " ");
     const street = (input.street ?? "").trim();
     const city = (input.city ?? "").trim();
+    const houseNumber = (input.houseNumber ?? "").trim();
 
     if (!postcode) {
       return {
@@ -130,77 +189,116 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const now = Date.now();
     const fiveYearsAgo = now - FIVE_YEARS_MS;
 
-    const items = bindings.map((b) => {
+    type Tx = {
+      date: string;
+      dateStr: string;
+      amount: number;
+      category: string;
+      dateMs: number;
+      paon: string;
+      addrStreet: string;
+      addrTown: string;
+    };
+
+    const seen = new Set<string>();
+    const items: Tx[] = [];
+
+    for (const b of bindings) {
       const dateStr = getBinding(b, "date");
       const date = parseDate(dateStr);
       const amount = parseAmount(getBinding(b, "amount"));
       const category = getBinding(b, "category");
-      const dateMs = date ? new Date(date).getTime() : 0;
-      const addrStreet = getBinding(b, "street").toLowerCase();
-      const addrTown = getBinding(b, "town").toLowerCase();
-      return { date, dateStr, amount, category, dateMs, addrStreet, addrTown };
-    });
+      const paon = getBinding(b, "paon");
+      const addrStreet = getBinding(b, "street");
+      const addrTown = getBinding(b, "town");
 
-    const transactions = items.filter((t) => t.amount > 0);
-    if (transactions.length === 0) {
+      if (amount <= 0 || !isValidTransaction(category)) continue;
+
+      const dedupeKey = `${paon}|${addrStreet}|${dateStr}|${amount}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const dateMs = date ? new Date(date).getTime() : 0;
+      items.push({
+        date,
+        dateStr,
+        amount,
+        category,
+        dateMs,
+        paon,
+        addrStreet: addrStreet.toLowerCase(),
+        addrTown: addrTown.toLowerCase(),
+      });
+    }
+
+    if (items.length === 0) {
       return {
         message: "no transaction found",
         debug: { postcode, records_fetched: bindings.length },
       } as PropertyValueInsightsNoMatch;
     }
 
-    const streetLower = street.toLowerCase();
     const cityLower = city.toLowerCase();
-    const hasStreetFilter = streetLower.length > 0;
-    const hasCityFilter = cityLower.length > 0;
+    const buildingTxs = items.filter((t) =>
+      matchesBuilding(t.paon, t.addrStreet, t.addrTown, houseNumber, street, cityLower)
+    );
+    const building5y = buildingTxs.filter((t) => t.dateMs >= fiveYearsAgo);
+    const postcode5y = items.filter((t) => t.dateMs >= fiveYearsAgo);
 
-    let filtered = transactions;
-    if (hasStreetFilter || hasCityFilter) {
-      const addrFiltered = transactions.filter((t) => {
-        const matchStreet = !hasStreetFilter || t.addrStreet.includes(streetLower) || streetLower.includes(t.addrStreet);
-        const matchCity = !hasCityFilter || t.addrTown.includes(cityLower) || cityLower.includes(t.addrTown);
-        return matchStreet && matchCity;
-      });
-      if (addrFiltered.length > 0) filtered = addrFiltered;
+    const sortedBuilding = [...building5y].sort((a, b) => b.dateMs - a.dateMs);
+    const latestBuilding = sortedBuilding[0] ?? null;
+
+    let buildingAveragePrice: number | null = null;
+    if (building5y.length > 0) {
+      const sum = building5y.reduce((s, t) => s + t.amount, 0);
+      buildingAveragePrice = Math.round(sum / building5y.length);
     }
 
-    const filtered5y = filtered.filter((t) => t.dateMs >= fiveYearsAgo);
-    const sortedByDate = [...filtered].sort((a, b) => b.dateMs - a.dateMs);
-    const filteredLatest = sortedByDate[0];
-    const averagePriceArea =
-      filtered5y.length > 0 ? Math.round(filtered5y.reduce((s, t) => s + t.amount, 0) / filtered5y.length) : 0;
+    let averageAreaPrice: number | null = null;
+    if (postcode5y.length > 0) {
+      const sum = postcode5y.reduce((s, t) => s + t.amount, 0);
+      averageAreaPrice = Math.round(sum / postcode5y.length);
+    }
 
     const ukData = {
-      latest_transaction: {
-        price: filteredLatest.amount,
-        date: filteredLatest.date || filteredLatest.dateStr,
-        property_type: filteredLatest.category || undefined,
-      },
-      transactions_last_5_years: filtered5y.length,
-      average_price_area: filtered5y.length > 0
-        ? Math.round(filtered5y.reduce((s, t) => s + t.amount, 0) / filtered5y.length)
-        : averagePriceArea,
+      building_average_price: buildingAveragePrice,
+      transactions_in_building: building5y.length,
+      latest_building_transaction: latestBuilding
+        ? {
+            price: latestBuilding.amount,
+            date: latestBuilding.date || latestBuilding.dateStr,
+            property_type: latestBuilding.category || undefined,
+          }
+        : null,
+      average_area_price: averageAreaPrice,
     };
 
     const success: PropertyValueInsightsSuccess = {
       address: {
         city: city || postcode,
         street: street || postcode,
-        house_number: "",
+        house_number: houseNumber,
       },
-      match_quality: "exact_building",
-      latest_transaction: {
-        transaction_date: ukData.latest_transaction.date,
-        transaction_price: ukData.latest_transaction.price,
-        property_size: 0,
-        price_per_m2: 0,
-      },
+      match_quality: building5y.length > 0 ? "exact_building" : "no_reliable_match",
+      latest_transaction: latestBuilding
+        ? {
+            transaction_date: latestBuilding.date || latestBuilding.dateStr,
+            transaction_price: latestBuilding.amount,
+            property_size: 0,
+            price_per_m2: 0,
+          }
+        : {
+            transaction_date: "",
+            transaction_price: 0,
+            property_size: 0,
+            price_per_m2: 0,
+          },
       current_estimated_value: null,
       building_summary_last_3_years: {
-        transactions_count_last_3_years: filtered5y.length,
-        transactions_count_last_5_years: filtered5y.length,
-        latest_building_transaction_price: ukData.latest_transaction.price,
-        average_apartment_value_today: ukData.average_price_area,
+        transactions_count_last_3_years: building5y.length,
+        transactions_count_last_5_years: building5y.length,
+        latest_building_transaction_price: latestBuilding?.amount ?? 0,
+        average_apartment_value_today: buildingAveragePrice ?? averageAreaPrice ?? 0,
       },
       market_value_source: "exact_provider",
       source: "uk-land-registry",

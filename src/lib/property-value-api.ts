@@ -44,9 +44,10 @@ export type PropertyValueInsightsResponse = {
   data_source?: "live" | "cache" | "mock";
   market_trend?: { hpi_index: number; change_1y_percent: number };
   uk_land_registry?: {
-    latest_transaction: { price: number; date: string; property_type?: string };
-    transactions_last_5_years: number;
-    average_price_area: number;
+    building_average_price: number | null;
+    transactions_in_building: number;
+    latest_building_transaction: { price: number; date: string; property_type?: string } | null;
+    average_area_price: number | null;
   };
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
@@ -116,7 +117,7 @@ export async function fetchPropertyValueInsights(
       : isUK
         ? (() => {
             const uk = parseUKAddressFromFullString(address);
-            return { city: uk.city, street: uk.street, houseNumber: "", postcode: uk.postcode };
+            return { city: uk.city, street: uk.street, houseNumber: uk.houseNumber, postcode: uk.postcode };
           })()
         : (() => {
             const g = parseAddressFromFullString(address);
