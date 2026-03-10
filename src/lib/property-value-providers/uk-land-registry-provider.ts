@@ -123,10 +123,22 @@ LIMIT 500
 `.trim();
 }
 
-/** Fallback: use outward code (sector) if exact postcode returns no results */
+/** Fallback: use outward code (e.g. BA1) if exact postcode returns no results */
 function buildSparqlQueryOutward(postcode: string): string {
   const normalized = normalizeUKPostcode(postcode);
   const outward = normalized.split(/\s/)[0] || normalized.replace(/\s/g, "").slice(0, -3) || normalized;
+  return buildSparqlQueryByPostcodePrefix(outward);
+}
+
+/** Fallback: use postcode area (e.g. BA) - first 1-2 letters */
+function buildSparqlQueryArea(postcode: string): string {
+  const normalized = normalizeUKPostcode(postcode);
+  const outward = normalized.split(/\s/)[0] || normalized.replace(/\s/g, "").slice(0, -3) || normalized;
+  const area = outward.match(/^[A-Z]{1,2}/i)?.[0]?.toUpperCase() || outward.slice(0, 2);
+  return buildSparqlQueryByPostcodePrefix(area);
+}
+
+function buildSparqlQueryByPostcodePrefix(prefix: string): string {
   return `
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
@@ -135,7 +147,7 @@ PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
 WHERE {
   ?addr lrcommon:postcode ?postcode.
-  FILTER(STRSTARTS(STR(?postcode), "${outward}"))
+  FILTER(STRSTARTS(STR(?postcode), "${prefix}"))
   ?transx lrppi:propertyAddress ?addr ;
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
@@ -150,6 +162,65 @@ ORDER BY DESC(?date)
 LIMIT 500
 `.trim();
 }
+
+/** Fallback: query by street and town when postcode returns nothing */
+function buildSparqlQueryStreetTown(street: string, town: string): string {
+  const streetNorm = (street ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toUpperCase();
+  const townNorm = (town ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toUpperCase();
+  if (!streetNorm || !townNorm) return "";
+  const streetPart = streetNorm.split(/\s+/)[0] || streetNorm;
+  return `
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
+PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+WHERE {
+  ?addr lrcommon:street ?street.
+  ?addr lrcommon:town ?town.
+  FILTER(CONTAINS(LCASE(STR(?street)), "${streetPart.toLowerCase()}") && CONTAINS(LCASE(STR(?town)), "${townNorm.toLowerCase()}"))
+  ?transx lrppi:propertyAddress ?addr ;
+          lrppi:pricePaid ?amount ;
+          lrppi:transactionDate ?date ;
+          lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?addr lrcommon:county ?county }
+  OPTIONAL { ?addr lrcommon:paon ?paon }
+  OPTIONAL { ?addr lrcommon:saon ?saon }
+  OPTIONAL { ?addr lrcommon:postcode ?postcode }
+}
+ORDER BY DESC(?date)
+LIMIT 500
+`.trim();
+}
+
+/** Fallback: query by town/locality only */
+function buildSparqlQueryTown(town: string): string {
+  const townNorm = (town ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toUpperCase();
+  if (!townNorm || townNorm.length < 2) return "";
+  return `
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
+PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+WHERE {
+  ?addr lrcommon:town ?town.
+  FILTER(CONTAINS(LCASE(STR(?town)), "${townNorm.toLowerCase()}"))
+  ?transx lrppi:propertyAddress ?addr ;
+          lrppi:pricePaid ?amount ;
+          lrppi:transactionDate ?date ;
+          lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?addr lrcommon:county ?county }
+  OPTIONAL { ?addr lrcommon:paon ?paon }
+  OPTIONAL { ?addr lrcommon:saon ?saon }
+  OPTIONAL { ?addr lrcommon:street ?street }
+  OPTIONAL { ?addr lrcommon:postcode ?postcode }
+}
+ORDER BY DESC(?date)
+LIMIT 500
+`.trim();
+}
+
 
 function getBinding(binding: Record<string, SparqlBinding>, key: string): string {
   const b = binding[key];
@@ -264,16 +335,33 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const city = (input.city ?? "").trim();
     const houseNumber = (input.houseNumber ?? "").trim();
 
-    if (!postcode) {
+    const hasPostcode = !!postcode.trim();
+    const hasStreetAndCity = !!(street.trim() && city.trim());
+    if (!hasPostcode && !hasStreetAndCity) {
       return {
-        message: "UK Land Registry requires a postcode to look up transactions.",
+        message: "UK Land Registry requires a postcode or street and town to look up transactions.",
         error: "INVALID_INPUT",
       } as PropertyValueInsightsError;
     }
 
-    const normalizedPostcode = normalizeUKPostcode(postcode);
-    let query = buildSparqlQueryExact(normalizedPostcode);
-    let queryMode = "exact";
+    const normalizedPostcode = hasPostcode ? normalizeUKPostcode(postcode) : "";
+    let query: string;
+    let queryMode: string;
+    if (hasPostcode) {
+      query = buildSparqlQueryExact(normalizedPostcode);
+      queryMode = "exact";
+    } else if (street && city) {
+      query = buildSparqlQueryStreetTown(street, city);
+      queryMode = "street";
+    } else if (city) {
+      query = buildSparqlQueryTown(city);
+      queryMode = "locality";
+    } else {
+      return {
+        message: "UK Land Registry requires a postcode or street and town to look up transactions.",
+        error: "INVALID_INPUT",
+      } as PropertyValueInsightsError;
+    }
 
     let res: Response;
     try {
@@ -314,12 +402,20 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     }
 
     let bindings = json?.results?.bindings ?? [];
+    type FallbackStep = { query: string; mode: string };
+    const fallbacks: FallbackStep[] = [
+      ...(street && city && queryMode !== "street" ? [{ query: buildSparqlQueryStreetTown(street, city), mode: "street" }] : []),
+      ...(city && queryMode !== "locality" ? [{ query: buildSparqlQueryTown(city), mode: "locality" }] : []),
+      ...(hasPostcode && queryMode !== "outward_postcode" ? [{ query: buildSparqlQueryOutward(normalizedPostcode), mode: "outward_postcode" }] : []),
+      ...(hasPostcode && queryMode !== "postcode_area" ? [{ query: buildSparqlQueryArea(normalizedPostcode), mode: "postcode_area" }] : []),
+    ].filter((s): s is FallbackStep => typeof (s as FallbackStep).query === "string" && (s as FallbackStep).query.length > 0);
 
-    if (bindings.length === 0) {
-      query = buildSparqlQueryOutward(normalizedPostcode);
-      queryMode = "outward";
+    for (const step of fallbacks) {
+      if (bindings.length > 0) break;
+      query = step.query;
+      queryMode = step.mode;
       try {
-        const res2 = await fetch(SPARQL_ENDPOINT, {
+        const resFb = await fetch(SPARQL_ENDPOINT, {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -328,12 +424,12 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           body: new URLSearchParams({ query }),
           signal: AbortSignal.timeout(15000),
         });
-        if (res2.ok) {
-          const json2 = await res2.json();
-          bindings = json2?.results?.bindings ?? [];
+        if (resFb.ok) {
+          const jsonFb = await resFb.json();
+          bindings = jsonFb?.results?.bindings ?? [];
         }
       } catch {
-        // Fallback failed, continue with empty bindings
+        // Fallback failed, try next
       }
     }
     const postcodeQueryRawResultCount = bindings.length;
@@ -465,6 +561,19 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       console.debug("[UK Land Registry] postcode:", normalizedPostcode, "query_mode:", queryMode, "raw_count:", postcodeQueryRawResultCount);
     }
 
+    const areaFallbackLevel =
+      queryMode === "exact"
+        ? ("postcode" as const)
+        : queryMode === "outward_postcode"
+          ? ("outward_postcode" as const)
+          : queryMode === "postcode_area"
+            ? ("postcode_area" as const)
+            : queryMode === "street"
+              ? ("street" as const)
+              : queryMode === "locality"
+                ? ("locality" as const)
+                : ("none" as const);
+
     const ukData = {
       building_average_price: buildingAveragePrice,
       transactions_in_building: building5y.length,
@@ -476,6 +585,8 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           }
         : null,
       average_area_price: averageAreaPrice,
+      area_transaction_count: postcode5y.length,
+      area_fallback_level: areaFallbackLevel,
     };
 
     const success: PropertyValueInsightsSuccess = {

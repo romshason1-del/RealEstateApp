@@ -52,9 +52,10 @@ export async function getPropertyValueInsights(
   const postcode = (input.postcode ?? input.zip ?? "").trim();
 
   if (isUK) {
-    if (!postcode) {
+    const hasStreetAndCity = !!(street.trim() && city.trim());
+    if (!postcode && !hasStreetAndCity) {
       return {
-        message: "UK Land Registry requires a postcode to look up transactions.",
+        message: "UK Land Registry requires a postcode or street and town to look up transactions.",
         error: "INVALID_INPUT",
       };
     }

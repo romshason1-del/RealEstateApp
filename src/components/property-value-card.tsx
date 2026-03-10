@@ -376,7 +376,7 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
-  const ukLandRegistry = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; average_area_price: number | null } }).uk_land_registry : undefined;
+  const ukLandRegistry = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none" } }).uk_land_registry : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -709,17 +709,28 @@ export function PropertyValueCard({
                   )}
                 </div>
                 <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
-                  <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average Area Price</div>
+                  <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">
+                    {ukLandRegistry.area_fallback_level === "street"
+                      ? "Street-level average"
+                      : ukLandRegistry.area_fallback_level === "locality"
+                        ? "Locality average"
+                        : ukLandRegistry.area_fallback_level === "outward_postcode"
+                          ? "Outward postcode average"
+                          : ukLandRegistry.area_fallback_level === "postcode_area"
+                            ? "Postcode area average"
+                            : "Average Area Price"}
+                  </div>
                   <div className="mt-0.5 text-sm font-medium text-zinc-300">
                     {ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0
                       ? formatCurrency(ukLandRegistry.average_area_price, currencySymbol)
                       : "No area transaction data available."}
                   </div>
-                  {(ukLandRegistry.transactions_in_building < 2 || ukLandRegistry.building_average_price == null) && ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0 && (
+                  {ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0 && (
                     <div className="mt-0.5 text-[10px] text-zinc-500">
-                      {ukLandRegistry.transactions_in_building === 0
-                        ? "Postcode-level (no building match)"
-                        : "Postcode-level (building has &lt;2 transactions)"}
+                      {ukLandRegistry.area_transaction_count} transactions (last 5 years)
+                      {ukLandRegistry.area_fallback_level && ukLandRegistry.area_fallback_level !== "postcode" && ukLandRegistry.area_fallback_level !== "none" && (
+                        <span> · {ukLandRegistry.area_fallback_level === "street" ? "Street-level" : ukLandRegistry.area_fallback_level === "locality" ? "Locality" : ukLandRegistry.area_fallback_level === "outward_postcode" ? "Outward postcode" : "Postcode area"} fallback</span>
+                      )}
                     </div>
                   )}
                 </div>

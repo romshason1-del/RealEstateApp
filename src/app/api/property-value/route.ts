@@ -48,7 +48,8 @@ function validateInput(
   const isUK = code === "UK" || code === "GB";
   if (isUK) {
     const pc = (postcode ?? "").trim();
-    if (!pc || pc.length === 0) return { valid: false, error: "postcode is required for UK addresses" };
+    const hasStreetAndCity = !!(city.trim() && street.trim());
+    if ((!pc || pc.length === 0) && !hasStreetAndCity) return { valid: false, error: "postcode or street and town is required for UK addresses" };
     if (pc.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "postcode too long" };
     return { valid: true };
   }

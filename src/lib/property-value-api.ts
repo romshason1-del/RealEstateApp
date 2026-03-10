@@ -48,6 +48,8 @@ export type PropertyValueInsightsResponse = {
     transactions_in_building: number;
     latest_building_transaction: { price: number; date: string; property_type?: string } | null;
     average_area_price: number | null;
+    area_transaction_count: number;
+    area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none";
   };
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
@@ -125,9 +127,10 @@ export async function fetchPropertyValueInsights(
           })();
   const fullAddress = address.trim() || undefined;
   if (isUK) {
-    if (!parsed.postcode) {
+    const hasStreetAndCity = !!(parsed.street.trim() && parsed.city.trim());
+    if (!parsed.postcode && !hasStreetAndCity) {
       return {
-        message: "UK Land Registry requires a postcode. Could not parse postcode from address.",
+        message: "UK Land Registry requires a postcode or street and town. Could not parse from address.",
         debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
       };
     }

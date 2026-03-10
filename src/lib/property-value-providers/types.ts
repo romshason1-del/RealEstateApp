@@ -126,8 +126,12 @@ export type PropertyValueInsightsSuccess = {
     transactions_in_building: number;
     /** Most recent sale in the building. Null if none. */
     latest_building_transaction: { price: number; date: string; property_type?: string } | null;
-    /** Postcode-level average when building has < 2 transactions. Null if no area data. */
+    /** Area average price (postcode or fallback level). Null if no area data. */
     average_area_price: number | null;
+    /** Number of transactions used for area average (last 5 years). */
+    area_transaction_count: number;
+    /** Fallback level when postcode returned 0: street | locality | outward_postcode | postcode_area | postcode | none */
+    area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none";
   };
 }
 
