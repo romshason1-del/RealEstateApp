@@ -376,7 +376,7 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
-  const ukLandRegistry = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none" } }).uk_land_registry : undefined;
+  const ukLandRegistry = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area" } }).uk_land_registry : undefined;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
@@ -679,40 +679,49 @@ export function PropertyValueCard({
           ) : isUK && ukLandRegistry ? (
             <div className="space-y-1.5">
               <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">UK Land Registry Data</div>
+              {(ukLandRegistry.has_building_match === false) && (
+                <div className="rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-300/90">
+                  Area insights – no exact building match
+                </div>
+              )}
               <div className="space-y-1">
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
-                  <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Building Average Price</div>
-                  <div className="mt-0.5 text-sm font-medium text-violet-300">
-                    {ukLandRegistry.building_average_price != null && ukLandRegistry.building_average_price > 0
-                      ? formatCurrency(ukLandRegistry.building_average_price, currencySymbol)
-                      : (ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0)
-                        ? "No recent building transactions in the last 5 years."
-                        : "No building transaction data available."}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
-                  <div className="text-[9px] uppercase tracking-wider text-emerald-400/90">Transactions in Building (Last 5 Years)</div>
-                  <div className="mt-0.5 text-sm font-medium text-emerald-300">
-                    {ukLandRegistry.transactions_in_building}
-                  </div>
-                  {(ukLandRegistry.transactions_in_building === 0 || ukLandRegistry.transactions_in_building == null) && ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0 && (
-                    <div className="mt-0.5 text-[10px] text-emerald-400/70">No recent building transactions in the last 5 years.</div>
-                  )}
-                </div>
-                <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
-                  <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
-                    <FileText className="size-3 shrink-0" aria-hidden />
-                    Latest Building Transaction
-                  </div>
-                  <div className="mt-0.5 text-sm font-medium text-amber-200">
-                    {ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0
-                      ? `${formatCurrency(ukLandRegistry.latest_building_transaction.price, currencySymbol)}${ukLandRegistry.latest_building_transaction.date ? ` · ${formatSaleDate(ukLandRegistry.latest_building_transaction.date)}` : ""}`
-                      : "No building transaction data available."}
-                  </div>
-                  {ukLandRegistry.latest_building_transaction?.property_type && (
-                    <div className="mt-0.5 text-[10px] text-amber-400/70">{ukLandRegistry.latest_building_transaction.property_type}</div>
-                  )}
-                </div>
+                {(ukLandRegistry.has_building_match !== false) && (
+                  <>
+                    <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                      <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Building Average Price</div>
+                      <div className="mt-0.5 text-sm font-medium text-violet-300">
+                        {ukLandRegistry.building_average_price != null && ukLandRegistry.building_average_price > 0
+                          ? formatCurrency(ukLandRegistry.building_average_price, currencySymbol)
+                          : (ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0)
+                            ? "No recent building transactions in the last 5 years."
+                            : "No building transaction data available."}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                      <div className="text-[9px] uppercase tracking-wider text-emerald-400/90">Transactions in Building (Last 5 Years)</div>
+                      <div className="mt-0.5 text-sm font-medium text-emerald-300">
+                        {ukLandRegistry.transactions_in_building}
+                      </div>
+                      {(ukLandRegistry.transactions_in_building === 0 || ukLandRegistry.transactions_in_building == null) && ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0 && (
+                        <div className="mt-0.5 text-[10px] text-emerald-400/70">No recent building transactions in the last 5 years.</div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
+                        <FileText className="size-3 shrink-0" aria-hidden />
+                        Latest Building Transaction
+                      </div>
+                      <div className="mt-0.5 text-sm font-medium text-amber-200">
+                        {ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0
+                          ? `${formatCurrency(ukLandRegistry.latest_building_transaction.price, currencySymbol)}${ukLandRegistry.latest_building_transaction.date ? ` · ${formatSaleDate(ukLandRegistry.latest_building_transaction.date)}` : ""}`
+                          : "No building transaction data available."}
+                      </div>
+                      {ukLandRegistry.latest_building_transaction?.property_type && (
+                        <div className="mt-0.5 text-[10px] text-amber-400/70">{ukLandRegistry.latest_building_transaction.property_type}</div>
+                      )}
+                    </div>
+                  </>
+                )}
                 <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
                   <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">
                     {ukLandRegistry.area_fallback_level === "street"
@@ -739,6 +748,22 @@ export function PropertyValueCard({
                     </div>
                   )}
                 </div>
+                {(ukLandRegistry.has_building_match === false) && (
+                  <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
+                    <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
+                      <FileText className="size-3 shrink-0" aria-hidden />
+                      Latest nearby transaction
+                    </div>
+                    <div className="mt-0.5 text-sm font-medium text-amber-200">
+                      {ukLandRegistry.latest_nearby_transaction != null && ukLandRegistry.latest_nearby_transaction.price > 0
+                        ? `${formatCurrency(ukLandRegistry.latest_nearby_transaction.price, currencySymbol)}${ukLandRegistry.latest_nearby_transaction.date ? ` · ${formatSaleDate(ukLandRegistry.latest_nearby_transaction.date)}` : ""}`
+                        : "No nearby transaction data available."}
+                    </div>
+                    {ukLandRegistry.latest_nearby_transaction?.property_type && (
+                      <div className="mt-0.5 text-[10px] text-amber-400/70">{ukLandRegistry.latest_nearby_transaction.property_type}</div>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="pt-0.5 text-[10px] text-zinc-500">
                 HM Land Registry Price Paid Data. Government open data.
