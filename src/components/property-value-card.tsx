@@ -377,21 +377,21 @@ export function PropertyValueCard({
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
   const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area" } }).uk_land_registry : undefined;
-  const ukLandRegistry =
-    ukLandRegistryRaw ??
-    (isUK && insightsData?.message === "no transaction found"
+  const ukLandRegistryFallback =
+    isUK && insightsData != null && !ukLandRegistryRaw
       ? {
-          building_average_price: null,
+          building_average_price: null as number | null,
           transactions_in_building: 0,
-          latest_building_transaction: null,
-          latest_nearby_transaction: null,
+          latest_building_transaction: null as { price: number; date: string; property_type?: string } | null,
+          latest_nearby_transaction: null as { price: number; date: string; property_type?: string } | null,
           has_building_match: false,
-          average_area_price: null,
+          average_area_price: null as number | null,
           area_transaction_count: 0,
           area_fallback_level: "none" as const,
           fallback_level_used: "area" as const,
         }
-      : undefined);
+      : undefined;
+  const ukLandRegistry = ukLandRegistryRaw ?? ukLandRegistryFallback;
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
