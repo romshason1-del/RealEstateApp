@@ -619,6 +619,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const sortedBuildingAll = [...buildingTxs].sort((a, b) => b.dateMs - a.dateMs);
     const latestBuilding = sortedBuildingAll[0] ?? null;
 
+    const sortedAreaByDate = [...items].sort((a, b) => b.dateMs - a.dateMs);
+    const latestFromArea = sortedAreaByDate[0] ?? null;
+    const hasBuildingMatch = buildingTxs.length > 0;
+
     let buildingAveragePrice: number | null = null;
     if (building5y.length >= 2) {
       const sum = building5y.reduce((s, t) => s + t.amount, 0);
@@ -636,21 +640,6 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     else if (fuzzyMatches.length > 0) addressMatchMode = "fuzzy";
     else if (postcodeResultsCount > 0) addressMatchMode = "postcode_only";
 
-    const ukDebug: PropertyValueInsightsDebug = {
-      normalized_postcode: normalizedPostcode,
-      postcode_query_executed: queryMode,
-      postcode_query_url: SPARQL_ENDPOINT,
-      postcode_query_raw_result_count: postcodeQueryRawResultCount,
-      postcode_results_count: postcodeResultsCount,
-      exact_building_matches_count: exactMatches.length,
-      fuzzy_building_matches_count: fuzzyMatches.length,
-      address_match_mode: addressMatchMode,
-      postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
-    };
-    if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
-      console.debug("[UK Land Registry] postcode:", normalizedPostcode, "query_mode:", queryMode, "raw_count:", postcodeQueryRawResultCount);
-    }
-
     const areaFallbackLevel =
       queryMode === "exact"
         ? ("postcode" as const)
@@ -664,6 +653,30 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
                 ? ("locality" as const)
                 : ("none" as const);
 
+    const fallbackLevelUsed: "building" | "postcode" | "locality" | "area" = hasBuildingMatch
+      ? "building"
+      : queryMode === "exact" || queryMode === "outward_postcode"
+        ? "postcode"
+        : queryMode === "street" || queryMode === "locality"
+          ? "locality"
+          : "area";
+
+    const ukDebug: PropertyValueInsightsDebug = {
+      normalized_postcode: normalizedPostcode,
+      postcode_query_executed: queryMode,
+      postcode_query_url: SPARQL_ENDPOINT,
+      postcode_query_raw_result_count: postcodeQueryRawResultCount,
+      postcode_results_count: postcodeResultsCount,
+      exact_building_matches_count: exactMatches.length,
+      fuzzy_building_matches_count: fuzzyMatches.length,
+      address_match_mode: addressMatchMode,
+      fallback_level_used: fallbackLevelUsed,
+      postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
+    };
+    if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+      console.debug("[UK Land Registry] postcode:", normalizedPostcode, "query_mode:", queryMode, "raw_count:", postcodeQueryRawResultCount);
+    }
+
     const ukData = {
       building_average_price: buildingAveragePrice,
       transactions_in_building: building5y.length,
@@ -674,11 +687,22 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             property_type: latestBuilding.category || undefined,
           }
         : null,
+      latest_nearby_transaction:
+        !hasBuildingMatch && latestFromArea
+          ? {
+              price: latestFromArea.amount,
+              date: latestFromArea.date || latestFromArea.dateStr,
+              property_type: latestFromArea.category || undefined,
+            }
+          : null,
+      has_building_match: hasBuildingMatch,
       average_area_price: averageAreaPrice,
       area_transaction_count: postcode5y.length,
       area_fallback_level: areaFallbackLevel,
+      fallback_level_used: fallbackLevelUsed,
     };
 
+    const effectiveLatest = hasBuildingMatch ? latestBuilding : (latestFromArea ?? latestBuilding);
     const success: PropertyValueInsightsSuccess = {
       address: {
         city: city || postcode,
@@ -686,10 +710,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         house_number: houseNumber,
       },
       match_quality: buildingTxs.length > 0 ? "exact_building" : "no_reliable_match",
-      latest_transaction: latestBuilding
+      latest_transaction: effectiveLatest
         ? {
-            transaction_date: latestBuilding.date || latestBuilding.dateStr,
-            transaction_price: latestBuilding.amount,
+            transaction_date: effectiveLatest.date || effectiveLatest.dateStr,
+            transaction_price: effectiveLatest.amount,
             property_size: 0,
             price_per_m2: 0,
           }
@@ -703,7 +727,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       building_summary_last_3_years: {
         transactions_count_last_3_years: building5y.length,
         transactions_count_last_5_years: building5y.length,
-        latest_building_transaction_price: latestBuilding?.amount ?? 0,
+        latest_building_transaction_price: effectiveLatest?.amount ?? 0,
         average_apartment_value_today: buildingAveragePrice ?? averageAreaPrice ?? 0,
       },
       market_value_source: "exact_provider",

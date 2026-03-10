@@ -47,9 +47,12 @@ export type PropertyValueInsightsResponse = {
     building_average_price: number | null;
     transactions_in_building: number;
     latest_building_transaction: { price: number; date: string; property_type?: string } | null;
+    latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null;
+    has_building_match: boolean;
     average_area_price: number | null;
     area_transaction_count: number;
     area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none";
+    fallback_level_used?: "building" | "postcode" | "locality" | "area";
   };
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
