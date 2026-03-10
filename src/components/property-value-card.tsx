@@ -685,7 +685,9 @@ export function PropertyValueCard({
                   <div className="mt-0.5 text-sm font-medium text-violet-300">
                     {ukLandRegistry.building_average_price != null && ukLandRegistry.building_average_price > 0
                       ? formatCurrency(ukLandRegistry.building_average_price, currencySymbol)
-                      : "No building transaction data available."}
+                      : (ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0)
+                        ? "No recent building transactions in the last 5 years."
+                        : "No building transaction data available."}
                   </div>
                 </div>
                 <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
@@ -693,6 +695,9 @@ export function PropertyValueCard({
                   <div className="mt-0.5 text-sm font-medium text-emerald-300">
                     {ukLandRegistry.transactions_in_building}
                   </div>
+                  {(ukLandRegistry.transactions_in_building === 0 || ukLandRegistry.transactions_in_building == null) && ukLandRegistry.latest_building_transaction != null && ukLandRegistry.latest_building_transaction.price > 0 && (
+                    <div className="mt-0.5 text-[10px] text-emerald-400/70">No recent building transactions in the last 5 years.</div>
+                  )}
                 </div>
                 <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
                   <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-amber-400/90">
