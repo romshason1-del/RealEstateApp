@@ -118,6 +118,16 @@ export type PropertyValueInsightsSuccess = {
   property_details?: PropertyDetails;
   /** US: Building requires unit number for condo/multi-unit */
   unit_required?: boolean;
+  /** US: Extended market data (Zillow/Redfin fallback) */
+  estimated_area_price?: number | null;
+  median_sale_price?: number | null;
+  median_price_per_sqft?: number | null;
+  market_trend?: { change_1y_percent: number } | null;
+  inventory_signal?: number | null;
+  days_on_market?: number | null;
+  data_sources?: ("RentCast" | "Zillow" | "Redfin")[];
+  /** US: high = RentCast + market data, medium = Zillow+Redfin agreement, low = single-source regional */
+  us_match_confidence?: "high" | "medium" | "low";
   /** UK: Land Registry Price Paid Data */
   uk_land_registry?: {
     /** Average sale price for the exact building (last 5 years). Null if insufficient data. */
