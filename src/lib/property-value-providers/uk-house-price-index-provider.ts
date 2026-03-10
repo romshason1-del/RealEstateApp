@@ -122,19 +122,19 @@ LIMIT 25
 `.trim();
 }
 
-/** Fallback query without previous year (some endpoints may not support duration arithmetic) */
+/** Build HPI query. UK HPI: observations link to region via refRegion. */
 function buildHPISparqlQuerySimple(regionSlug: string): string {
   const regionUri = `http://landregistry.data.gov.uk/id/region/${regionSlug}`;
   return `
 PREFIX ukhpi: <http://landregistry.data.gov.uk/def/ukhpi/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 SELECT ?refMonth ?averagePrice ?housePriceIndex
 WHERE {
   ?obs ukhpi:refRegion <${regionUri}> ;
        ukhpi:refMonth ?refMonth ;
-       ukhpi:averagePrice ?averagePrice ;
        ukhpi:housePriceIndex ?housePriceIndex .
+  OPTIONAL { ?obs ukhpi:averagePrice ?averagePrice }
 }
 ORDER BY DESC(?refMonth)
 LIMIT 25
@@ -190,15 +190,22 @@ export async function fetchUKHPIForLocality(city: string, postcode?: string): Pr
     const bindings = json?.results?.bindings ?? [];
     if (bindings.length === 0) return null;
 
-    const latest = bindings[0];
+    let latest: Record<string, SparqlBinding> | null = null;
+    let averagePrice = 0;
+    for (const b of bindings) {
+      const avgStr = getBinding(b, "averagePrice");
+      const avg = parseFloat(avgStr.replace(/[^\d.]/g, ""));
+      if (Number.isFinite(avg) && avg > 0) {
+        latest = b;
+        averagePrice = avg;
+        break;
+      }
+    }
+    if (!latest || averagePrice <= 0) return null;
+
     const refMonth = getBinding(latest, "refMonth");
-    const avgPriceStr = getBinding(latest, "averagePrice");
     const indexStr = getBinding(latest, "housePriceIndex");
-
-    const averagePrice = parseFloat(avgPriceStr.replace(/[^\d.]/g, ""));
     const housePriceIndex = parseFloat(indexStr.replace(/[^\d.]/g, ""));
-
-    if (!Number.isFinite(averagePrice) || averagePrice <= 0) return null;
 
     // Compute YoY trend from index if we have multiple months
     let change1yPercent = 0;

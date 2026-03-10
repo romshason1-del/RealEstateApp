@@ -277,6 +277,36 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    if (isUK && response.uk_land_registry && typeof response.uk_land_registry === "object") {
+      const uk = response.uk_land_registry as {
+        average_area_price?: number | null;
+        area_transaction_count?: number;
+        area_data_source?: string;
+      };
+      const hasNoUsableAreaData =
+        (uk.average_area_price == null || uk.average_area_price <= 0) && (uk.area_transaction_count ?? 0) === 0;
+      if (hasNoUsableAreaData) {
+        try {
+          const hpiResult = await fetchUKHPIForLocality(city.trim(), postcode.trim() || undefined);
+          if (hpiResult) {
+            response = {
+              ...response,
+              uk_land_registry: {
+                ...(response.uk_land_registry as Record<string, unknown>),
+                average_area_price: hpiResult.average_area_price,
+                median_area_price: hpiResult.median_area_price,
+                price_trend: hpiResult.price_trend,
+                area_data_source: "HPI",
+                match_confidence: "medium",
+              },
+            };
+          }
+        } catch {
+          // HPI failure must not break the property card
+        }
+      }
+    }
+
     if ("address" in result && result.address) {
       CACHE.set(cacheKey, { data: response, ts: Date.now() });
     }
