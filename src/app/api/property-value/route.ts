@@ -159,6 +159,27 @@ export async function GET(request: NextRequest) {
     if ("message" in result && result.message === "no transaction found") {
       if (isUK && result && typeof result === "object" && "uk_land_registry" in result && (result as { uk_land_registry?: unknown }).uk_land_registry) {
         // UK: never return 404 when we have uk_land_registry (postcode data exists)
+      } else if (isUK) {
+        // UK: return 200 with minimal uk_land_registry so frontend shows "Area insights – no exact building match" instead of "No property data found"
+        const noMatchResult = result as { message: string; debug?: Record<string, unknown> };
+        const augmented = {
+          ...noMatchResult,
+          address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
+          uk_land_registry: {
+            building_average_price: null,
+            transactions_in_building: 0,
+            latest_building_transaction: null,
+            latest_nearby_transaction: null,
+            has_building_match: false,
+            average_area_price: null,
+            area_transaction_count: 0,
+            area_fallback_level: "none" as const,
+            fallback_level_used: "area" as const,
+          },
+          data_source: "live" as const,
+        };
+        CACHE.set(cacheKey, { data: augmented, ts: Date.now() });
+        return NextResponse.json(augmented);
       } else {
         return NextResponse.json(result, { status: 404 });
       }
