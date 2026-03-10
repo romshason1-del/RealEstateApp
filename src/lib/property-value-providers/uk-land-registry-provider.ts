@@ -245,8 +245,8 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const building5y = buildingTxs.filter((t) => t.dateMs >= fiveYearsAgo);
     const postcode5y = items.filter((t) => t.dateMs >= fiveYearsAgo);
 
-    const sortedBuilding = [...building5y].sort((a, b) => b.dateMs - a.dateMs);
-    const latestBuilding = sortedBuilding[0] ?? null;
+    const sortedBuildingAll = [...buildingTxs].sort((a, b) => b.dateMs - a.dateMs);
+    const latestBuilding = sortedBuildingAll[0] ?? null;
 
     let buildingAveragePrice: number | null = null;
     if (building5y.length > 0) {
