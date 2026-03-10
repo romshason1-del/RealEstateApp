@@ -376,7 +376,7 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
-  const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area" } }).uk_land_registry : undefined;
+  const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area"; match_confidence?: "high" | "medium" | "low" } }).uk_land_registry : undefined;
   const ukLandRegistryFallback =
     isUK && insightsData != null && !ukLandRegistryRaw
       ? {
@@ -389,6 +389,7 @@ export function PropertyValueCard({
           area_transaction_count: 0,
           area_fallback_level: "none" as const,
           fallback_level_used: "area" as const,
+          match_confidence: "low" as const,
         }
       : undefined;
   const ukLandRegistry = ukLandRegistryRaw ?? ukLandRegistryFallback;
@@ -693,7 +694,29 @@ export function PropertyValueCard({
             </div>
           ) : isUK && ukLandRegistry ? (
             <div className="space-y-1.5">
-              <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">UK Land Registry Data</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">UK Land Registry Data</div>
+                {ukLandRegistry.match_confidence && (
+                  <span
+                    className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider ${
+                      ukLandRegistry.match_confidence === "high"
+                        ? "bg-emerald-500/20 text-emerald-400"
+                        : ukLandRegistry.match_confidence === "medium"
+                          ? "bg-amber-500/20 text-amber-400"
+                          : "bg-zinc-500/20 text-zinc-400"
+                    }`}
+                    title={
+                      ukLandRegistry.match_confidence === "high"
+                        ? "Exact building match"
+                        : ukLandRegistry.match_confidence === "medium"
+                          ? "Postcode or locality fallback"
+                          : "Area-only fallback"
+                    }
+                  >
+                    {ukLandRegistry.match_confidence} confidence
+                  </span>
+                )}
+              </div>
               {(ukLandRegistry.has_building_match === false) && (
                 <div className="rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] text-amber-300/90">
                   Area insights – no exact building match
