@@ -433,22 +433,6 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       }
     }
     const postcodeQueryRawResultCount = bindings.length;
-    if (bindings.length === 0) {
-      return {
-        message: "no transaction found",
-        debug: {
-          postcode,
-          normalized_postcode: normalizedPostcode,
-          postcode_query_executed: queryMode,
-          postcode_query_url: SPARQL_ENDPOINT,
-          postcode_query_raw_result_count: postcodeQueryRawResultCount,
-          records_fetched: 0,
-          postcode_results_count: 0,
-        },
-      } as PropertyValueInsightsNoMatch;
-    }
-    const now = Date.now();
-    const fiveYearsAgo = now - FIVE_YEARS_MS;
 
     type Tx = {
       date: string;
@@ -462,41 +446,64 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       addrTown: string;
     };
 
-    const seen = new Set<string>();
-    const items: Tx[] = [];
-
-    for (const b of bindings) {
-      const dateStr = getBinding(b, "date");
-      const date = parseDate(dateStr);
-      const amount = parseAmount(getBinding(b, "amount"));
-      const category = getBinding(b, "category");
-      const paon = getBinding(b, "paon");
-      const saon = getBinding(b, "saon");
-      const addrStreet = getBinding(b, "street");
-      const addrTown = getBinding(b, "town");
-
-      if (amount <= 0 || !isValidTransaction(category)) continue;
-
-      const dedupeKey = `${paon}|${saon}|${addrStreet}|${dateStr}|${amount}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
-
-      const dateMs = date ? new Date(date).getTime() : 0;
-      items.push({
-        date,
-        dateStr,
-        amount,
-        category,
-        dateMs,
-        paon,
-        saon,
-        addrStreet: addrStreet.toLowerCase(),
-        addrTown: addrTown.toLowerCase(),
-      });
+    function processBindingsToItems(raw: Record<string, SparqlBinding>[]): Tx[] {
+      const seen = new Set<string>();
+      const out: Tx[] = [];
+      for (const b of raw) {
+        const dateStr = getBinding(b, "date");
+        const date = parseDate(dateStr);
+        const amount = parseAmount(getBinding(b, "amount"));
+        const category = getBinding(b, "category");
+        const paon = getBinding(b, "paon");
+        const saon = getBinding(b, "saon");
+        const addrStreet = getBinding(b, "street");
+        const addrTown = getBinding(b, "town");
+        if (amount <= 0 || !isValidTransaction(category)) continue;
+        const dedupeKey = `${paon}|${saon}|${addrStreet}|${dateStr}|${amount}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        const dateMs = date ? new Date(date).getTime() : 0;
+        out.push({
+          date,
+          dateStr,
+          amount,
+          category,
+          dateMs,
+          paon,
+          saon,
+          addrStreet: addrStreet.toLowerCase(),
+          addrTown: addrTown.toLowerCase(),
+        });
+      }
+      return out;
     }
 
-    const postcodeResultsCount = items.length;
-    if (postcodeResultsCount === 0) {
+    let items = processBindingsToItems(bindings);
+    for (const step of fallbacks) {
+      if (items.length > 0) break;
+      query = step.query;
+      queryMode = step.mode;
+      try {
+        const resFb = await fetch(SPARQL_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/sparql-results+json",
+          },
+          body: new URLSearchParams({ query }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (resFb.ok) {
+          const jsonFb = await resFb.json();
+          bindings = jsonFb?.results?.bindings ?? [];
+          items = processBindingsToItems(bindings);
+        }
+      } catch {
+        // Fallback failed, try next
+      }
+    }
+
+    if (bindings.length === 0 && items.length === 0) {
       return {
         message: "no transaction found",
         debug: {
@@ -505,12 +512,30 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           postcode_query_executed: queryMode,
           postcode_query_url: SPARQL_ENDPOINT,
           postcode_query_raw_result_count: postcodeQueryRawResultCount,
+          records_fetched: 0,
+          postcode_results_count: 0,
+        },
+      } as PropertyValueInsightsNoMatch;
+    }
+
+    if (items.length === 0) {
+      return {
+        message: "no transaction found",
+        debug: {
+          postcode,
+          normalized_postcode: normalizedPostcode,
+          postcode_query_executed: queryMode,
+          postcode_query_url: SPARQL_ENDPOINT,
+          postcode_query_raw_result_count: bindings.length,
           records_fetched: bindings.length,
           postcode_results_count: 0,
         },
       } as PropertyValueInsightsNoMatch;
     }
 
+    const now = Date.now();
+    const fiveYearsAgo = now - FIVE_YEARS_MS;
+    const postcodeResultsCount = items.length;
     const cityLower = city.toLowerCase();
 
     const exactMatches = items.filter((t) =>
