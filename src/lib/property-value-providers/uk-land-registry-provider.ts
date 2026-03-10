@@ -82,8 +82,22 @@ function isValidTransaction(category: string): boolean {
   return !INVALID_CATEGORY_PATTERNS.some((p) => p.test(cat));
 }
 
-function buildSparqlQuery(postcode: string): string {
-  const normalized = postcode.trim().replace(/\s+/g, " ").toUpperCase();
+/**
+ * Normalize UK postcode for Land Registry query.
+ * Format: outward (2-4 chars) + space + inward (3 chars). E.g. BA1 1BN, SL7 1AW.
+ */
+function normalizeUKPostcode(postcode: string): string {
+  let s = (postcode ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+  s = s.replace(/[^\w\s]/g, "").replace(/\s+/g, "");
+  if (s.length >= 5) {
+    s = s.slice(0, -3) + " " + s.slice(-3);
+  }
+  return s.trim();
+}
+
+/** Build SPARQL query using exact postcode match (VALUES) */
+function buildSparqlQueryExact(postcode: string): string {
+  const normalized = normalizeUKPostcode(postcode);
   return `
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
@@ -94,6 +108,34 @@ SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
 WHERE {
   VALUES ?postcode {"${normalized}"^^xsd:string}
   ?addr lrcommon:postcode ?postcode.
+  ?transx lrppi:propertyAddress ?addr ;
+          lrppi:pricePaid ?amount ;
+          lrppi:transactionDate ?date ;
+          lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?addr lrcommon:county ?county }
+  OPTIONAL { ?addr lrcommon:paon ?paon }
+  OPTIONAL { ?addr lrcommon:saon ?saon }
+  OPTIONAL { ?addr lrcommon:street ?street }
+  OPTIONAL { ?addr lrcommon:town ?town }
+}
+ORDER BY DESC(?date)
+LIMIT 500
+`.trim();
+}
+
+/** Fallback: use outward code (sector) if exact postcode returns no results */
+function buildSparqlQueryOutward(postcode: string): string {
+  const normalized = normalizeUKPostcode(postcode);
+  const outward = normalized.split(/\s/)[0] || normalized.replace(/\s/g, "").slice(0, -3) || normalized;
+  return `
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
+PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+WHERE {
+  ?addr lrcommon:postcode ?postcode.
+  FILTER(STRSTARTS(STR(?postcode), "${outward}"))
   ?transx lrppi:propertyAddress ?addr ;
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
@@ -229,7 +271,9 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       } as PropertyValueInsightsError;
     }
 
-    const query = buildSparqlQuery(postcode);
+    const normalizedPostcode = normalizeUKPostcode(postcode);
+    let query = buildSparqlQueryExact(normalizedPostcode);
+    let queryMode = "exact";
 
     let res: Response;
     try {
@@ -247,7 +291,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: `Failed to fetch UK Land Registry data: ${msg}`,
         error: "DATA_SOURCE_UNAVAILABLE",
-        debug: { request_error: msg },
+        debug: { request_error: msg, normalized_postcode: normalizedPostcode },
       } as PropertyValueInsightsError;
     }
 
@@ -255,7 +299,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: `UK Land Registry returned ${res.status}`,
         error: "DATA_SOURCE_UNAVAILABLE",
-        debug: { http_status: res.status },
+        debug: { http_status: res.status, normalized_postcode: normalizedPostcode },
       } as PropertyValueInsightsError;
     }
 
@@ -269,14 +313,44 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       } as PropertyValueInsightsError;
     }
 
-    const bindings = json?.results?.bindings ?? [];
+    let bindings = json?.results?.bindings ?? [];
+
+    if (bindings.length === 0) {
+      query = buildSparqlQueryOutward(normalizedPostcode);
+      queryMode = "outward";
+      try {
+        const res2 = await fetch(SPARQL_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/sparql-results+json",
+          },
+          body: new URLSearchParams({ query }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (res2.ok) {
+          const json2 = await res2.json();
+          bindings = json2?.results?.bindings ?? [];
+        }
+      } catch {
+        // Fallback failed, continue with empty bindings
+      }
+    }
+    const postcodeQueryRawResultCount = bindings.length;
     if (bindings.length === 0) {
       return {
         message: "no transaction found",
-        debug: { postcode, records_fetched: 0, postcode_results_count: 0 },
+        debug: {
+          postcode,
+          normalized_postcode: normalizedPostcode,
+          postcode_query_executed: queryMode,
+          postcode_query_url: SPARQL_ENDPOINT,
+          postcode_query_raw_result_count: postcodeQueryRawResultCount,
+          records_fetched: 0,
+          postcode_results_count: 0,
+        },
       } as PropertyValueInsightsNoMatch;
     }
-
     const now = Date.now();
     const fiveYearsAgo = now - FIVE_YEARS_MS;
 
@@ -329,7 +403,15 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     if (postcodeResultsCount === 0) {
       return {
         message: "no transaction found",
-        debug: { postcode, records_fetched: bindings.length, postcode_results_count: 0 },
+        debug: {
+          postcode,
+          normalized_postcode: normalizedPostcode,
+          postcode_query_executed: queryMode,
+          postcode_query_url: SPARQL_ENDPOINT,
+          postcode_query_raw_result_count: postcodeQueryRawResultCount,
+          records_fetched: bindings.length,
+          postcode_results_count: 0,
+        },
       } as PropertyValueInsightsNoMatch;
     }
 
@@ -369,11 +451,19 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     else if (postcodeResultsCount > 0) addressMatchMode = "postcode_only";
 
     const ukDebug: PropertyValueInsightsDebug = {
+      normalized_postcode: normalizedPostcode,
+      postcode_query_executed: queryMode,
+      postcode_query_url: SPARQL_ENDPOINT,
+      postcode_query_raw_result_count: postcodeQueryRawResultCount,
       postcode_results_count: postcodeResultsCount,
       exact_building_matches_count: exactMatches.length,
       fuzzy_building_matches_count: fuzzyMatches.length,
       address_match_mode: addressMatchMode,
+      postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
     };
+    if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+      console.debug("[UK Land Registry] postcode:", normalizedPostcode, "query_mode:", queryMode, "raw_count:", postcodeQueryRawResultCount);
+    }
 
     const ukData = {
       building_average_price: buildingAveragePrice,

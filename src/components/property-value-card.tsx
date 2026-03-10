@@ -80,6 +80,10 @@ type DebugPanelProps = {
   canonical: { cityKey: string; streetKey: string; houseKey: string };
   insightsData: {
     debug?: {
+      normalized_postcode?: string;
+      postcode_query_executed?: string;
+      postcode_query_url?: string;
+      postcode_query_raw_result_count?: number;
       postcode_results_count?: number;
       exact_building_matches_count?: number;
       fuzzy_building_matches_count?: number;
@@ -254,6 +258,18 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
         )}
         {d?.rejection_reason && (
           <div><span className="text-zinc-500">Rejection reason:</span> <span className="text-amber-300/90">{d.rejection_reason}</span></div>
+        )}
+        {d?.normalized_postcode != null && (
+          <div><span className="text-zinc-500">Normalized postcode:</span> {String(d.normalized_postcode)}</div>
+        )}
+        {d?.postcode_query_executed != null && (
+          <div><span className="text-zinc-500">Postcode query mode:</span> {String(d.postcode_query_executed)}</div>
+        )}
+        {d?.postcode_query_url != null && (
+          <div><span className="text-zinc-500">Postcode query URL:</span> {String(d.postcode_query_url)}</div>
+        )}
+        {d?.postcode_query_raw_result_count != null && (
+          <div><span className="text-zinc-500">Postcode raw result count:</span> {d.postcode_query_raw_result_count}</div>
         )}
         {d?.postcode_results_count != null && (
           <div><span className="text-zinc-500">Postcode results:</span> {d.postcode_results_count}</div>

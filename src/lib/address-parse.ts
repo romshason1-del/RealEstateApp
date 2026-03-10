@@ -106,7 +106,11 @@ export function parseUKAddressFromFullString(
 
   const postcodeRe = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i;
   const postcodeMatch = withoutUK.match(postcodeRe);
-  const postcode = postcodeMatch ? postcodeMatch[1].replace(/\s+/g, " ").trim().toUpperCase() : "";
+  let postcode = postcodeMatch ? postcodeMatch[1].replace(/\s+/g, " ").trim().toUpperCase() : "";
+  if (postcode && postcode.length >= 5) {
+    const noSpace = postcode.replace(/\s/g, "");
+    postcode = noSpace.slice(0, -3) + " " + noSpace.slice(-3);
+  }
 
   const beforePostcode = postcodeMatch ? withoutUK.slice(0, postcodeMatch.index).trim() : withoutUK;
   const parts = beforePostcode.split(",").map((p) => p.trim()).filter(Boolean);
