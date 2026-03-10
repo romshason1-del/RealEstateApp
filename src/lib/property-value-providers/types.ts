@@ -120,9 +120,14 @@ export type PropertyValueInsightsSuccess = {
   unit_required?: boolean;
   /** UK: Land Registry Price Paid Data */
   uk_land_registry?: {
-    latest_transaction: { price: number; date: string; property_type?: string };
-    transactions_last_5_years: number;
-    average_price_area: number;
+    /** Average sale price for the exact building (last 5 years). Null if insufficient data. */
+    building_average_price: number | null;
+    /** Number of valid transactions in the building (last 5 years). */
+    transactions_in_building: number;
+    /** Most recent sale in the building. Null if none. */
+    latest_building_transaction: { price: number; date: string; property_type?: string } | null;
+    /** Postcode-level average when building has < 2 transactions. Null if no area data. */
+    average_area_price: number | null;
   };
 }
 
