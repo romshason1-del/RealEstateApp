@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
-import { parseAddressFromFullString, parseUSAddressFromFullString } from "@/lib/address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
@@ -24,11 +24,13 @@ function buildCacheKey(
   lat?: number,
   lng?: number,
   state?: string,
-  zip?: string
+  zip?: string,
+  postcode?: string
 ): string {
   const parts = [city.trim().toLowerCase(), street.trim().toLowerCase(), houseNumber.trim()];
   if (state) parts.push(state.trim().toUpperCase());
   if (zip) parts.push(zip.trim());
+  if (postcode) parts.push(postcode.trim().toUpperCase());
   const base = parts.join("|");
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
     return `${base}|${lat}|${lng}`;
@@ -36,7 +38,20 @@ function buildCacheKey(
   return base;
 }
 
-function validateInput(city: string, street: string): { valid: boolean; error?: string } {
+function validateInput(
+  city: string,
+  street: string,
+  countryCode?: string,
+  postcode?: string
+): { valid: boolean; error?: string } {
+  const code = (countryCode ?? "").toUpperCase();
+  const isUK = code === "UK" || code === "GB";
+  if (isUK) {
+    const pc = (postcode ?? "").trim();
+    if (!pc || pc.length === 0) return { valid: false, error: "postcode is required for UK addresses" };
+    if (pc.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "postcode too long" };
+    return { valid: true };
+  }
   if (!city || typeof city !== "string" || city.trim().length === 0) {
     return { valid: false, error: "city is required" };
   }
@@ -56,6 +71,7 @@ export async function GET(request: NextRequest) {
   let houseNumber = searchParams.get("houseNumber") ?? searchParams.get("house_number") ?? "";
   let state = searchParams.get("state") ?? "";
   let zip = searchParams.get("zip") ?? searchParams.get("zipCode") ?? "";
+  let postcode = searchParams.get("postcode") ?? searchParams.get("postCode") ?? "";
   const addressParam = searchParams.get("address") ?? "";
   const countryCode = searchParams.get("countryCode") ?? searchParams.get("country") ?? "IL";
   const latParam = searchParams.get("latitude");
@@ -72,6 +88,11 @@ export async function GET(request: NextRequest) {
       houseNumber = parsed.houseNumber || houseNumber;
       state = parsed.state || state;
       zip = parsed.zip || zip;
+    } else if (code === "UK" || code === "GB") {
+      const parsed = parseUKAddressFromFullString(addressParam);
+      street = parsed.street || street;
+      city = parsed.city || city;
+      postcode = parsed.postcode || postcode;
     } else {
       if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);
@@ -82,7 +103,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const validation = validateInput(city.trim(), street.trim());
+  const validation = validateInput(city.trim(), street.trim(), countryCode, postcode.trim() || zip.trim());
   if (!validation.valid) {
     return NextResponse.json(
       { message: validation.error, error: "INVALID_INPUT" },
@@ -90,7 +111,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip);
+  const ukPostcode = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB"
+    ? (postcode.trim() || zip.trim())
+    : undefined;
+  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode);
   const isUS = (countryCode ?? "").toUpperCase() === "US";
   const usMockMode = isUS && isUSMockEnabled();
 
@@ -108,6 +132,7 @@ export async function GET(request: NextRequest) {
         houseNumber: houseNumber.trim(),
         state: state.trim() || undefined,
         zip: zip.trim() || undefined,
+        postcode: postcode.trim() || zip.trim() || undefined,
         latitude: Number.isFinite(latitude) ? latitude : undefined,
         longitude: Number.isFinite(longitude) ? longitude : undefined,
         fullAddress: addressParam || undefined,

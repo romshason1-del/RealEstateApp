@@ -11,8 +11,10 @@ export type PropertyValueInput = {
   apartmentNumber?: string;
   /** US: 2-letter state code (e.g. FL) */
   state?: string;
-  /** US: ZIP code (e.g. 33139) */
+  /** US: ZIP code (e.g. 33139). UK: postcode (e.g. SW1A 2AA) */
   zip?: string;
+  /** UK: postcode if available (e.g. SW1A 2AA) */
+  postcode?: string;
   latitude?: number;
   longitude?: number;
   resolvedAddress?: { city: string; street: string; houseNumber?: string; apartmentNumber?: string };
@@ -116,7 +118,13 @@ export type PropertyValueInsightsSuccess = {
   property_details?: PropertyDetails;
   /** US: Building requires unit number for condo/multi-unit */
   unit_required?: boolean;
-};
+  /** UK: Land Registry Price Paid Data */
+  uk_land_registry?: {
+    latest_transaction: { price: number; date: string; property_type?: string };
+    transactions_last_5_years: number;
+    average_price_area: number;
+  };
+}
 
 export type PropertyValueInsightsNoMatch = {
   message: "no transaction found" | "no reliable exact match found";

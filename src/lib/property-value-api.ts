@@ -5,7 +5,7 @@
  * Uses ONLY official Israeli government data. Never returns street-level or nearby data.
  */
 
-import { parseAddressFromFullString, parseUSAddressFromFullString } from "./address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "./address-parse";
 import { toCanonicalAddress } from "./address-canonical";
 
 export type PropertyValueInsightsResponse = {
@@ -43,6 +43,11 @@ export type PropertyValueInsightsResponse = {
   };
   data_source?: "live" | "cache" | "mock";
   market_trend?: { hpi_index: number; change_1y_percent: number };
+  uk_land_registry?: {
+    latest_transaction: { price: number; date: string; property_type?: string };
+    transactions_last_5_years: number;
+    average_price_area: number;
+  };
   debug?: {
     raw_input_address: { city: string; street: string; house_number: string };
     canonical_address?: { city_key: string; street_key: string; house_key: string };
@@ -101,15 +106,31 @@ export async function fetchPropertyValueInsights(
   }
 
   const code = (options?.countryCode ?? "").toUpperCase();
+  const isUK = code === "UK" || code === "GB";
   const parsed =
     code === "US"
       ? (() => {
           const us = parseUSAddressFromFullString(address);
-          return { city: us.city, street: us.street, houseNumber: us.houseNumber };
+          return { city: us.city, street: us.street, houseNumber: us.houseNumber, postcode: "" };
         })()
-      : parseAddressFromFullString(address);
+      : isUK
+        ? (() => {
+            const uk = parseUKAddressFromFullString(address);
+            return { city: uk.city, street: uk.street, houseNumber: "", postcode: uk.postcode };
+          })()
+        : (() => {
+            const g = parseAddressFromFullString(address);
+            return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: "" };
+          })();
   const fullAddress = address.trim() || undefined;
-  if (!parsed.city || !parsed.street) {
+  if (isUK) {
+    if (!parsed.postcode) {
+      return {
+        message: "UK Land Registry requires a postcode. Could not parse postcode from address.",
+        debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
+      };
+    }
+  } else if (!parsed.city || !parsed.street) {
     return {
       message: "no reliable exact match found",
       debug: {
@@ -143,7 +164,7 @@ export async function fetchPropertyValueInsights(
       error: "PARSE_ERROR",
     }));
 
-    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.neighborhood_stats)) {
+    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.neighborhood_stats || data.uk_land_registry)) {
       CACHE.set(key, { data, ts: Date.now() });
     }
 

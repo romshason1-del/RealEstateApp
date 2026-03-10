@@ -47,7 +47,18 @@ export async function getPropertyValueInsights(
     houseNumber = input.resolvedAddress.houseNumber?.trim() ?? houseNumber;
   }
 
-  if (!city || !street) {
+  const code = (countryCode ?? "").toUpperCase();
+  const isUK = code === "UK" || code === "GB";
+  const postcode = (input.postcode ?? input.zip ?? "").trim();
+
+  if (isUK) {
+    if (!postcode) {
+      return {
+        message: "UK Land Registry requires a postcode to look up transactions.",
+        error: "INVALID_INPUT",
+      };
+    }
+  } else if (!city || !street) {
     return {
       message: "Address must include city and street. Coordinates should be resolved to a structured address first.",
       error: "INVALID_INPUT",
@@ -56,7 +67,6 @@ export async function getPropertyValueInsights(
 
   const provider = getPropertyDataProvider(countryCode);
   if (!provider) {
-    const code = (countryCode ?? "").toUpperCase();
     const debug =
       code === "US"
         ? {
@@ -80,6 +90,7 @@ export async function getPropertyValueInsights(
     city,
     street,
     houseNumber,
+    postcode: isUK ? postcode : input.postcode ?? input.zip,
   });
 }
 

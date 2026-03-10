@@ -92,3 +92,33 @@ export function parseUSAddressFromFullString(
 
   return { houseNumber, street, city, state, zip };
 }
+
+/**
+ * UK address format: "10 Downing Street, London SW1A 2AA" or "123 High Street, Manchester M1 4BT"
+ * Extracts street, city, postcode. UK postcode: e.g. SW1A 2AA, PL6 8RU, M1 4BT.
+ */
+export function parseUKAddressFromFullString(
+  address: string
+): { street: string; city: string; postcode: string } {
+  const trimmed = address.trim().replace(/\s+/g, " ");
+  const withoutUK = trimmed.replace(/,?\s*(UK|United Kingdom|England|Scotland|Wales|Northern Ireland)\s*$/i, "").trim();
+  if (!withoutUK) return { street: "", city: "", postcode: "" };
+
+  const postcodeRe = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i;
+  const postcodeMatch = withoutUK.match(postcodeRe);
+  const postcode = postcodeMatch ? postcodeMatch[1].replace(/\s+/g, " ").trim().toUpperCase() : "";
+
+  const beforePostcode = postcodeMatch ? withoutUK.slice(0, postcodeMatch.index).trim() : withoutUK;
+  const parts = beforePostcode.split(",").map((p) => p.trim()).filter(Boolean);
+
+  let street = "";
+  let city = "";
+  if (parts.length >= 2) {
+    street = parts[0] ?? "";
+    city = parts[parts.length - 1] ?? "";
+  } else if (parts.length === 1) {
+    street = parts[0] ?? "";
+  }
+
+  return { street, city, postcode };
+}
