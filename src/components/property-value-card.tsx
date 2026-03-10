@@ -376,7 +376,24 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
-  const ukLandRegistry = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area" } }).uk_land_registry : undefined;
+  const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area" } }).uk_land_registry : undefined;
+  const ukLandRegistry = React.useMemo(() => {
+    if (ukLandRegistryRaw) return ukLandRegistryRaw;
+    if (isUK && insightsData?.message === "no transaction found") {
+      return {
+        building_average_price: null,
+        transactions_in_building: 0,
+        latest_building_transaction: null,
+        latest_nearby_transaction: null,
+        has_building_match: false,
+        average_area_price: null,
+        area_transaction_count: 0,
+        area_fallback_level: "none" as const,
+        fallback_level_used: "area" as const,
+      };
+    }
+    return undefined;
+  }, [ukLandRegistryRaw, isUK, insightsData?.message]);
 
   const parsedLocal = React.useMemo((): ParsedAddress => {
     if (countryCode === "US") {
