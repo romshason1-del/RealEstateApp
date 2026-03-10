@@ -734,6 +734,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       area_fallback_level: areaFallbackLevel,
       fallback_level_used: fallbackLevelUsed,
       match_confidence: matchConfidence,
+      area_data_source: "land_registry" as const,
     };
 
     const effectiveLatest = hasBuildingMatch ? latestBuilding : (latestFromArea ?? latestBuilding);

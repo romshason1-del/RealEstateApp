@@ -11,6 +11,7 @@ import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
+import { fetchUKHPIForLocality } from "@/lib/property-value-providers/uk-house-price-index-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
@@ -160,23 +161,56 @@ export async function GET(request: NextRequest) {
       if (isUK && result && typeof result === "object" && "uk_land_registry" in result && (result as { uk_land_registry?: unknown }).uk_land_registry) {
         // UK: never return 404 when we have uk_land_registry (postcode data exists)
       } else if (isUK) {
-        // UK: return 200 with minimal uk_land_registry so frontend shows "Area insights – no exact building match" instead of "No property data found"
+        // UK: return 200 with minimal uk_land_registry; try HPI fallback when Land Registry has no transactions
         const noMatchResult = result as { message: string; debug?: Record<string, unknown> };
+        let ukLandRegistry: {
+          building_average_price: null;
+          transactions_in_building: number;
+          latest_building_transaction: null;
+          latest_nearby_transaction: null;
+          has_building_match: false;
+          average_area_price: number | null;
+          median_area_price: number | null;
+          price_trend: { change_1y_percent: number; ref_month?: string } | null;
+          area_transaction_count: number;
+          area_fallback_level: "none";
+          fallback_level_used: "area";
+          match_confidence: "low" | "medium";
+          area_data_source: "land_registry" | "HPI";
+        } = {
+          building_average_price: null,
+          transactions_in_building: 0,
+          latest_building_transaction: null,
+          latest_nearby_transaction: null,
+          has_building_match: false,
+          average_area_price: null,
+          median_area_price: null,
+          price_trend: null,
+          area_transaction_count: 0,
+          area_fallback_level: "none",
+          fallback_level_used: "area",
+          match_confidence: "low",
+          area_data_source: "land_registry",
+        };
+        try {
+          const hpiResult = await fetchUKHPIForLocality(city.trim(), postcode.trim() || undefined);
+          if (hpiResult) {
+            ukLandRegistry = {
+              ...ukLandRegistry,
+              average_area_price: hpiResult.average_area_price,
+              median_area_price: hpiResult.median_area_price,
+              price_trend: hpiResult.price_trend,
+              area_data_source: "HPI",
+              match_confidence: "medium",
+            };
+          }
+        } catch {
+          // HPI failure must not break the property card
+        }
         const augmented = {
           ...noMatchResult,
           address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
-          uk_land_registry: {
-            building_average_price: null,
-            transactions_in_building: 0,
-            latest_building_transaction: null,
-            latest_nearby_transaction: null,
-            has_building_match: false,
-            average_area_price: null,
-            area_transaction_count: 0,
-            area_fallback_level: "none" as const,
-            fallback_level_used: "area" as const,
-            match_confidence: "low" as const,
-          },
+          uk_land_registry: ukLandRegistry,
           data_source: "live" as const,
         };
         CACHE.set(cacheKey, { data: augmented, ts: Date.now() });

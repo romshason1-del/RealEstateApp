@@ -376,7 +376,7 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
-  const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area"; match_confidence?: "high" | "medium" | "low" } }).uk_land_registry : undefined;
+  const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; median_area_price?: number | null; price_trend?: { change_1y_percent: number; ref_month?: string } | null; area_data_source?: "land_registry" | "HPI"; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area"; match_confidence?: "high" | "medium" | "low" } }).uk_land_registry : undefined;
   const ukLandRegistryFallback =
     isUK && insightsData != null && !ukLandRegistryRaw
       ? {
@@ -386,10 +386,13 @@ export function PropertyValueCard({
           latest_nearby_transaction: null as { price: number; date: string; property_type?: string } | null,
           has_building_match: false,
           average_area_price: null as number | null,
+          median_area_price: null as number | null,
+          price_trend: null as { change_1y_percent: number; ref_month?: string } | null,
           area_transaction_count: 0,
           area_fallback_level: "none" as const,
           fallback_level_used: "area" as const,
           match_confidence: "low" as const,
+          area_data_source: "land_registry" as const,
         }
       : undefined;
   const ukLandRegistry = ukLandRegistryRaw ?? ukLandRegistryFallback;
@@ -695,7 +698,9 @@ export function PropertyValueCard({
           ) : isUK && ukLandRegistry ? (
             <div className="space-y-1.5">
               <div className="flex items-center gap-2 flex-wrap">
-                <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">UK Land Registry Data</div>
+                <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">
+                  {ukLandRegistry.area_data_source === "HPI" ? "UK House Price Index data" : "UK Land Registry Data"}
+                </div>
                 {ukLandRegistry.match_confidence && (
                   <span
                     className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider ${
@@ -709,7 +714,9 @@ export function PropertyValueCard({
                       ukLandRegistry.match_confidence === "high"
                         ? "Exact building match"
                         : ukLandRegistry.match_confidence === "medium"
-                          ? "Postcode or locality fallback"
+                          ? ukLandRegistry.area_data_source === "HPI"
+                            ? "HPI fallback"
+                            : "Postcode or locality fallback"
                           : "Area-only fallback"
                     }
                   >
@@ -762,15 +769,17 @@ export function PropertyValueCard({
                 )}
                 <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
                   <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">
-                    {ukLandRegistry.area_fallback_level === "street"
-                      ? "Street-level average"
-                      : ukLandRegistry.area_fallback_level === "locality"
-                        ? "Locality average"
-                        : ukLandRegistry.area_fallback_level === "outward_postcode"
-                          ? "Outward postcode average"
-                          : ukLandRegistry.area_fallback_level === "postcode_area"
-                            ? "Postcode area average"
-                            : "Average Area Price"}
+                    {ukLandRegistry.area_data_source === "HPI"
+                      ? "Area average price (HPI)"
+                      : ukLandRegistry.area_fallback_level === "street"
+                        ? "Street-level average"
+                        : ukLandRegistry.area_fallback_level === "locality"
+                          ? "Locality average"
+                          : ukLandRegistry.area_fallback_level === "outward_postcode"
+                            ? "Outward postcode average"
+                            : ukLandRegistry.area_fallback_level === "postcode_area"
+                              ? "Postcode area average"
+                              : "Average Area Price"}
                   </div>
                   <div className="mt-0.5 text-sm font-medium text-zinc-300">
                     {ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0
@@ -779,9 +788,22 @@ export function PropertyValueCard({
                   </div>
                   {ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0 && (
                     <div className="mt-0.5 text-[10px] text-zinc-500">
-                      {ukLandRegistry.area_transaction_count} transactions (last 5 years)
-                      {ukLandRegistry.area_fallback_level && ukLandRegistry.area_fallback_level !== "postcode" && ukLandRegistry.area_fallback_level !== "none" && (
-                        <span> · {ukLandRegistry.area_fallback_level === "street" ? "Street-level" : ukLandRegistry.area_fallback_level === "locality" ? "Locality" : ukLandRegistry.area_fallback_level === "outward_postcode" ? "Outward postcode" : "Postcode area"} fallback</span>
+                      {ukLandRegistry.area_data_source === "HPI" ? (
+                        <>
+                          UK House Price Index · Local authority level
+                          {ukLandRegistry.price_trend && (
+                            <span className="ml-1">
+                              · {ukLandRegistry.price_trend.change_1y_percent >= 0 ? "+" : ""}{ukLandRegistry.price_trend.change_1y_percent}% YoY
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          {ukLandRegistry.area_transaction_count} transactions (last 5 years)
+                          {ukLandRegistry.area_fallback_level && ukLandRegistry.area_fallback_level !== "postcode" && ukLandRegistry.area_fallback_level !== "none" && (
+                            <span> · {ukLandRegistry.area_fallback_level === "street" ? "Street-level" : ukLandRegistry.area_fallback_level === "locality" ? "Locality" : ukLandRegistry.area_fallback_level === "outward_postcode" ? "Outward postcode" : "Postcode area"} fallback</span>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -804,7 +826,9 @@ export function PropertyValueCard({
                 )}
               </div>
               <div className="pt-0.5 text-[10px] text-zinc-500">
-                HM Land Registry Price Paid Data. Government open data.
+                {ukLandRegistry.area_data_source === "HPI"
+                  ? "UK House Price Index. ONS / HM Land Registry. Government open data."
+                  : "HM Land Registry Price Paid Data. Government open data."}
               </div>
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">
