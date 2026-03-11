@@ -19,7 +19,8 @@ import { buildUSAddressVariants } from "../address-parse";
 
 const RENTCAST_BASE_URL = propertyProviderConfig.rentcast.baseUrl;
 const RENTCAST_API_KEY = propertyProviderConfig.rentcast.apiKey;
-const RENTCAST_TIMEOUT_MS = parseInt(process.env.RENTCAST_API_TIMEOUT_MS ?? "15000", 10) || 15000;
+const RENTCAST_TIMEOUT_MS = propertyProviderConfig.rentcast.timeoutMs;
+const RENTCAST_RETRIES = propertyProviderConfig.rentcast.retries;
 
 const FIVE_YEARS_MS = 5 * 365.25 * 24 * 60 * 60 * 1000;
 
@@ -107,17 +108,35 @@ function mapError(err: unknown): PropertyValueInsightsError {
   return { message: "Could not fetch property data. Please try again later.", error: "UNKNOWN_ERROR" };
 }
 
-async function fetchRentCast(url: string): Promise<Response> {
+async function fetchRentCastWithRetry(
+  url: string,
+  attempt = 0
+): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), RENTCAST_TIMEOUT_MS);
   try {
-    return await fetch(url, {
+    const res = await fetch(url, {
       method: "GET",
       headers: { Accept: "application/json", "X-Api-Key": RENTCAST_API_KEY },
       signal: controller.signal,
     });
-  } finally {
     clearTimeout(id);
+    const retryable = res.status === 429 || res.status >= 500;
+    if (retryable && attempt < RENTCAST_RETRIES) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+      await new Promise((r) => setTimeout(r, delay));
+      return fetchRentCastWithRetry(url, attempt + 1);
+    }
+    return res;
+  } catch (err) {
+    clearTimeout(id);
+    const isRetryable = err instanceof Error && (err.name === "AbortError" || err.message.includes("timeout"));
+    if (isRetryable && attempt < RENTCAST_RETRIES) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+      await new Promise((r) => setTimeout(r, delay));
+      return fetchRentCastWithRetry(url, attempt + 1);
+    }
+    throw err;
   }
 }
 
@@ -185,13 +204,15 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
     let comps: Array<{ price?: number; squareFootage?: number }> = [];
     let matchedQuery: string | undefined;
 
+    let lastError: unknown;
     try {
       for (const q of queryVariants) {
-        const [avmValueRes, avmRentRes, propsRes] = await Promise.all([
-          fetchRentCast(`${RENTCAST_BASE_URL}/avm/value?${q.param}`),
-          fetchRentCast(`${RENTCAST_BASE_URL}/avm/rent/long-term?${q.param}`),
-          fetchRentCast(`${RENTCAST_BASE_URL}/properties?${q.param}`),
-        ]);
+        try {
+          const [avmValueRes, avmRentRes, propsRes] = await Promise.all([
+            fetchRentCastWithRetry(`${RENTCAST_BASE_URL}/avm/value?${q.param}`),
+            fetchRentCastWithRetry(`${RENTCAST_BASE_URL}/avm/rent/long-term?${q.param}`),
+            fetchRentCastWithRetry(`${RENTCAST_BASE_URL}/properties?${q.param}`),
+          ]);
 
         if (avmValueRes.ok) {
           const body = (await avmValueRes.json().catch(() => null)) as AVMValueResponse | null;
@@ -240,6 +261,10 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
         if (hasData) {
           matchedQuery = `${q.type}:${q.label}`;
           break;
+        }
+        } catch (variantErr) {
+          lastError = variantErr;
+          continue;
         }
       }
 
@@ -390,13 +415,15 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
 
       return result;
     } catch (err) {
-      const mappedErr = mapError(err);
+      const mappedErr = mapError(lastError ?? err);
       return {
         ...mappedErr,
         debug: {
           ...debug,
           property_found: false,
           api_error: mappedErr.error,
+          rentcast_timeout_ms: RENTCAST_TIMEOUT_MS,
+          rentcast_retries: RENTCAST_RETRIES,
         },
       };
     }

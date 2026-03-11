@@ -28,6 +28,8 @@ export const propertyProviderConfig = {
   rentcast: {
     apiKey: env("RENTCAST_API_KEY"),
     baseUrl: env("RENTCAST_API_BASE_URL") || "https://api.rentcast.io/v1",
+    timeoutMs: envNumber("RENTCAST_API_TIMEOUT_MS", 20000),
+    retries: envNumber("RENTCAST_RETRIES", 2),
   },
 
   /** US Census Bureau (neighborhood stats) */
