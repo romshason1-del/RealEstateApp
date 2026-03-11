@@ -271,12 +271,17 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       const pricePerSqft = avmValue && sqft > 0 ? avmValue / sqft : 0;
       if (pricePerSqft > 0) debug.price_per_sqft_used = Math.round(pricePerSqft * 100) / 100;
 
+      const displayValue = avmValue ?? (lastSale?.price ?? 0) || (history5y.length > 0 ? history5y[0]!.price : 0);
       const currentEstimatedValue =
-        avmValue != null && avmValue > 0
+        displayValue > 0
           ? {
-              estimated_value: avmValue,
-              estimated_price_per_m2: sqft > 0 ? Math.round((avmValue / sqft / 0.0929) * 100) / 100 : 0,
-              estimation_method: "Estimated Market Value from RentCast AVM. This is NOT an official appraisal.",
+              estimated_value: displayValue,
+              estimated_price_per_m2: sqft > 0 ? Math.round((displayValue / sqft / 0.0929) * 100) / 100 : 0,
+              estimation_method: avmValue != null && avmValue > 0
+                ? "Estimated Market Value from RentCast AVM. This is NOT an official appraisal."
+                : lastSale
+                  ? "Last recorded sale price for this property. Not a current market valuation."
+                  : "Historical sale data for this property.",
               value_type: "sale" as const,
             }
           : null;
