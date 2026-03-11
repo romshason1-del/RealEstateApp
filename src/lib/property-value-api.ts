@@ -40,6 +40,11 @@ export type PropertyValueInsightsResponse = {
     median_home_value: number;
     median_household_income: number;
     population: number;
+    median_rent?: number;
+  };
+  investment_metrics?: {
+    median_rent: number;
+    estimated_roi_percent: number;
   };
   data_source?: "live" | "cache" | "mock";
   market_trend?: { hpi_index: number; change_1y_percent: number };
