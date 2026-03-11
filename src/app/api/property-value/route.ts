@@ -298,7 +298,56 @@ export async function GET(request: NextRequest) {
     if (usMockMode && isUS) {
       const mockTrend = (response as { market_trend?: unknown }).market_trend;
       if (!mockTrend) {
-        response = { ...response, market_trend: { hpi_index: 412.3, change_1y_percent: 4.2 } };
+        response = { ...response, market_trend: { hpi_index: 412.3, change_1y_percent: 4.2, latest_date: "2024-10" } };
+      }
+    }
+
+    if (isUS && (usMockMode || (response.avm_value != null && (response.avm_value as number) > 0) || (response.estimated_area_price != null && (response.estimated_area_price as number) > 0) || (response.median_sale_price != null && (response.median_sale_price as number) > 0) || (response.neighborhood_stats != null && typeof response.neighborhood_stats === "object" && (response.neighborhood_stats as { median_home_value?: number }).median_home_value != null && ((response.neighborhood_stats as { median_home_value?: number }).median_home_value ?? 0) > 0))) {
+      const r = response as Record<string, unknown>;
+      const avm = typeof r.avm_value === "number" && r.avm_value > 0 ? r.avm_value : undefined;
+      const areaPrice = typeof r.estimated_area_price === "number" && r.estimated_area_price > 0 ? r.estimated_area_price : undefined;
+      const medianSale = typeof r.median_sale_price === "number" && r.median_sale_price > 0 ? r.median_sale_price : undefined;
+      const currentEst = r.current_estimated_value && typeof r.current_estimated_value === "object" && "estimated_value" in r.current_estimated_value
+        ? (r.current_estimated_value as { estimated_value?: number }).estimated_value
+        : undefined;
+      const ns = r.neighborhood_stats as { median_home_value?: number } | undefined;
+      const medianHome = ns?.median_home_value != null && ns.median_home_value > 0 ? ns.median_home_value : undefined;
+      const primaryValue = avm ?? areaPrice ?? medianSale ?? (typeof currentEst === "number" && currentEst > 0 ? currentEst : undefined) ?? medianHome;
+      if (typeof primaryValue === "number" && primaryValue > 0) {
+        const sources: number[] = [avm, areaPrice, medianSale, medianHome].filter((v): v is number => typeof v === "number" && v > 0);
+        const uniqueSources = [...new Set(sources)];
+        let low: number;
+        let high: number;
+        if (avm != null && avm > 0 && uniqueSources.length <= 1) {
+          low = Math.round(avm * 0.92);
+          high = Math.round(avm * 1.08);
+        } else if (uniqueSources.length >= 2) {
+          low = Math.min(...uniqueSources);
+          high = Math.max(...uniqueSources);
+        } else {
+          low = Math.round(primaryValue * 0.92);
+          high = Math.round(primaryValue * 1.08);
+        }
+        response = { ...response, value_range: { low_estimate: low, estimated_value: primaryValue, high_estimate: high } };
+      }
+      const dataSrc = (r.data_sources as string[] | undefined) ?? [];
+      const parts: string[] = [];
+      if (dataSrc.includes("RentCast")) parts.push("RentCast");
+      if (dataSrc.includes("Zillow")) parts.push("Zillow");
+      if (dataSrc.includes("Redfin")) parts.push("Redfin");
+      if (r.neighborhood_stats != null && typeof r.neighborhood_stats === "object") parts.push("Census");
+      if (r.market_trend != null && typeof r.market_trend === "object") parts.push("FHFA");
+      if (parts.length > 0) {
+        response = { ...response, source_summary: `Based on ${parts.join(" + ")}` };
+      }
+      const mt = r.market_trend as { latest_date?: string } | undefined;
+      if (mt?.latest_date) {
+        const [y, m] = mt.latest_date.split("-");
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const monthIdx = parseInt(m ?? "1", 10) - 1;
+        response = { ...response, last_market_update: `${monthNames[monthIdx] ?? m} ${y}` };
+      } else if (parts.length > 0) {
+        response = { ...response, last_market_update: "Updated monthly" };
       }
     }
 
