@@ -1,11 +1,12 @@
 /**
  * US Census ACS Provider
- * Fetches neighborhood statistics (median home value, income, population)
- * from the Census Bureau ACS API using lat/lng coordinates.
- * Does not replace RentCast; augments US property data.
+ * Fetches neighborhood statistics (median home value, income, population, education)
+ * from the Census Bureau ACS API using lat/lng, address geocoding, or ZCTA (ZIP).
+ * Government-only mode: augments or replaces commercial property data.
  */
 
-const CENSUS_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates";
+const CENSUS_GEOCODER_COORDS = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates";
+const CENSUS_GEOCODER_ADDRESS = "https://geocoding.geo.census.gov/geocoder/geographies/address";
 const CENSUS_ACS_URL = "https://api.census.gov/data/2022/acs/acs5";
 const CENSUS_ACS_URL_2017 = "https://api.census.gov/data/2017/acs/acs5";
 const CENSUS_TIMEOUT_MS = 20000;
@@ -17,6 +18,8 @@ export type NeighborhoodStats = {
   median_rent?: number;
   population_growth_percent?: number;
   income_growth_percent?: number;
+  /** Share of adults 25+ with bachelor's or higher (0–1). Improves livability. */
+  pct_bachelors_plus?: number;
 };
 
 type CensusGeoItem = {
@@ -73,7 +76,7 @@ async function geocodeCoordinates(
   const id = setTimeout(() => controller.abort(), CENSUS_TIMEOUT_MS);
 
   try {
-    const res = await fetch(`${CENSUS_GEOCODER_URL}?${params.toString()}`, {
+    const res = await fetch(`${CENSUS_GEOCODER_COORDS}?${params.toString()}`, {
       signal: controller.signal,
     });
     clearTimeout(id);
@@ -116,6 +119,69 @@ async function geocodeCoordinates(
 }
 
 /**
+ * Geocode street address to state, county, tract using Census address geocoder.
+ * Improves address-to-area matching when lat/lng is not available.
+ */
+async function geocodeAddressToTract(
+  street: string,
+  city: string,
+  state: string,
+  zip: string
+): Promise<{ state: string; county: string; tract: string } | null> {
+  const s = (street ?? "").trim();
+  const c = (city ?? "").trim();
+  const st = (state ?? "").trim().toUpperCase().slice(0, 2);
+  if (!s || !c || !st) return null;
+
+  const params = new URLSearchParams({
+    street: s,
+    city: c,
+    state: st,
+    benchmark: "Public_AR_Current",
+    vintage: "Current_Current",
+    layers: "14",
+    format: "json",
+  });
+  const z = (zip ?? "").replace(/\D/g, "").slice(0, 5);
+  if (z.length >= 5) params.set("zip", z);
+
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), CENSUS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${CENSUS_GEOCODER_ADDRESS}?${params.toString()}`, { signal: controller.signal });
+    clearTimeout(id);
+    if (!res.ok) return null;
+
+    const data = (await res.json().catch(() => null)) as CensusGeocoderResponse | null;
+    const raw = data?.result?.geographies;
+    let geos: CensusGeoItem[] = [];
+    if (Array.isArray(raw)) geos = raw;
+    else if (raw && typeof raw === "object") {
+      const allArrs = Object.values(raw).filter((v): v is CensusGeoItem[] => Array.isArray(v) && v.length > 0);
+      const withTract = allArrs.find((arr) => arr[0]?.TRACT || ((arr[0]?.GEOID ?? "").length >= 11));
+      geos = withTract ?? allArrs[0] ?? [];
+    }
+    if (geos.length === 0) return null;
+
+    const first = geos[0];
+    let s = (first?.STATE ?? "").trim();
+    let county = (first?.COUNTY ?? "").trim();
+    let tract = (first?.TRACT ?? "").replace(".", "").padStart(6, "0").slice(0, 6);
+    const geoid = (first?.GEOID ?? "").trim();
+    if (geoid.length >= 5) {
+      s = s || geoid.slice(0, 2);
+      county = county || geoid.slice(2, 5);
+      if (!tract && geoid.length >= 11) tract = geoid.slice(5, 11);
+    }
+    if (!s || !county) return null;
+    return { state: s, county, tract };
+  } catch {
+    clearTimeout(id);
+    return null;
+  }
+}
+
+/**
  * Fetch B01003_001E (population) and B19013_001E (income) from prior-year ACS for growth calculation.
  */
 async function fetchAcsPriorYear(
@@ -148,6 +214,8 @@ async function fetchAcsPriorYear(
  * B19013_001E = Median Household Income
  * B01003_001E = Population
  * B25064_001E = Median Gross Rent
+ * B15003_001E = Total pop 25+ (education denominator)
+ * B15003_022E+B15003_023E+B15003_024E+B15003_025E = Bachelor's or higher
  */
 async function fetchAcsData(
   state: string,
@@ -155,7 +223,7 @@ async function fetchAcsData(
   tract: string
 ): Promise<NeighborhoodStats | null> {
   const apiKey = env("CENSUS_API_KEY");
-  const variables = "B25077_001E,B19013_001E,B01003_001E,B25064_001E";
+  const variables = "B25077_001E,B19013_001E,B01003_001E,B25064_001E,B15003_001E,B15003_022E,B15003_023E,B15003_024E,B15003_025E";
   const forClause = tract ? `tract:${tract}` : "tract:*";
   const inClause = `state:${state}+county:${county}`;
 
@@ -193,6 +261,18 @@ async function fetchAcsData(
     const population = populationIdx >= 0 ? parseNum(dataRow[populationIdx]) : 0;
     const median_rent = medianRentIdx >= 0 ? parseNum(dataRow[medianRentIdx]) : undefined;
 
+    const eduPopIdx = idx("B15003_001E");
+    const bachIdx = idx("B15003_022E");
+    const masterIdx = idx("B15003_023E");
+    const profIdx = idx("B15003_024E");
+    const docIdx = idx("B15003_025E");
+    const eduPop = eduPopIdx >= 0 ? parseNum(dataRow[eduPopIdx]) : 0;
+    const bachelorsPlus =
+      [bachIdx, masterIdx, profIdx, docIdx]
+        .filter((i) => i >= 0)
+        .reduce((sum, i) => sum + parseNum(dataRow[i]), 0) || 0;
+    const pct_bachelors_plus = eduPop > 0 ? Math.min(1, bachelorsPlus / eduPop) : undefined;
+
     const priorParams = new URLSearchParams({
       get: "B01003_001E,B19013_001E",
       for: forClause,
@@ -210,6 +290,7 @@ async function fetchAcsData(
       ...(median_rent != null && median_rent > 0 && { median_rent }),
       ...(population_growth_percent != null && { population_growth_percent }),
       ...(income_growth_percent != null && { income_growth_percent }),
+      ...(pct_bachelors_plus != null && pct_bachelors_plus >= 0 && { pct_bachelors_plus }),
     };
   } catch {
     clearTimeout(id);
@@ -225,7 +306,7 @@ async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
   if (z.length < 5) return null;
 
   const apiKey = env("CENSUS_API_KEY");
-  const variables = "B25077_001E,B19013_001E,B01003_001E,B25064_001E";
+  const variables = "B25077_001E,B19013_001E,B01003_001E,B25064_001E,B15003_001E,B15003_022E,B15003_023E,B15003_024E,B15003_025E";
   const params = new URLSearchParams({
     get: variables,
     for: `zip code tabulation area:${z}`,
@@ -250,6 +331,18 @@ async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
     const median_household_income = idx("B19013_001E") >= 0 ? parseNum(dataRow[idx("B19013_001E")]) : 0;
     const population = idx("B01003_001E") >= 0 ? parseNum(dataRow[idx("B01003_001E")]) : 0;
 
+    const eduPopIdx = idx("B15003_001E");
+    const bachIdx = idx("B15003_022E");
+    const masterIdx = idx("B15003_023E");
+    const profIdx = idx("B15003_024E");
+    const docIdx = idx("B15003_025E");
+    const eduPop = eduPopIdx >= 0 ? parseNum(dataRow[eduPopIdx]) : 0;
+    const bachelorsPlus =
+      [bachIdx, masterIdx, profIdx, docIdx]
+        .filter((i) => i >= 0)
+        .reduce((sum, i) => sum + parseNum(dataRow[i]), 0) || 0;
+    const pct_bachelors_plus = eduPop > 0 ? Math.min(1, bachelorsPlus / eduPop) : undefined;
+
     const priorParams = new URLSearchParams({
       get: "B01003_001E,B19013_001E",
       for: `zip code tabulation area:${z}`,
@@ -266,6 +359,7 @@ async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
       ...(median_rent > 0 && { median_rent }),
       ...(population_growth_percent != null && { population_growth_percent }),
       ...(income_growth_percent != null && { income_growth_percent }),
+      ...(pct_bachelors_plus != null && pct_bachelors_plus >= 0 && { pct_bachelors_plus }),
     };
   } catch {
     clearTimeout(id);
@@ -306,6 +400,50 @@ export async function fetchNeighborhoodStats(
     if (options?.zip) return fetchAcsByZcta(options.zip);
     return null;
   }
+}
+
+export type PropertyValueInputForCensus = {
+  street?: string;
+  houseNumber?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  latitude?: number;
+  longitude?: number;
+};
+
+/**
+ * Fetch neighborhood stats for a US address. Improves address-to-area matching when lat/lng missing.
+ * Order: lat/lng → address geocode → ZCTA (ZIP).
+ */
+export async function fetchNeighborhoodStatsForInput(input: PropertyValueInputForCensus): Promise<NeighborhoodStats | null> {
+  const lat = input?.latitude;
+  const lng = input?.longitude;
+  const zip = (input?.zip ?? "").trim();
+  const houseNum = (input?.houseNumber ?? "").trim();
+  const streetPart = (input?.street ?? "").trim();
+  const street = houseNum ? `${houseNum} ${streetPart}`.trim() : streetPart;
+  const city = (input?.city ?? "").trim();
+  const state = (input?.state ?? "").trim().toUpperCase().slice(0, 2);
+
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    const stats = await fetchNeighborhoodStats(lat!, lng!, { zip: zip || undefined });
+    if (stats) return stats;
+  }
+
+  if (street && city && state) {
+    const geo = await geocodeAddressToTract(street, city, state, zip);
+    if (geo) {
+      const stats = await fetchAcsData(geo.state, geo.county, geo.tract);
+      if (stats) return stats;
+    }
+  }
+
+  if (zip && zip.replace(/\D/g, "").length >= 5) {
+    return fetchAcsByZcta(zip);
+  }
+
+  return null;
 }
 
 export { isConfigured as isCensusConfigured };

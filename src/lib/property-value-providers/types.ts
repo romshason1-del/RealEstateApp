@@ -132,7 +132,7 @@ export type PropertyValueInsightsSuccess = {
   market_trend?: { change_1y_percent: number } | null;
   inventory_signal?: number | null;
   days_on_market?: number | null;
-  data_sources?: ("RentCast" | "Zillow" | "Redfin")[];
+  data_sources?: ("RentCast" | "Zillow" | "Redfin" | "Census")[];
   /** US: high = RentCast + market data, medium = Zillow+Redfin agreement, low = single-source regional */
   us_match_confidence?: "high" | "medium" | "low";
   /** Global: Most recent recorded sale for the searched property when available */

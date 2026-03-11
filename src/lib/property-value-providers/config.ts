@@ -70,3 +70,12 @@ export function isUSRentcastConfigured(): boolean {
 export function isUSMockEnabled(): boolean {
   return propertyProviderConfig.us === "mock" || envBool("US_PROPERTY_DEBUG_MODE");
 }
+
+/** US government-only mode: Census + FHFA only, no RentCast/Zillow/Redfin. Active when RentCast paused. */
+export function isUSGovernmentOnly(): boolean {
+  if (propertyProviderConfig.us === "rentcast") return false;
+  if (envBool("US_PROPERTY_GOVERNMENT_ONLY")) return true;
+  if (propertyProviderConfig.us === "government") return true;
+  if (propertyProviderConfig.us === "us-orchestrator" || !propertyProviderConfig.us) return true;
+  return false;
+}

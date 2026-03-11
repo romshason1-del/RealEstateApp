@@ -1,7 +1,7 @@
 /**
  * US Property Value Orchestrator
- * Priority: RentCast (when configured) → Zillow Research → Redfin Data Center
- * When both Zillow and Redfin exist in cache, uses weighted consensus.
+ * Government-only mode: Census + FHFA only (no RentCast, Zillow, Redfin).
+ * Otherwise: RentCast (when configured) → Zillow Research → Redfin Data Center.
  */
 
 import type { PropertyDataProvider } from "./provider-interface";
@@ -9,16 +9,53 @@ import type {
   PropertyValueInput,
   PropertyValueInsightsResult,
   PropertyValueInsightsSuccess,
-  PropertyValueInsightsNoMatch,
   PropertyValueInsightsError,
 } from "./types";
 import { UnitedStatesRentcastProvider } from "./us-rentcast-provider";
 import { UnitedStatesMockProvider } from "./us-mock-provider";
 import { lookupAsync, loadFromFile } from "./us-market-data-cache";
-import { isUSMockEnabled, isUSRentcastConfigured } from "./config";
+import { fetchNeighborhoodStatsForInput, type NeighborhoodStats } from "./us-census-provider";
+import { isUSMockEnabled, isUSRentcastConfigured, isUSGovernmentOnly } from "./config";
 
 const rentcast = new UnitedStatesRentcastProvider();
 const usMock = new UnitedStatesMockProvider();
+
+function buildGovernmentFallback(
+  input: PropertyValueInput,
+  censusStats: NeighborhoodStats
+): PropertyValueInsightsSuccess {
+  const city = (input.city ?? "").trim() || "Unknown";
+  const street = (input.street ?? "").trim() || "Unknown";
+  const price = censusStats.median_home_value;
+  const result: PropertyValueInsightsSuccess = {
+    address: { city, street, house_number: (input.houseNumber ?? "").trim() },
+    match_quality: "no_reliable_match",
+    latest_transaction: { transaction_date: "", transaction_price: 0, property_size: 0, price_per_m2: 0 },
+    current_estimated_value:
+      price > 0
+        ? {
+            estimated_value: price,
+            estimated_price_per_m2: 0,
+            estimation_method: "Area-level median home value from Census ACS. Not a property appraisal.",
+            value_type: "sale",
+          }
+        : null,
+    building_summary_last_3_years: null,
+    market_value_source: "none",
+    source: "us-orchestrator",
+    avm_value: undefined,
+    estimated_area_price: price > 0 ? price : null,
+    median_sale_price: null,
+    median_price_per_sqft: null,
+    market_trend: null,
+    inventory_signal: null,
+    days_on_market: null,
+    data_sources: ["Census"],
+    us_match_confidence: "low",
+  };
+  (result as Record<string, unknown>).neighborhood_stats = censusStats;
+  return result;
+}
 
 function buildMarketFallback(
   input: PropertyValueInput,
@@ -27,7 +64,7 @@ function buildMarketFallback(
   const city = (input.city ?? "").trim() || "Unknown";
   const street = (input.street ?? "").trim() || "Unknown";
   const price = cached.estimated_area_price ?? cached.median_sale_price ?? 0;
-  const dataSources: ("RentCast" | "Zillow" | "Redfin")[] = cached.sources.includes("zillow")
+  const dataSources: ("RentCast" | "Zillow" | "Redfin" | "Census")[] = cached.sources.includes("zillow")
     ? cached.sources.includes("redfin")
       ? ["Zillow", "Redfin"]
       : ["Zillow"]
@@ -72,6 +109,25 @@ export class USOrchestratorProvider implements PropertyDataProvider {
   async getInsights(input: PropertyValueInput): Promise<PropertyValueInsightsResult> {
     if (isUSMockEnabled()) {
       return usMock.getInsights(input);
+    }
+
+    if (isUSGovernmentOnly()) {
+      const censusStats = await fetchNeighborhoodStatsForInput({
+        street: input.street,
+        houseNumber: input.houseNumber,
+        city: input.city,
+        state: input.state,
+        zip: input.zip,
+        latitude: input.latitude,
+        longitude: input.longitude,
+      });
+      if (censusStats && censusStats.median_home_value > 0) {
+        return buildGovernmentFallback(input, censusStats);
+      }
+      return {
+        message: "No Census data found for this address.",
+        error: "NO_MATCH",
+      };
     }
 
     await loadFromFile().catch(() => {});
