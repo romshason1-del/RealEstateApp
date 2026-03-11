@@ -240,7 +240,8 @@ export async function GET(request: NextRequest) {
       isUS &&
       !usMockMode &&
       Number.isFinite(latitude) &&
-      Number.isFinite(longitude)
+      Number.isFinite(longitude) &&
+      !(response && typeof response === "object" && "neighborhood_stats" in response && (response as { neighborhood_stats?: unknown }).neighborhood_stats)
     ) {
       try {
         const neighborhoodStats = await fetchNeighborhoodStats(latitude!, longitude!, {
@@ -379,16 +380,19 @@ export async function GET(request: NextRequest) {
         population?: number;
         population_growth_percent?: number;
         income_growth_percent?: number;
+        pct_bachelors_plus?: number;
       } | undefined;
       const income = nsForLivability?.median_household_income ?? 0;
       const homeVal = nsForLivability?.median_home_value ?? 0;
       const popGrowth = nsForLivability?.population_growth_percent ?? 0;
       const incGrowth = nsForLivability?.income_growth_percent ?? 0;
+      const pctBachelors = nsForLivability?.pct_bachelors_plus ?? 0;
       let livabilityRating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
       if (income > 0 || homeVal > 0) {
         const score = (income >= 100000 ? 4 : income >= 75000 ? 3 : income >= 50000 ? 2 : income >= 35000 ? 1 : 0) +
           (incGrowth > 2 ? 0.5 : incGrowth > 0 ? 0.25 : 0) +
-          (popGrowth > 0 ? 0.25 : 0);
+          (popGrowth > 0 ? 0.25 : 0) +
+          (pctBachelors >= 0.4 ? 0.5 : pctBachelors >= 0.25 ? 0.25 : 0);
         if (score >= 4) livabilityRating = "EXCELLENT";
         else if (score >= 3) livabilityRating = "VERY GOOD";
         else if (score >= 2) livabilityRating = "GOOD";
@@ -414,9 +418,10 @@ export async function GET(request: NextRequest) {
       const dataSrc = (r.data_sources as string[] | undefined) ?? [];
       const parts: string[] = [];
       if (dataSrc.includes("RentCast")) parts.push("RentCast");
+      if (dataSrc.includes("Census")) parts.push("Census");
       if (dataSrc.includes("Zillow")) parts.push("Zillow");
       if (dataSrc.includes("Redfin")) parts.push("Redfin");
-      if (r.neighborhood_stats != null && typeof r.neighborhood_stats === "object") parts.push("Census");
+      if (!parts.includes("Census") && r.neighborhood_stats != null && typeof r.neighborhood_stats === "object") parts.push("Census");
       if (r.market_trend != null && typeof r.market_trend === "object") parts.push("FHFA");
       if (parts.length > 0) {
         response = { ...response, source_summary: `Based on ${parts.join(" + ")}` };
