@@ -565,36 +565,45 @@ export function PropertyValueCard({
                 )}
               </div>
               {((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0) > 0) && (
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                  <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
-                    <Sparkles className="size-3 shrink-0" aria-hidden />
-                    Estimated Property Value
-                  </div>
-                  <div className="mt-0.5 text-lg font-semibold text-violet-300 sm:text-xl">
-                    {formatCurrency((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0), currencySymbol)}
-                  </div>
-                  {valueRange != null && valueRange.low_estimate > 0 && valueRange.high_estimate > 0 && (
-                    <div className="mt-0.5 text-[11px] text-violet-400/80">
-                      Value range: {formatCurrency(valueRange.low_estimate, currencySymbol)} – {formatCurrency(valueRange.high_estimate, currencySymbol)}
+                isAreaLevelEstimate ? (
+                  <div className="rounded-lg border border-zinc-500/30 bg-zinc-500/10 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">
+                      Area-level estimate only — not specific to this property
                     </div>
-                  )}
-                  {isAreaLevelEstimate && (
-                    <div className="mt-1 rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[10px] text-amber-400" title="This value is based on area medians (Census/Zillow/Redfin), not this specific property">
-                      Area-level estimate — not property-specific
+                    <div className="mt-0.5 text-base font-medium text-zinc-300 sm:text-lg">
+                      {formatCurrency((valueRange?.estimated_value ?? estimatedAreaPrice ?? medianSalePrice ?? 0), currencySymbol)}
                     </div>
-                  )}
-                  {(sourceSummary || (dataSources != null && dataSources.length > 0)) && (
-                    <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-400">
-                      <span>{sourceSummary ?? (dataSources != null && dataSources.length > 0 ? `Based on ${dataSources.join(", ")}` : "")}</span>
-                      <span title="Data sources used for this estimate" className="group relative shrink-0">
-                        <Info className="size-3.5 text-zinc-500 cursor-help" aria-hidden />
-                        <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50 w-52 rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-[10px] text-zinc-300 shadow-xl">
-                          This estimate combines data from the listed sources. RentCast provides property-level valuations; Zillow and Redfin add area market data; Census and FHFA add demographic and price trend context.
+                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                      Based on area medians (Zillow, Redfin, or Census). Not a property appraisal.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                    <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
+                      <Sparkles className="size-3 shrink-0" aria-hidden />
+                      Estimated Property Value
+                    </div>
+                    <div className="mt-0.5 text-lg font-semibold text-violet-300 sm:text-xl">
+                      {formatCurrency((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0), currencySymbol)}
+                    </div>
+                    {valueRange != null && valueRange.low_estimate > 0 && valueRange.high_estimate > 0 && (
+                      <div className="mt-0.5 text-[11px] text-violet-400/80">
+                        Value range: {formatCurrency(valueRange.low_estimate, currencySymbol)} – {formatCurrency(valueRange.high_estimate, currencySymbol)}
+                      </div>
+                    )}
+                    {(sourceSummary || (dataSources != null && dataSources.length > 0)) && (
+                      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-400">
+                        <span>{sourceSummary ?? (dataSources != null && dataSources.length > 0 ? `Based on ${dataSources.join(", ")}` : "")}</span>
+                        <span title="Data sources used for this estimate" className="group relative shrink-0">
+                          <Info className="size-3.5 text-zinc-500 cursor-help" aria-hidden />
+                          <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50 w-52 rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-[10px] text-zinc-300 shadow-xl">
+                            This estimate combines data from the listed sources. RentCast provides property-level valuations; Zillow and Redfin add area market data; Census and FHFA add demographic and price trend context.
+                          </span>
                         </span>
-                      </span>
-                    </div>
-                  )}
-                </div>
+                      </div>
+                    )}
+                  </div>
+                )
               )}
               <div className="flex items-center gap-2 flex-wrap">
                 {usMatchConfidence && (

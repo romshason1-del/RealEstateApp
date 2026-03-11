@@ -271,7 +271,7 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       const pricePerSqft = avmValue && sqft > 0 ? avmValue / sqft : 0;
       if (pricePerSqft > 0) debug.price_per_sqft_used = Math.round(pricePerSqft * 100) / 100;
 
-      const displayValue = avmValue ?? (lastSale?.price ?? 0) || (history5y.length > 0 ? history5y[0]!.price : 0);
+      const displayValue = avmValue ?? ((lastSale?.price ?? 0) || (history5y.length > 0 ? history5y[0]!.price : 0));
       const currentEstimatedValue =
         displayValue > 0
           ? {

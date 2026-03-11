@@ -34,9 +34,8 @@ function buildMarketFallback(
     : cached.sources.includes("redfin")
       ? ["Redfin"]
       : [];
-  /** Confidence: High = RentCast AVM. Medium = Zillow+Redfin. Low = Census/area-level only. */
-  const confidence: "high" | "medium" | "low" =
-    dataSources.length >= 2 ? "medium" : "low";
+  /** Area-level only: always low confidence. */
+  const confidence: "high" | "medium" | "low" = "low";
 
   return {
     address: { city, street, house_number: (input.houseNumber ?? "").trim() },
@@ -54,7 +53,7 @@ function buildMarketFallback(
     building_summary_last_3_years: null,
     market_value_source: "none",
     source: "us-orchestrator",
-    avm_value: price > 0 ? price : undefined,
+    avm_value: undefined,
     estimated_area_price: price > 0 ? price : null,
     median_sale_price: cached.median_sale_price ?? null,
     median_price_per_sqft: cached.median_price_per_sqft ?? null,
