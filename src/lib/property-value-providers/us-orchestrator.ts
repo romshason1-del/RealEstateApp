@@ -34,8 +34,9 @@ function buildMarketFallback(
     : cached.sources.includes("redfin")
       ? ["Redfin"]
       : [];
+  /** Confidence: High = RentCast property-level. Medium = 2+ market sources (Zillow+Redfin). Low = single source. */
   const confidence: "high" | "medium" | "low" =
-    dataSources.length >= 2 ? "medium" : dataSources.length === 1 ? "low" : "low";
+    dataSources.length >= 2 ? "medium" : "low";
 
   return {
     address: { city, street, house_number: (input.houseNumber ?? "").trim() },

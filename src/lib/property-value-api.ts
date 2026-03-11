@@ -31,6 +31,12 @@ export type PropertyValueInsightsResponse = {
   explanation?: string;
   avm_value?: number;
   avm_rent?: number;
+  /** US: Value range for display. estimated_value is primary; low/high show spread. */
+  value_range?: { low_estimate: number; estimated_value: number; high_estimate: number };
+  /** US: Human-readable source summary, e.g. "Based on Zillow + Redfin + Census + FHFA" */
+  source_summary?: string;
+  /** US: When source data was last updated, e.g. "Jan 2025" or "Updated monthly" */
+  last_market_update?: string;
   last_sale?: { price: number; date: string };
   sales_history?: Array<{ date: string; price: number }>;
   nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number };
@@ -52,7 +58,7 @@ export type PropertyValueInsightsResponse = {
     estimated_roi_percent?: number;
   };
   data_source?: "live" | "cache" | "mock";
-  market_trend?: { hpi_index: number; change_1y_percent: number };
+  market_trend?: { hpi_index: number; change_1y_percent: number; latest_date?: string };
   uk_land_registry?: {
     building_average_price: number | null;
     transactions_in_building: number;

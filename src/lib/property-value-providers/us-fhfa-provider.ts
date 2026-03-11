@@ -26,6 +26,8 @@ const STATE_FRED_SERIES: Record<string, string> = {
 export type MarketTrend = {
   hpi_index: number;
   change_1y_percent: number;
+  /** Latest observation date (YYYY-MM) when available */
+  latest_date?: string;
 };
 
 function parseNum(val: unknown): number {
@@ -104,6 +106,7 @@ export async function fetchMarketTrend(input: {
       market_trend: {
         hpi_index: Math.round(latestIndex * 10) / 10,
         change_1y_percent: Math.round(change1y * 10) / 10,
+        latest_date: latestDate || undefined,
       },
     };
   } catch {

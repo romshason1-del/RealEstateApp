@@ -170,7 +170,11 @@ export class UnitedStatesMockProvider implements PropertyDataProvider {
     (result as Record<string, unknown>).market_trend = {
       hpi_index: hpiIndex,
       change_1y_percent,
+      latest_date: "2024-10",
     };
+
+    (result as Record<string, unknown>).data_sources = ["RentCast", "Zillow", "Redfin"];
+    (result as Record<string, unknown>).us_match_confidence = "high";
 
     return result;
   }
