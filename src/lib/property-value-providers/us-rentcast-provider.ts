@@ -15,6 +15,7 @@ import type {
 } from "./types";
 
 import { propertyProviderConfig } from "./config";
+import { buildUSAddressVariants } from "../address-parse";
 
 const RENTCAST_BASE_URL = propertyProviderConfig.rentcast.baseUrl;
 const RENTCAST_API_KEY = propertyProviderConfig.rentcast.apiKey;
@@ -69,17 +70,18 @@ function buildUSProviderDebug(overrides: Partial<Record<string, unknown>>): Prop
   };
 }
 
-function buildAddressParam(input: PropertyValueInput): string | null {
-  const fullAddr = (input.fullAddress ?? "").trim();
-  if (fullAddr) return fullAddr;
+function buildAddressVariants(input: PropertyValueInput): string[] {
   const street = (input.street ?? "").trim();
   const city = (input.city ?? "").trim();
-  const houseNumber = (input.houseNumber ?? "").trim();
-  const state = (input.state ?? "").trim();
-  const zip = (input.zip ?? "").trim();
-  if (!street || !city) return null;
-  const streetPart = [houseNumber, street].filter(Boolean).join(" ");
-  return state && zip ? `${streetPart}, ${city}, ${state} ${zip}` : `${streetPart}, ${city}`;
+  if (!street || !city) return [];
+  return buildUSAddressVariants({
+    houseNumber: (input.houseNumber ?? "").trim(),
+    street,
+    city,
+    state: (input.state ?? "").trim(),
+    zip: (input.zip ?? "").trim(),
+    fullAddress: (input.fullAddress ?? "").trim(),
+  });
 }
 
 function parseDate(val: unknown): string {
@@ -142,8 +144,10 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       };
     }
 
-    const addressParam = buildAddressParam(input);
-    if (!addressParam) {
+    const addressVariants = buildAddressVariants(input);
+    const lat = input.latitude != null && Number.isFinite(input.latitude) ? input.latitude : undefined;
+    const lng = input.longitude != null && Number.isFinite(input.longitude) ? input.longitude : undefined;
+    if (addressVariants.length === 0 && !(lat != null && lng != null)) {
       return {
         message: "Address must include city and street.",
         error: "INVALID_INPUT",
@@ -152,6 +156,14 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
           reason: "Could not build address",
         }),
       };
+    }
+
+    const queryVariants: { type: string; param: string; label: string }[] = [];
+    for (const addr of addressVariants) {
+      queryVariants.push({ type: "address", param: `address=${encodeURIComponent(addr)}`, label: addr });
+    }
+    if (lat != null && lng != null) {
+      queryVariants.push({ type: "coordinates", param: `latitude=${lat}&longitude=${lng}`, label: `${lat},${lng}` });
     }
 
     const debug: PropertyValueInsightsDebug = buildUSProviderDebug({
@@ -166,61 +178,68 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
       fallback_level_used: "none",
     });
 
+    let avmValue: number | undefined;
+    let avmRent: number | undefined;
+    let prop: RentCastProperty | undefined;
+    let subjectFromAvm: RentCastProperty | undefined;
+    let comps: Array<{ price?: number; squareFootage?: number }> = [];
+    let matchedQuery: string | undefined;
+
     try {
-      const encodedAddr = encodeURIComponent(addressParam);
+      for (const q of queryVariants) {
+        const [avmValueRes, avmRentRes, propsRes] = await Promise.all([
+          fetchRentCast(`${RENTCAST_BASE_URL}/avm/value?${q.param}`),
+          fetchRentCast(`${RENTCAST_BASE_URL}/avm/rent/long-term?${q.param}`),
+          fetchRentCast(`${RENTCAST_BASE_URL}/properties?${q.param}`),
+        ]);
 
-      let avmValue: number | undefined;
-      let avmRent: number | undefined;
-      let prop: RentCastProperty | undefined;
-      let subjectFromAvm: RentCastProperty | undefined;
-      let comps: Array<{ price?: number; squareFootage?: number }> = [];
-
-      const [avmValueRes, avmRentRes, propsRes] = await Promise.all([
-        fetchRentCast(`${RENTCAST_BASE_URL}/avm/value?address=${encodedAddr}`),
-        fetchRentCast(`${RENTCAST_BASE_URL}/avm/rent/long-term?address=${encodedAddr}`),
-        fetchRentCast(`${RENTCAST_BASE_URL}/properties?address=${encodedAddr}`),
-      ]);
-
-      if (avmValueRes.ok) {
-        const body = (await avmValueRes.json().catch(() => null)) as AVMValueResponse | null;
-        const price = body?.price != null ? parseNumeric(body.price) : 0;
-        if (price > 0) {
-          avmValue = price;
-          debug.avm_value_found = true;
-          debug.market_value_source = "avm";
-          subjectFromAvm = body?.subjectProperty as RentCastProperty | undefined;
-          if (body?.comparables && body.comparables.length > 0) {
-            comps = body.comparables;
-            debug.comps_found = true;
+        if (avmValueRes.ok) {
+          const body = (await avmValueRes.json().catch(() => null)) as AVMValueResponse | null;
+          const price = body?.price != null ? parseNumeric(body.price) : 0;
+          if (price > 0) {
+            avmValue = price;
+            debug.avm_value_found = true;
+            debug.market_value_source = "avm";
+            subjectFromAvm = body?.subjectProperty as RentCastProperty | undefined;
+            if (body?.comparables && body.comparables.length > 0) {
+              comps = body.comparables;
+              debug.comps_found = true;
+            }
           }
         }
-      }
 
-      if (avmRentRes.ok) {
-        const body = (await avmRentRes.json().catch(() => null)) as AVMRentResponse | null;
-        const rent = body?.rent != null ? parseNumeric(body.rent) : 0;
-        if (rent > 0) {
-          avmRent = rent;
-          debug.avm_rent_found = true;
-          if (!subjectFromAvm) subjectFromAvm = body?.subjectProperty as RentCastProperty | undefined;
+        if (avmRentRes.ok) {
+          const body = (await avmRentRes.json().catch(() => null)) as AVMRentResponse | null;
+          const rent = body?.rent != null ? parseNumeric(body.rent) : 0;
+          if (rent > 0) {
+            avmRent = rent;
+            debug.avm_rent_found = true;
+            if (!subjectFromAvm) subjectFromAvm = body?.subjectProperty as RentCastProperty | undefined;
+          }
         }
-      }
 
-      if (propsRes.ok) {
-        const body = (await propsRes.json().catch(() => null)) as RentCastPropertiesResponse | null;
-        const records = body
-          ? Array.isArray(body)
-            ? body
-            : (body as { data?: RentCastProperty[] }).data ?? []
-          : [];
-        prop = records[0];
-        if (prop) {
-          debug.property_found = true;
-          const history = prop.history ?? {};
-          const entries = Object.entries(history).filter(
-            ([, v]) => v && typeof v === "object" && parseNumeric((v as { price?: number }).price) > 0
-          );
-          if (entries.length > 0) debug.sales_history_found = true;
+        if (propsRes.ok) {
+          const body = (await propsRes.json().catch(() => null)) as RentCastPropertiesResponse | null;
+          const records = body
+            ? Array.isArray(body)
+              ? body
+              : (body as { data?: RentCastProperty[] }).data ?? []
+            : [];
+          prop = records[0];
+          if (prop) {
+            debug.property_found = true;
+            const history = prop.history ?? {};
+            const entries = Object.entries(history).filter(
+              ([, v]) => v && typeof v === "object" && parseNumeric((v as { price?: number }).price) > 0
+            );
+            if (entries.length > 0) debug.sales_history_found = true;
+          }
+        }
+
+        const hasData = !!(prop || subjectFromAvm || (avmValue != null && avmValue > 0) || (avmRent != null && avmRent > 0));
+        if (hasData) {
+          matchedQuery = `${q.type}:${q.label}`;
+          break;
         }
       }
 
@@ -231,7 +250,7 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
 
       const hasAnyData = subject || (avmValue != null && avmValue > 0) || (avmRent != null && avmRent > 0);
       if (!hasAnyData) {
-        const unitRequired = mightNeedUnit(addressParam, input);
+        const unitRequired = mightNeedUnit(addressVariants[0] ?? "", input);
         if (unitRequired) {
           return {
             message: "This building requires a unit number to retrieve property data.",
@@ -355,6 +374,7 @@ export class UnitedStatesRentcastProvider implements PropertyDataProvider {
         source: "rentcast",
         debug: {
           ...debug,
+          match_query: matchedQuery,
           property_found: Boolean(subject),
           avm_value_found: Boolean(avmValue && avmValue > 0),
           avm_rent_found: Boolean(avmRent && avmRent > 0),

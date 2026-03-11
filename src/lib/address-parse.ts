@@ -130,3 +130,55 @@ export function parseUKAddressFromFullString(
 
   return { houseNumber, street, city, postcode };
 }
+
+/** Remove unit/apartment suffixes from address for better property matching */
+export function stripUSAddressUnitSuffixes(address: string): string {
+  return address
+    .trim()
+    .replace(/\s*#\s*\d+[A-Za-z]?\s*$/i, "")
+    .replace(/\s*,\s*unit\s+\d+[A-Za-z]?\s*$/i, "")
+    .replace(/\s*,\s*apt\.?\s*\d+[A-Za-z]?\s*$/i, "")
+    .replace(/\s*,\s*ste\.?\s*\d+[A-Za-z]?\s*$/i, "")
+    .replace(/\s*,\s*suite\s+\d+[A-Za-z]?\s*$/i, "")
+    .replace(/\s*,\s*#\s*\d+[A-Za-z]?\s*$/i, "")
+    .replace(/\s*#\s*\d+[A-Za-z]?\s*,/i, ",")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Build address variants for RentCast retry. Returns unique non-empty strings. */
+export function buildUSAddressVariants(input: {
+  houseNumber: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  fullAddress?: string;
+}): string[] {
+  const hn = (input.houseNumber ?? "").trim();
+  const st = (input.street ?? "").trim();
+  const city = (input.city ?? "").trim();
+  const state = (input.state ?? "").trim().toUpperCase();
+  const zip = (input.zip ?? "").trim();
+  const full = (input.fullAddress ?? "").trim();
+
+  const variants: string[] = [];
+  const add = (s: string) => {
+    const cleaned = stripUSAddressUnitSuffixes(s);
+    if (cleaned && !variants.includes(cleaned)) variants.push(cleaned);
+  };
+
+  if (full) add(full);
+  if (st && city) {
+    const streetPart = [hn, st].filter(Boolean).join(" ");
+    if (state && zip) add(`${streetPart}, ${city}, ${state} ${zip}`);
+    else if (zip) add(`${streetPart}, ${city}, ${state || "CA"} ${zip}`);
+    add(`${streetPart}, ${city}`);
+  }
+  if (st && zip && !variants.some((v) => v.includes(zip))) {
+    const streetPart = [hn, st].filter(Boolean).join(" ");
+    add(`${streetPart}, ${city || "Unknown"}, ${state || "CA"} ${zip}`);
+  }
+
+  return variants;
+}

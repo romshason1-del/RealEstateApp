@@ -11,13 +11,23 @@ const TEST_ADDRESSES = [
   "568 N Tigertail Rd, Los Angeles, CA",
   "1600 Amphitheatre Parkway, Mountain View, CA",
   "350 5th Ave, New York, NY 10118",
-  "123 Main St, Austin, TX",
-  "742 Evergreen Terrace, Springfield",
+  "123 Main St, Austin, TX 78701",
+  "742 Evergreen Terrace, Springfield, IL",
   "1 Apple Park Way, Cupertino, CA",
   "4059 Mt Lee Dr, Hollywood, CA",
   "100 Universal City Plaza, Universal City, CA",
   "221B Baker St, London, CA 90210",
   "456 Oak Ave, Chicago, IL 60601",
+  "10 Downing St, San Francisco, CA 94102",
+  "555 W 5th St, Los Angeles, CA 90013",
+  "2000 Market St, San Francisco, CA 94114",
+  "1001 Pennsylvania Ave NW, Washington, DC 20004",
+  "1 World Trade Center, New York, NY 10007",
+  "400 Broad St, Seattle, WA 98109",
+  "233 S Wacker Dr, Chicago, IL 60606",
+  "888 Brannan St, San Francisco, CA 94103",
+  "1 Main St, Cambridge, MA 02142",
+  "500 S Grand Ave, Los Angeles, CA 90071",
 ];
 
 type ValueSource =
@@ -59,6 +69,15 @@ function auditResponse(address: string, data: Record<string, unknown>): AuditRow
   const addr = data.address as { city?: string; street?: string; house_number?: string } | undefined;
   const normalized = addr ? [addr.house_number, addr.street, addr.city].filter(Boolean).join(", ") : undefined;
 
+  const pr = data.property_result as {
+    exact_value?: number | null;
+    value_level?: string;
+    value_range?: { low_estimate?: number; estimated_value?: number; high_estimate?: number };
+  } | undefined;
+  const valueSource = (data.value_source as ValueSource) ?? "none";
+  const valueLevel = pr?.value_level ?? (data.is_area_level_estimate ? "area-level" : "unknown");
+  const propertyLevel = valueLevel === "property-level" || valueLevel === "street-level";
+
   const avm = typeof data.avm_value === "number" && data.avm_value > 0 ? data.avm_value : null;
   const lastSale = data.last_sale as { price?: number } | undefined;
   const salesHistory = data.sales_history as Array<{ price: number }> | undefined;
@@ -75,16 +94,16 @@ function auditResponse(address: string, data: Record<string, unknown>): AuditRow
   const salesHistoryFound = Array.isArray(salesHistory) && salesHistory.length > 0;
   const nearbyCompsFound = nearbyComps?.avg_price != null && nearbyComps.avg_price > 0;
 
-  const valueRange = data.value_range as { estimated_value?: number } | undefined;
-  const valueSource = (data.value_source as ValueSource) ?? "none";
-  const finalEstimate = valueRange?.estimated_value ?? avm ?? null;
-  const isAreaLevel = !!data.is_area_level_estimate;
-  const propertyLevel = !isAreaLevel;
+  const valueRange = data.value_range as { low_estimate?: number; estimated_value?: number; high_estimate?: number } | undefined;
+  const finalEstimate = pr?.exact_value ?? valueRange?.estimated_value ?? avm ?? null;
+  const rangeStr = valueRange?.low_estimate != null && valueRange?.high_estimate != null
+    ? `$${(valueRange.low_estimate / 1000).toFixed(0)}k–$${(valueRange.high_estimate! / 1000).toFixed(0)}k`
+    : finalEstimate != null ? `$${(finalEstimate / 1000).toFixed(0)}k` : "—";
   const confidence = (data.us_match_confidence as string) ?? "unknown";
 
   let plausible = "—";
   if (finalEstimate != null && finalEstimate > 0) {
-    if (valueSource === "rentcast_avm" || valueSource === "last_sale" || valueSource === "sales_history") {
+    if (valueSource === "rentcast_avm" || valueSource === "last_sale" || valueSource === "sales_history" || valueSource === "latest_transaction") {
       plausible = "Property-level; likely accurate";
     } else if (valueSource === "nearby_comps") {
       plausible = "Comps-based; reasonable";
@@ -105,7 +124,7 @@ function auditResponse(address: string, data: Record<string, unknown>): AuditRow
     finalEstimate,
     propertyLevel,
     confidence,
-    plausible,
+    plausible: `${rangeStr} · ${plausible}`,
   };
 }
 
