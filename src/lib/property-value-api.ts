@@ -39,6 +39,8 @@ export type PropertyValueInsightsResponse = {
   last_market_update?: string;
   last_sale?: { price: number; date: string };
   sales_history?: Array<{ date: string; price: number }>;
+  /** Global: Most recent recorded sale for the searched property when available */
+  last_recorded_sale?: { price: number; date: string; source?: string };
   nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number };
   /** Individual nearby or area sales. When is_same_property=true, these are sales for the searched property. */
   nearby_sales?: Array<{

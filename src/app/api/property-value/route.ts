@@ -370,12 +370,33 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    if (isUS) {
+      const r = response as Record<string, unknown>;
+      const salesHistory = r.sales_history as Array<{ date: string; price: number }> | undefined;
+      const lastSale = r.last_sale as { price: number; date: string } | undefined;
+      const mostRecent = Array.isArray(salesHistory) && salesHistory.length > 0
+        ? salesHistory[0]
+        : lastSale && lastSale.price > 0
+          ? lastSale
+          : null;
+      if (mostRecent && mostRecent.price > 0) {
+        response = { ...response, last_recorded_sale: { price: mostRecent.price, date: mostRecent.date, source: "RentCast" } };
+      }
+    }
+
     if (isUK && response.uk_land_registry && typeof response.uk_land_registry === "object") {
       const uk = response.uk_land_registry as {
         average_area_price?: number | null;
         area_transaction_count?: number;
         area_data_source?: string;
+        latest_building_transaction?: { price: number; date: string } | null;
+        latest_nearby_transaction?: { price: number; date: string } | null;
       };
+      const latest = uk.latest_building_transaction ?? uk.latest_nearby_transaction;
+      if (latest && latest.price > 0) {
+        const source = uk.area_data_source === "HPI" ? "HPI" : "Land Registry";
+        response = { ...response, last_recorded_sale: { price: latest.price, date: latest.date ?? "", source } };
+      }
       const hasNoUsableAreaData =
         (uk.average_area_price == null || uk.average_area_price <= 0) && (uk.area_transaction_count ?? 0) === 0;
       if (hasNoUsableAreaData) {
