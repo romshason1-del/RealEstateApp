@@ -373,7 +373,8 @@ export function PropertyValueCard({
   }, [salesHistory, lastSaleFromProvider]);
   const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
   const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
-  const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number } }).neighborhood_stats : undefined;
+  const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number; median_rent?: number } }).neighborhood_stats : undefined;
+  const investmentMetrics = insightsData && "investment_metrics" in insightsData ? (insightsData as { investment_metrics?: { median_rent: number; estimated_roi_percent: number } }).investment_metrics : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
   const dataSources = insightsData && "data_sources" in insightsData ? (insightsData as { data_sources?: ("RentCast" | "Zillow" | "Redfin")[] }).data_sources : undefined;
@@ -699,6 +700,14 @@ export function PropertyValueCard({
                     {nearbyComps.avg_price_per_sqft > 0 && (
                       <div>Avg price/sqft: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}</div>
                     )}
+                  </div>
+                </CollapsibleSection>
+              )}
+              {investmentMetrics != null && investmentMetrics.median_rent > 0 && (
+                <CollapsibleSection title="Investment Metrics">
+                  <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
+                    <div>Median Rent: {formatCurrency(investmentMetrics.median_rent, currencySymbol)}</div>
+                    <div>Estimated ROI: {investmentMetrics.estimated_roi_percent.toFixed(1)}%</div>
                   </div>
                 </CollapsibleSection>
               )}

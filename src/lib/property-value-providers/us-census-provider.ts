@@ -13,6 +13,7 @@ export type NeighborhoodStats = {
   median_home_value: number;
   median_household_income: number;
   population: number;
+  median_rent?: number;
 };
 
 type CensusGeoItem = {
@@ -111,6 +112,7 @@ async function geocodeCoordinates(
  * B25077_001E = Median Home Value
  * B19013_001E = Median Household Income
  * B01003_001E = Population
+ * B25064_001E = Median Gross Rent
  */
 async function fetchAcsData(
   state: string,
@@ -118,7 +120,7 @@ async function fetchAcsData(
   tract: string
 ): Promise<NeighborhoodStats | null> {
   const apiKey = env("CENSUS_API_KEY");
-  const variables = "B25077_001E,B19013_001E,B01003_001E";
+  const variables = "B25077_001E,B19013_001E,B01003_001E,B25064_001E";
   const forClause = tract ? `tract:${tract}` : "tract:*";
   const inClause = `state:${state}+county:${county}`;
 
@@ -149,15 +151,18 @@ async function fetchAcsData(
     const medianHomeValIdx = idx("B25077_001E");
     const medianIncomeIdx = idx("B19013_001E");
     const populationIdx = idx("B01003_001E");
+    const medianRentIdx = idx("B25064_001E");
 
     const median_home_value = medianHomeValIdx >= 0 ? parseNum(dataRow[medianHomeValIdx]) : 0;
     const median_household_income = medianIncomeIdx >= 0 ? parseNum(dataRow[medianIncomeIdx]) : 0;
     const population = populationIdx >= 0 ? parseNum(dataRow[populationIdx]) : 0;
+    const median_rent = medianRentIdx >= 0 ? parseNum(dataRow[medianRentIdx]) : undefined;
 
     return {
       median_home_value,
       median_household_income,
       population,
+      ...(median_rent != null && median_rent > 0 && { median_rent }),
     };
   } catch {
     clearTimeout(id);
@@ -173,7 +178,7 @@ async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
   if (z.length < 5) return null;
 
   const apiKey = env("CENSUS_API_KEY");
-  const variables = "B25077_001E,B19013_001E,B01003_001E";
+  const variables = "B25077_001E,B19013_001E,B01003_001E,B25064_001E";
   const params = new URLSearchParams({
     get: variables,
     for: `zip code tabulation area:${z}`,
@@ -193,10 +198,12 @@ async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
     const header = rows[0] as string[];
     const dataRow = rows[1] as unknown[];
     const idx = (name: string) => header.indexOf(name);
+    const median_rent = idx("B25064_001E") >= 0 ? parseNum(dataRow[idx("B25064_001E")]) : 0;
     return {
       median_home_value: idx("B25077_001E") >= 0 ? parseNum(dataRow[idx("B25077_001E")]) : 0,
       median_household_income: idx("B19013_001E") >= 0 ? parseNum(dataRow[idx("B19013_001E")]) : 0,
       population: idx("B01003_001E") >= 0 ? parseNum(dataRow[idx("B01003_001E")]) : 0,
+      ...(median_rent > 0 && { median_rent }),
     };
   } catch {
     clearTimeout(id);

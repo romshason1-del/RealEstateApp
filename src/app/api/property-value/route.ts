@@ -248,6 +248,24 @@ export async function GET(request: NextRequest) {
         });
         if (neighborhoodStats) {
           response = { ...response, neighborhood_stats: neighborhoodStats };
+          const medianRent = neighborhoodStats.median_rent;
+          if (medianRent != null && medianRent > 0) {
+            const r = response as Record<string, unknown>;
+            const avm = typeof r.avm_value === "number" && r.avm_value > 0 ? r.avm_value : undefined;
+            const areaPrice = typeof r.estimated_area_price === "number" && r.estimated_area_price > 0 ? r.estimated_area_price : undefined;
+            const medianSale = typeof r.median_sale_price === "number" && r.median_sale_price > 0 ? r.median_sale_price : undefined;
+            const currentEst = r.current_estimated_value && typeof r.current_estimated_value === "object" && "estimated_value" in r.current_estimated_value
+              ? (r.current_estimated_value as { estimated_value?: number }).estimated_value
+              : undefined;
+            const medianHome = neighborhoodStats.median_home_value > 0 ? neighborhoodStats.median_home_value : undefined;
+            const estimatedPropertyValue = avm ?? areaPrice ?? medianSale ?? (typeof currentEst === "number" && currentEst > 0 ? currentEst : undefined) ?? medianHome;
+            if (typeof estimatedPropertyValue === "number" && estimatedPropertyValue > 0) {
+              const estimatedRoiPercent = (medianRent * 12 / estimatedPropertyValue) * 100;
+              response = { ...response, investment_metrics: { median_rent: medianRent, estimated_roi_percent: estimatedRoiPercent } };
+            } else {
+              response = { ...response, investment_metrics: { median_rent: medianRent, estimated_roi_percent: 0 } };
+            }
+          }
         }
       } catch {
         // Census failure must not break the property card
