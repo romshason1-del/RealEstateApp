@@ -238,3 +238,93 @@ export async function fetchUKHPIForLocality(city: string, postcode?: string): Pr
     return null;
   }
 }
+
+export type UKHPIIndexResult = {
+  refMonth: string;
+  housePriceIndex: number;
+  averagePrice?: number;
+} | null;
+
+/**
+ * Fetch UK HPI index for a region. Returns latest and historical observations for HPI adjustment.
+ */
+export async function fetchUKHPIIndicesForRegion(regionSlug: string): Promise<Array<{ refMonth: string; housePriceIndex: number; averagePrice?: number }>> {
+  const regionUri = `http://landregistry.data.gov.uk/id/region/${regionSlug}`;
+  const query = `
+PREFIX ukhpi: <http://landregistry.data.gov.uk/def/ukhpi/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?refMonth ?housePriceIndex ?averagePrice
+WHERE {
+  ?obs ukhpi:refRegion <${regionUri}> ;
+       ukhpi:refMonth ?refMonth ;
+       ukhpi:housePriceIndex ?housePriceIndex .
+  OPTIONAL { ?obs ukhpi:averagePrice ?averagePrice }
+}
+ORDER BY DESC(?refMonth)
+LIMIT 50
+`.trim();
+
+  try {
+    const res = await fetch(SPARQL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/sparql-results+json",
+      },
+      body: new URLSearchParams({ query }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return [];
+
+    const json = (await res.json()) as { results?: { bindings?: Record<string, SparqlBinding>[] } };
+    const bindings = json?.results?.bindings ?? [];
+    return bindings
+      .map((b) => {
+        const refMonth = getBinding(b, "refMonth");
+        const idxStr = getBinding(b, "housePriceIndex");
+        const avgStr = getBinding(b, "averagePrice");
+        const housePriceIndex = parseFloat(idxStr.replace(/[^\d.]/g, ""));
+        const averagePrice = avgStr ? parseFloat(avgStr.replace(/[^\d.]/g, "")) : undefined;
+        if (!Number.isFinite(housePriceIndex) || housePriceIndex <= 0) return null;
+        return { refMonth, housePriceIndex, averagePrice };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch UK HPI indices for a locality (city/postcode). Used for HPI-adjusted value estimate.
+ */
+export async function fetchUKHPIIndicesForLocality(city: string, postcode?: string): Promise<Array<{ refMonth: string; housePriceIndex: number; averagePrice?: number }>> {
+  let regionSlug = cityToRegionSlug(city);
+  if (!regionSlug && postcode) {
+    const outward = postcode.split(/\s/)[0] || postcode.replace(/\s/g, "").slice(0, 4);
+    const fromPostcode = postcodeOutwardToRegion(outward);
+    if (fromPostcode) regionSlug = fromPostcode;
+  }
+  if (!regionSlug) return [];
+  return fetchUKHPIIndicesForRegion(regionSlug);
+}
+
+/**
+ * Estimate current value from last transaction using UK HPI.
+ * Formula: lastPrice * (currentIndex / indexAtSaleDate)
+ */
+export function estimateValueFromHPI(
+  lastPrice: number,
+  saleDate: string,
+  indices: Array<{ refMonth: string; housePriceIndex: number }>
+): number | null {
+  if (!Number.isFinite(lastPrice) || lastPrice <= 0 || indices.length === 0) return null;
+  const saleMonth = saleDate ? saleDate.slice(0, 7) : "";
+  const latest = indices[0];
+  if (!latest) return null;
+  const currentIndex = latest.housePriceIndex;
+  const saleIndexEntry = indices.find((i) => i.refMonth.startsWith(saleMonth));
+  const saleIndex = saleIndexEntry?.housePriceIndex ?? indices[indices.length - 1]?.housePriceIndex;
+  if (!saleIndex || saleIndex <= 0) return null;
+  return Math.round(lastPrice * (currentIndex / saleIndex));
+}

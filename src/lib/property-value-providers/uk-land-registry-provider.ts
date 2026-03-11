@@ -661,6 +661,18 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       }
     }
 
+    let streetAveragePrice: number | null = null;
+    if (street && postcode5y.length >= 2) {
+      const streetNorm = normalizeStreet(street);
+      const sameStreetItems = postcode5y.filter((t) => streetMatches(street, t.addrStreet, false));
+      if (sameStreetItems.length >= 2) {
+        const amounts = sameStreetItems.map((t) => t.amount).sort((a, b) => a - b);
+        const filtered = filterOutliersIQR(amounts);
+        const vals = filtered.length > 0 ? filtered : amounts;
+        streetAveragePrice = Math.round(vals.reduce((s, a) => s + a, 0) / vals.length);
+      }
+    }
+
     let addressMatchMode: AddressMatchMode = "none";
     if (exactMatches.length > 0) addressMatchMode = "exact";
     else if (fuzzyMatches.length > 0) addressMatchMode = "fuzzy";
@@ -712,6 +724,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
 
     const ukData = {
       building_average_price: buildingAveragePrice,
+      street_average_price: streetAveragePrice,
       transactions_in_building: building5y.length,
       latest_building_transaction: latestBuilding
         ? {

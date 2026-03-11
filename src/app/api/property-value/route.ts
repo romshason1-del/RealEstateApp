@@ -11,7 +11,8 @@ import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
-import { fetchUKHPIForLocality } from "@/lib/property-value-providers/uk-house-price-index-provider";
+import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
+import { fetchUKNeighborhoodStats, computeUKLivabilityRating } from "@/lib/property-value-providers/uk-ons-census-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
@@ -207,11 +208,29 @@ export async function GET(request: NextRequest) {
         } catch {
           // HPI failure must not break the property card
         }
+        let ukLivability: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
+        try {
+          const ukStats = await fetchUKNeighborhoodStats(postcode.trim() || "", ukLandRegistry.average_area_price ?? undefined);
+          ukLivability = computeUKLivabilityRating(ukStats);
+        } catch {
+          if (ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) {
+            ukLivability = computeUKLivabilityRating({ livability_proxy_from_area_price: ukLandRegistry.average_area_price });
+          }
+        }
         const augmented = {
           ...noMatchResult,
           address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
           uk_land_registry: ukLandRegistry,
           data_source: "live" as const,
+          property_result: {
+            exact_value: ukLandRegistry.average_area_price,
+            exact_value_message: ukLandRegistry.average_area_price == null ? "No HPI or Land Registry data" : null,
+            value_level: "area-level" as const,
+            last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
+            street_average: null,
+            street_average_message: "No street-level average found" as const,
+            livability_rating: ukLivability,
+          },
         };
         CACHE.set(cacheKey, { data: augmented, ts: Date.now() });
         return NextResponse.json(augmented);
@@ -499,6 +518,7 @@ export async function GET(request: NextRequest) {
     if (isUK && response.uk_land_registry && typeof response.uk_land_registry === "object") {
       const uk = response.uk_land_registry as {
         average_area_price?: number | null;
+        street_average_price?: number | null;
         area_transaction_count?: number;
         area_data_source?: string;
         latest_building_transaction?: { price: number; date: string } | null;
@@ -531,6 +551,59 @@ export async function GET(request: NextRequest) {
           // HPI failure must not break the property card
         }
       }
+
+      const ukForResult = response.uk_land_registry as {
+        average_area_price?: number | null;
+        street_average_price?: number | null;
+        latest_building_transaction?: { price: number; date: string } | null;
+        latest_nearby_transaction?: { price: number; date: string } | null;
+      };
+      const latestTx = ukForResult.latest_building_transaction ?? ukForResult.latest_nearby_transaction;
+      const areaPrice = ukForResult.average_area_price ?? null;
+      const streetAvg = ukForResult.street_average_price ?? null;
+
+      let exactValue: number | null = null;
+      if (latestTx && latestTx.price > 0) {
+        try {
+          const indices = await fetchUKHPIIndicesForLocality(city.trim(), postcode.trim() || undefined);
+          const hpiAdjusted = estimateValueFromHPI(latestTx.price, latestTx.date ?? "", indices);
+          if (hpiAdjusted) exactValue = hpiAdjusted;
+        } catch {
+          exactValue = latestTx.price;
+        }
+      }
+      if (exactValue == null && areaPrice != null && areaPrice > 0) exactValue = areaPrice;
+
+      const lastTransaction =
+        latestTx && latestTx.price > 0
+          ? { amount: latestTx.price, date: latestTx.date ?? null, message: undefined as string | undefined }
+          : { amount: 0, date: null as string | null, message: "No recorded transaction found" as const };
+
+      const streetAverage = streetAvg != null && streetAvg > 0 ? streetAvg : null;
+      const streetAverageMessage = streetAverage == null ? "No street-level average found" as const : null;
+
+      let livabilityRating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
+      try {
+        const ukStats = await fetchUKNeighborhoodStats(postcode.trim() || "", areaPrice ?? undefined);
+        livabilityRating = computeUKLivabilityRating(ukStats);
+      } catch {
+        if (areaPrice != null && areaPrice > 0) {
+          livabilityRating = computeUKLivabilityRating({ livability_proxy_from_area_price: areaPrice });
+        }
+      }
+
+      response = {
+        ...response,
+        property_result: {
+          exact_value: exactValue,
+          exact_value_message: exactValue == null && areaPrice != null ? "No HPI-adjusted value; area average only" : null,
+          value_level: (exactValue != null && latestTx ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
+          last_transaction: lastTransaction,
+          street_average: streetAverage,
+          street_average_message: streetAverageMessage,
+          livability_rating: livabilityRating,
+        },
+      };
     }
 
     if ("address" in result && result.address) {
