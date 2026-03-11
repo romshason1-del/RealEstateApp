@@ -139,6 +139,8 @@ export type PropertyValueInsightsSuccess = {
   last_recorded_sale?: LastRecordedSale;
   /** UK: Land Registry Price Paid Data */
   uk_land_registry?: {
+    /** Average price on same street (Land Registry) */
+    street_average_price?: number | null;
     /** Average sale price for the exact building (last 5 years). Null if insufficient data. */
     building_average_price: number | null;
     /** Number of valid transactions in the building (last 5 years). */
