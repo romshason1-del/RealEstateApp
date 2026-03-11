@@ -14,7 +14,7 @@ import type {
 } from "./types";
 import { UnitedStatesRentcastProvider } from "./us-rentcast-provider";
 import { UnitedStatesMockProvider } from "./us-mock-provider";
-import { lookup, loadFromFile } from "./us-market-data-cache";
+import { lookupAsync, loadFromFile } from "./us-market-data-cache";
 import { isUSMockEnabled, isUSRentcastConfigured } from "./config";
 
 const rentcast = new UnitedStatesRentcastProvider();
@@ -79,7 +79,7 @@ export class USOrchestratorProvider implements PropertyDataProvider {
     const zip = (input.zip ?? "").trim();
     const city = (input.city ?? "").trim();
     const state = (input.state ?? "").trim();
-    const cached = lookup(zip, city, state);
+    const cached = await lookupAsync(zip, city, state);
 
     if (isUSRentcastConfigured()) {
       const rentcastResult = await rentcast.getInsights(input);
@@ -125,8 +125,8 @@ export class USOrchestratorProvider implements PropertyDataProvider {
     }
 
     return {
-      message: "Property data source is not configured for the United States.",
-      error: "PROVIDER_NOT_CONFIGURED",
+      message: "No property data found for this address.",
+      error: "NO_MATCH",
     };
   }
 }

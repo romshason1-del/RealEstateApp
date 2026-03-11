@@ -1,15 +1,28 @@
 #!/usr/bin/env tsx
 /**
  * Sync US market data from Zillow Research and Redfin Data Center into cache.
- * Run: npx tsx scripts/sync-us-market-data.ts
- * Cache is saved to .us-market-cache.json (add to .gitignore).
- * For URL verification (HTTP status, content-type, headers): npx tsx scripts/debug-us-market-sources.ts
+ * Run: npm run sync:us-market  (or npx tsx scripts/sync-us-market-data.ts with .env.local)
+ * Outputs: .us-market-cache.json (local dev) + Supabase us_market_data (production)
+ * For URL verification: npx tsx scripts/debug-us-market-sources.ts
  */
 import * as fs from "fs/promises";
 import * as path from "path";
+// Load .env.local for Supabase keys (NEXT_PUBLIC_SUPABASE_*, SUPABASE_SERVICE_ROLE_KEY)
+try {
+  const dotenv = await import("dotenv");
+  dotenv.config({ path: ".env.local" });
+} catch {
+  /* dotenv optional */
+}
+
 import { syncZillowZipData, syncZillowCityData } from "../src/lib/property-value-providers/us-zillow-research-provider";
 import { syncRedfinZipData, syncRedfinCityData } from "../src/lib/property-value-providers/us-redfin-provider";
-import { saveToFile, getSampleCacheKeys, getCacheSize } from "../src/lib/property-value-providers/us-market-data-cache";
+import {
+  saveToFile,
+  saveToSupabase,
+  getSampleCacheKeys,
+  getCacheSize,
+} from "../src/lib/property-value-providers/us-market-data-cache";
 
 const SAMPLES_FILE = ".us-market-samples.json";
 
@@ -87,9 +100,16 @@ async function main() {
     logSection("Save cache");
     const saved = await saveToFile();
     if (saved) {
-      console.log("  Cache saved to .us-market-cache.json");
+      console.log("  Local: .us-market-cache.json");
     } else {
-      console.error("  Could not save cache file");
+      console.log("  Local: (skipped, no file system)");
+    }
+
+    const supabaseResult = await saveToSupabase();
+    if (supabaseResult.error) {
+      console.log(`  Supabase: ${supabaseResult.error}`);
+    } else {
+      console.log(`  Supabase: ${supabaseResult.count} rows upserted to us_market_data`);
     }
 
     const samplesPath = path.join(process.cwd(), SAMPLES_FILE);
