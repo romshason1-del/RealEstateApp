@@ -59,6 +59,13 @@ export type LastSaleRecord = {
   date: string;
 };
 
+/** Global: Most recent recorded sale for the searched property. Country-agnostic. */
+export type LastRecordedSale = {
+  price: number;
+  date: string;
+  source?: string;
+};
+
 /** US: Property details from provider */
 export type PropertyDetails = {
   beds?: number;
@@ -128,6 +135,8 @@ export type PropertyValueInsightsSuccess = {
   data_sources?: ("RentCast" | "Zillow" | "Redfin")[];
   /** US: high = RentCast + market data, medium = Zillow+Redfin agreement, low = single-source regional */
   us_match_confidence?: "high" | "medium" | "low";
+  /** Global: Most recent recorded sale for the searched property when available */
+  last_recorded_sale?: LastRecordedSale;
   /** UK: Land Registry Price Paid Data */
   uk_land_registry?: {
     /** Average sale price for the exact building (last 5 years). Null if insufficient data. */

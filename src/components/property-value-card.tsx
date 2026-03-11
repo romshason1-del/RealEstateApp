@@ -383,6 +383,7 @@ export function PropertyValueCard({
   const sourceSummary = insightsData && "source_summary" in insightsData ? (insightsData as { source_summary?: string }).source_summary : undefined;
   const lastMarketUpdate = insightsData && "last_market_update" in insightsData ? (insightsData as { last_market_update?: string }).last_market_update : undefined;
   const nearbySales = insightsData && "nearby_sales" in insightsData ? (insightsData as { nearby_sales?: Array<{ address: string; price: number; date: string; distance_m?: number; price_per_sqft?: number; is_same_property?: boolean }> }).nearby_sales : undefined;
+  const lastRecordedSale = insightsData && "last_recorded_sale" in insightsData ? (insightsData as { last_recorded_sale?: { price: number; date: string; source?: string } }).last_recorded_sale : undefined;
   const estimatedAreaPrice = insightsData && "estimated_area_price" in insightsData ? (insightsData as { estimated_area_price?: number | null }).estimated_area_price : undefined;
   const medianSalePrice = insightsData && "median_sale_price" in insightsData ? (insightsData as { median_sale_price?: number | null }).median_sale_price : undefined;
   const medianPricePerSqft = insightsData && "median_price_per_sqft" in insightsData ? (insightsData as { median_price_per_sqft?: number | null }).median_price_per_sqft : undefined;
@@ -549,6 +550,15 @@ export function PropertyValueCard({
           ) : isUS ? (
             <div className="space-y-1.5">
               {/* Priority: Estimated Value, Range, Confidence, Sources, Last Update */}
+              {lastRecordedSale != null && lastRecordedSale.price > 0 && (
+                <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
+                  <FileText className="size-3 shrink-0" aria-hidden />
+                  <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
+                  {lastRecordedSale.source && (
+                    <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
+                  )}
+                </div>
+              )}
               {((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0) > 0) && (
                 <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
                   <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
@@ -842,6 +852,15 @@ export function PropertyValueCard({
                 </div>
               )}
               <div className="space-y-1">
+                {lastRecordedSale != null && lastRecordedSale.price > 0 && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
+                    <FileText className="size-3 shrink-0" aria-hidden />
+                    <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
+                    {lastRecordedSale.source && (
+                      <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
+                    )}
+                  </div>
+                )}
                 {(ukLandRegistry.has_building_match !== false) && (
                   <>
                     <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
