@@ -87,10 +87,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 function buildUKMinimalResponse(): Record<string, unknown> {
   return {
     message: "Request timeout - partial data",
+    uk_no_property_record: true,
     property_result: {
       exact_value: null,
-      exact_value_message: "Request timed out",
-      value_level: "area-level" as const,
+      exact_value_message: "No exact UK property record found for this address",
+      value_level: "no_match" as const,
       last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
       street_average: null,
       street_average_message: "No street-level average found" as const,
@@ -302,15 +303,18 @@ export async function GET(request: NextRequest) {
             // EPC failure must not block response
           }
         }
+        const hasTrustedAreaData = (ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) || noMatchExactValue != null;
+        const ukNoPropertyRecord = !hasTrustedAreaData;
         const augmented = {
           ...noMatchResult,
           address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
           uk_land_registry: ukLandRegistry,
+          uk_no_property_record: ukNoPropertyRecord,
           data_source: "live" as const,
           property_result: {
             exact_value: noMatchExactValue,
-            exact_value_message: noMatchExactValue == null ? "No HPI or Land Registry data" : null,
-            value_level: "area-level" as const,
+            exact_value_message: ukNoPropertyRecord ? "No exact UK property record found for this address" : (noMatchExactValue == null ? "No HPI or Land Registry data" : null),
+            value_level: (ukNoPropertyRecord ? "no_match" : "area-level") as "no_match" | "area-level",
             last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
             street_average: null,
             street_average_message: "No street-level average found" as const,

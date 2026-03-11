@@ -43,7 +43,7 @@ export type PropertyValueInsightsResponse = {
   property_result?: {
     exact_value: number | null;
     exact_value_message: string | null;
-    value_level: "property-level" | "street-level" | "area-level";
+    value_level: "property-level" | "street-level" | "area-level" | "no_match";
     last_transaction: { amount: number; date: string | null; message?: string };
     street_average: number | null;
     street_average_message: string | null;

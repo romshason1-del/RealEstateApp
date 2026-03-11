@@ -385,7 +385,7 @@ export function PropertyValueCard({
     property_result?: {
       exact_value: number | null;
       exact_value_message: string | null;
-      value_level: "property-level" | "street-level" | "area-level";
+      value_level: "property-level" | "street-level" | "area-level" | "no_match";
       last_transaction: { amount: number; date: string | null; message?: string };
       street_average: number | null;
       street_average_message: string | null;
@@ -539,14 +539,14 @@ export function PropertyValueCard({
               <div className="flex items-center gap-1.5 text-amber-300/90">
                 <FileText className="size-3 shrink-0" aria-hidden />
                 <span className="text-xs font-medium">
-                  {isUK && insightsData?.message === "no transaction found"
-                    ? "No UK Land Registry transaction found."
+                  {isUK
+                    ? "No exact UK property record found for this address"
                     : "No property data found for this address"}
                 </span>
               </div>
               <p className="text-[11px] text-zinc-400">
-                {isUK && insightsData?.message === "no transaction found"
-                  ? "No UK Land Registry transaction found."
+                {isUK
+                  ? "Map location found, but no Land Registry or EPC record matches this address."
                   : isUS
                     ? insightsData?.message ?? "No property record could be retrieved for this address."
                     : "We only show data when there is a high-confidence match for the exact address."}
@@ -628,8 +628,11 @@ export function PropertyValueCard({
                         ? formatCurrency(propertyResult.exact_value, currencySymbol)
                         : propertyResult.exact_value_message ?? "No exact property-level value found"}
                     </div>
-                    {propertyResult.value_level && (
+                    {propertyResult.value_level && propertyResult.value_level !== "no_match" && (
                       <div className="mt-0.5 text-[10px] text-zinc-500">Level: {propertyResult.value_level}</div>
+                    )}
+                    {propertyResult.value_level === "no_match" && (
+                      <div className="mt-0.5 text-[10px] text-zinc-500">Map location found; no UK property record</div>
                     )}
                   </div>
                   <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
