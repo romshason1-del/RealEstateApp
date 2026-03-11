@@ -294,16 +294,28 @@ LIMIT 500
 
 /**
  * Street-only query for "Average home price on the same street".
- * Exact match on street name + town. Residential property types only.
- * Example: street="High Street", town="London" → transactions on High Street in London.
+ * Exact match on street name + town (or postcode area when postcode provided).
+ * Supports street variants (e.g. "Rd" vs "Road") and town/postcode flexibility.
  */
-function buildSparqlQueryStreetExact(street: string, town: string): string {
+function buildSparqlQueryStreetExact(street: string, town: string, postcodePrefix?: string): string {
   const streetNorm = normalizeStreet(street ?? "");
   const townNorm = (town ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toLowerCase();
-  if (!streetNorm || !townNorm) return "";
+  if (!streetNorm || (!townNorm && !postcodePrefix)) return "";
   const streetLower = streetNorm.toLowerCase();
   const streetEsc = streetLower.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const townEsc = townNorm.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const streetVariants: string[] = [streetEsc];
+  const rawLower = (street ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+  if (rawLower && rawLower !== streetEsc) streetVariants.push(rawLower.replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
+  const rdVariant = streetEsc.replace(/\broad\b/g, "rd");
+  if (rdVariant !== streetEsc && !streetVariants.includes(rdVariant)) streetVariants.push(rdVariant);
+  const streetFilter = streetVariants.map((v) => `LCASE(STR(?street)) = "${v}"`).join(" || ");
+  const townFilter = townNorm
+    ? `CONTAINS(LCASE(STR(?town)), "${townNorm.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`
+    : "false";
+  const postcodeFilter = postcodePrefix
+    ? `STRSTARTS(UCASE(STR(?postcode)), "${postcodePrefix.toUpperCase().replace(/[^A-Z0-9]/g, "")}")`
+    : "false";
+  const localityFilter = postcodePrefix ? `(${townFilter} || ${postcodeFilter})` : townFilter;
   return `
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
@@ -312,8 +324,9 @@ PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
 WHERE {
   ?addr lrcommon:street ?street.
-  ?addr lrcommon:town ?town.
-  FILTER(LCASE(STR(?street)) = "${streetEsc}" && CONTAINS(LCASE(STR(?town)), "${townEsc}"))
+  OPTIONAL { ?addr lrcommon:town ?town }
+  OPTIONAL { ?addr lrcommon:postcode ?postcode }
+  FILTER((${streetFilter}) && (${localityFilter}))
   ?transx lrppi:propertyAddress ?addr ;
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
@@ -322,7 +335,6 @@ WHERE {
   OPTIONAL { ?addr lrcommon:county ?county }
   OPTIONAL { ?addr lrcommon:paon ?paon }
   OPTIONAL { ?addr lrcommon:saon ?saon }
-  OPTIONAL { ?addr lrcommon:postcode ?postcode }
 }
 ORDER BY DESC(?date)
 LIMIT 500
@@ -410,20 +422,20 @@ function paonMatchesHouseNumber(paon: string, saon: string, houseNumber: string)
   return false;
 }
 
-/** Check if street strings match (partial, normalized) */
+/** Check if street strings match (partial, normalized). Same-street requires all words to match. */
 function streetMatches(reqStreet: string, addrStreet: string, exact: boolean): boolean {
   const req = normalizeStreet(reqStreet);
   const addr = normalizeStreet(addrStreet);
   if (!req) return true;
   if (req === addr) return true;
   if (addr.includes(req) || req.includes(addr)) return true;
-  const reqWords = req.split(/\s+/);
-  const addrWords = addr.split(/\s+/);
+  const reqWords = req.split(/\s+/).filter(Boolean);
+  const addrWords = addr.split(/\s+/).filter(Boolean);
   const matchCount = reqWords.filter((w) => addr.includes(w)).length;
   if (exact) {
     return matchCount >= Math.min(reqWords.length, 2) && addrWords.length >= 1;
   }
-  return matchCount >= 1 || addrWords.some((w) => req.includes(w));
+  return matchCount >= reqWords.length;
 }
 
 /** Exact building match: strict paon + street + town */
@@ -742,10 +754,18 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     }
 
     let streetAveragePrice: number | null = null;
+    const DEBUG_KENSINGTON = (postcode ?? "").toUpperCase().replace(/\s/g, "").includes("W112EU") ||
+      ((street ?? "").toLowerCase().includes("kensington park") && (city ?? "").toLowerCase().includes("london"));
     if (street && (city || postcode)) {
       let streetTxItems: Tx[] = [];
-      if (city) {
-        const streetQuery = buildSparqlQueryStreetExact(street, city);
+      const streetNorm = normalizeStreet(street);
+      if (DEBUG_KENSINGTON) {
+        console.debug("[street-avg DEBUG] Address: street=", JSON.stringify(street), "city=", JSON.stringify(city), "postcode=", JSON.stringify(postcode));
+        console.debug("[street-avg DEBUG] 1. Normalized street:", JSON.stringify(streetNorm), "outwardPostcode:", outwardPostcode ?? "(none)");
+      }
+      const outwardPostcode = postcode ? normalizeUKPostcode(postcode).split(/\s/)[0]?.replace(/\s/g, "") || undefined : undefined;
+      if (city || outwardPostcode) {
+        const streetQuery = buildSparqlQueryStreetExact(street, city, outwardPostcode);
         if (streetQuery) {
           try {
             const streetRes = await fetch(SPARQL_ENDPOINT, {
@@ -760,21 +780,46 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             if (streetRes.ok) {
               const streetJson = (await streetRes.json()) as SparqlResult;
               const streetBindings = streetJson?.results?.bindings ?? [];
-              streetTxItems = processBindingsToItems(streetBindings, true, true);
-              streetTxItems = streetTxItems.filter((t) => t.dateMs >= fiveYearsAgo);
+              const rawCount = streetBindings.length;
+              const afterProcess = processBindingsToItems(streetBindings, true, true);
+              const after5y = afterProcess.filter((t) => t.dateMs >= fiveYearsAgo);
+              streetTxItems = after5y;
+              if (DEBUG_KENSINGTON) {
+                const afterProcessNoRes = processBindingsToItems(streetBindings, true, false);
+                const after5yNoRes = afterProcessNoRes.filter((t) => t.dateMs >= fiveYearsAgo);
+                console.debug("[street-avg DEBUG] 2a. Exact street+town query: raw=", rawCount, "after_valid+residential=", afterProcess.length, "after_5y=", after5y.length);
+                console.debug("[street-avg DEBUG] 2b. (For comparison: after_valid_only, no residential filter) after_process=", afterProcessNoRes.length, "after_5y=", after5yNoRes.length);
+                if (streetBindings.length > 0 && streetBindings.length <= 5) {
+                  console.debug("[street-avg DEBUG] 2c. Sample raw street values:", streetBindings.slice(0, 3).map((b) => getBinding(b, "street")));
+                  console.debug("[street-avg DEBUG] 2d. Sample raw town values:", streetBindings.slice(0, 3).map((b) => getBinding(b, "town")));
+                }
+              }
             }
-          } catch {
-            // Street query failed, fall through to postcode
+          } catch (e) {
+            if (DEBUG_KENSINGTON) console.debug("[street-avg DEBUG] 2. Street query failed:", e instanceof Error ? e.message : String(e));
           }
         }
       }
       if (streetTxItems.length < 3 && postcode5yResidential.length >= 2) {
         const sameStreetItems = postcode5yResidential.filter((t) => streetMatches(street, t.addrStreet, false));
+        if (DEBUG_KENSINGTON) {
+          console.debug("[street-avg DEBUG] 3. Postcode filtered by street: postcode5yResidential=", postcode5yResidential.length, "sameStreetItems=", sameStreetItems.length);
+          if (postcode5yResidential.length > 0 && sameStreetItems.length < postcode5yResidential.length) {
+            const sampleAddrStreets = [...new Set(postcode5yResidential.slice(0, 15).map((t) => t.addrStreet))];
+            console.debug("[street-avg DEBUG] 3b. Sample addrStreet values in postcode:", sampleAddrStreets);
+          }
+        }
         if (sameStreetItems.length >= 3) streetTxItems = sameStreetItems;
       }
       if (streetTxItems.length >= 3) {
         const amounts = streetTxItems.map((t) => t.amount).sort((a, b) => a - b);
         streetAveragePrice = computeMedian(amounts);
+      }
+      if (DEBUG_KENSINGTON) {
+        console.debug("[street-avg DEBUG] 4. Final: streetTxItems=", streetTxItems.length, "streetAveragePrice=", streetAveragePrice);
+        console.debug("[street-avg DEBUG] 5. Root cause: street_average_price is null because", streetTxItems.length < 3
+          ? `streetTxItems.length (${streetTxItems.length}) < 3`
+          : "median computed successfully");
       }
     }
 
