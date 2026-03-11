@@ -34,7 +34,7 @@ function buildMarketFallback(
     : cached.sources.includes("redfin")
       ? ["Redfin"]
       : [];
-  /** Confidence: High = RentCast property-level. Medium = 2+ market sources (Zillow+Redfin). Low = single source. */
+  /** Confidence: High = RentCast AVM. Medium = Zillow+Redfin. Low = Census/area-level only. */
   const confidence: "high" | "medium" | "low" =
     dataSources.length >= 2 ? "medium" : "low";
 
@@ -89,22 +89,20 @@ export class USOrchestratorProvider implements PropertyDataProvider {
         return rentcastResult;
       }
 
-      const hasRentcastData =
-        rentcastResult &&
-        !("error" in rentcastResult) &&
-        "avm_value" in rentcastResult &&
-        (rentcastResult as PropertyValueInsightsSuccess).avm_value != null &&
-        (rentcastResult as PropertyValueInsightsSuccess).avm_value! > 0;
+      const success = rentcastResult as PropertyValueInsightsSuccess | undefined;
+      const hasRentcastAvm = success && "avm_value" in success && (success.avm_value ?? 0) > 0;
+      const hasRentcastLastSale = success && success.last_sale != null && success.last_sale.price > 0;
+      const hasRentcastSalesHistory = success && Array.isArray(success.sales_history) && success.sales_history.length > 0;
+      const hasRentcastPropertyData = hasRentcastAvm || hasRentcastLastSale || hasRentcastSalesHistory;
 
-      if (hasRentcastData) {
-        const success = rentcastResult as PropertyValueInsightsSuccess;
+      if (hasRentcastPropertyData && success) {
         const sources: ("RentCast" | "Zillow" | "Redfin")[] = ["RentCast"];
         if (cached?.sources.includes("zillow")) sources.push("Zillow");
         if (cached?.sources.includes("redfin")) sources.push("Redfin");
         return {
           ...success,
           data_sources: sources,
-          us_match_confidence: "high",
+          us_match_confidence: hasRentcastAvm ? "high" : "medium",
           estimated_area_price: cached?.estimated_area_price ?? cached?.median_sale_price ?? success.estimated_area_price,
           median_sale_price: cached?.median_sale_price ?? success.median_sale_price,
           median_price_per_sqft: cached?.median_price_per_sqft ?? success.median_price_per_sqft,

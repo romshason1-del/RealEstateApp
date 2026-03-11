@@ -37,6 +37,8 @@ export type PropertyValueInsightsResponse = {
   source_summary?: string;
   /** US: When source data was last updated, e.g. "Jan 2025" or "Updated monthly" */
   last_market_update?: string;
+  /** US: True when value is from area-level data only (Census/median_sale_price), not property-specific */
+  is_area_level_estimate?: boolean;
   last_sale?: { price: number; date: string };
   sales_history?: Array<{ date: string; price: number }>;
   /** Global: Most recent recorded sale for the searched property when available */

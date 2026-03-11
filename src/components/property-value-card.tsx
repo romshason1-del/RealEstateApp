@@ -379,6 +379,7 @@ export function PropertyValueCard({
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
   const dataSources = insightsData && "data_sources" in insightsData ? (insightsData as { data_sources?: ("RentCast" | "Zillow" | "Redfin")[] }).data_sources : undefined;
   const usMatchConfidence = insightsData && "us_match_confidence" in insightsData ? (insightsData as { us_match_confidence?: "high" | "medium" | "low" }).us_match_confidence : undefined;
+  const isAreaLevelEstimate = insightsData && "is_area_level_estimate" in insightsData ? (insightsData as { is_area_level_estimate?: boolean }).is_area_level_estimate : undefined;
   const valueRange = insightsData && "value_range" in insightsData ? (insightsData as { value_range?: { low_estimate: number; estimated_value: number; high_estimate: number } }).value_range : undefined;
   const sourceSummary = insightsData && "source_summary" in insightsData ? (insightsData as { source_summary?: string }).source_summary : undefined;
   const lastMarketUpdate = insightsData && "last_market_update" in insightsData ? (insightsData as { last_market_update?: string }).last_market_update : undefined;
@@ -577,6 +578,11 @@ export function PropertyValueCard({
                       Value range: {formatCurrency(valueRange.low_estimate, currencySymbol)} – {formatCurrency(valueRange.high_estimate, currencySymbol)}
                     </div>
                   )}
+                  {isAreaLevelEstimate && (
+                    <div className="mt-1 rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[10px] text-amber-400" title="This value is based on area medians (Census/Zillow/Redfin), not this specific property">
+                      Area-level estimate — not property-specific
+                    </div>
+                  )}
                   {(sourceSummary || (dataSources != null && dataSources.length > 0)) && (
                     <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-400">
                       <span>{sourceSummary ?? (dataSources != null && dataSources.length > 0 ? `Based on ${dataSources.join(", ")}` : "")}</span>
@@ -602,10 +608,10 @@ export function PropertyValueCard({
                     }`}
                     title={
                       usMatchConfidence === "high"
-                        ? "RentCast property-level + market data"
+                        ? "RentCast AVM (property-level)"
                         : usMatchConfidence === "medium"
-                          ? "Zillow + Redfin agreement"
-                          : "Single-source regional"
+                          ? "Zillow + Redfin estimates or RentCast last sale"
+                          : "Census / area-level data only"
                     }
                   >
                     {usMatchConfidence} confidence
