@@ -284,6 +284,8 @@ export async function GET(request: NextRequest) {
       const avm = typeof r.avm_value === "number" && r.avm_value > 0 ? r.avm_value : undefined;
       const lastSale = r.last_sale as { price?: number; date?: string } | undefined;
       const salesHistory = r.sales_history as Array<{ price: number; date: string }> | undefined;
+      const latestTx = r.latest_transaction as { transaction_price?: number; transaction_date?: string } | undefined;
+      const latestTxPrice = latestTx?.transaction_price != null && latestTx.transaction_price > 0 ? latestTx.transaction_price : undefined;
       const areaPrice = typeof r.estimated_area_price === "number" && r.estimated_area_price > 0 ? r.estimated_area_price : undefined;
       const medianSale = typeof r.median_sale_price === "number" && r.median_sale_price > 0 ? r.median_sale_price : undefined;
       const nearbyComps = r.nearby_comps as { avg_price?: number } | undefined;
@@ -292,9 +294,11 @@ export async function GET(request: NextRequest) {
       const medianHome = ns?.median_home_value != null && ns.median_home_value > 0 ? ns.median_home_value : undefined;
       const lastSalePrice = lastSale?.price != null && lastSale.price > 0 ? lastSale.price : undefined;
       const salesHistoryFirst = Array.isArray(salesHistory) && salesHistory.length > 0 && salesHistory[0]?.price != null ? salesHistory[0].price : undefined;
-      const primaryValue = avm ?? lastSalePrice ?? salesHistoryFirst ?? areaPrice ?? medianSale ?? compsAvg ?? medianHome;
-      const hasPropertyLevelData = (avm != null && avm > 0) || (lastSale?.price != null && lastSale.price > 0) || (Array.isArray(salesHistory) && salesHistory.length > 0) || (compsAvg != null && compsAvg > 0);
+
+      const hasPropertyLevelData = (avm != null && avm > 0) || (lastSale?.price != null && lastSale.price > 0) || (Array.isArray(salesHistory) && salesHistory.length > 0) || (latestTxPrice != null) || (compsAvg != null && compsAvg > 0);
       const isAreaLevelOnly = !hasPropertyLevelData && (areaPrice != null || medianSale != null || medianHome != null);
+
+      const primaryValue = avm ?? lastSalePrice ?? salesHistoryFirst ?? latestTxPrice ?? compsAvg ?? (isAreaLevelOnly ? undefined : (areaPrice ?? medianSale ?? medianHome));
       const valueSource =
         avm != null && avm > 0
           ? "rentcast_avm"
@@ -302,31 +306,44 @@ export async function GET(request: NextRequest) {
             ? "last_sale"
             : salesHistoryFirst != null
               ? "sales_history"
-              : compsAvg != null
-                ? "nearby_comps"
-                : areaPrice != null
-                  ? "zillow_area"
-                  : medianSale != null
-                    ? "redfin_area"
-                    : medianHome != null
-                      ? "census_median"
-                      : "none";
+              : latestTxPrice != null
+                ? "latest_transaction"
+                : compsAvg != null
+                  ? "nearby_comps"
+                  : areaPrice != null
+                    ? "zillow_area"
+                    : medianSale != null
+                      ? "redfin_area"
+                      : medianHome != null
+                        ? "census_median"
+                        : "none";
+
       if (typeof primaryValue === "number" && primaryValue > 0) {
-        const sources: number[] = [avm, lastSalePrice, salesHistoryFirst, areaPrice, medianSale, compsAvg, medianHome].filter((v): v is number => typeof v === "number" && v > 0);
-        const uniqueSources = [...new Set(sources)];
         let low: number;
         let high: number;
-        if (avm != null && avm > 0 && uniqueSources.length <= 1) {
-          low = Math.round(avm * 0.92);
-          high = Math.round(avm * 1.08);
-        } else if (uniqueSources.length >= 2) {
-          low = Math.min(...uniqueSources);
-          high = Math.max(...uniqueSources);
+        if (avm != null && avm > 0) {
+          low = Math.round(avm * 0.93);
+          high = Math.round(avm * 1.07);
+        } else if (lastSalePrice != null && lastSale?.date) {
+          const saleAgeYears = (Date.now() - new Date(lastSale.date).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+          const adj = saleAgeYears < 2 ? 0.06 : saleAgeYears < 4 ? 0.1 : 0.15;
+          low = Math.round(lastSalePrice * (1 - adj));
+          high = Math.round(lastSalePrice * (1 + adj));
+        } else if (compsAvg != null && compsAvg > 0) {
+          low = Math.round(compsAvg * 0.9);
+          high = Math.round(compsAvg * 1.1);
+        } else if (salesHistoryFirst != null || latestTxPrice != null) {
+          const base = salesHistoryFirst ?? latestTxPrice!;
+          low = Math.round(base * 0.92);
+          high = Math.round(base * 1.08);
         } else {
           low = Math.round(primaryValue * 0.92);
           high = Math.round(primaryValue * 1.08);
         }
         response = { ...response, value_range: { low_estimate: low, estimated_value: primaryValue, high_estimate: high } };
+      } else if (isAreaLevelOnly && (areaPrice != null || medianSale != null || medianHome != null)) {
+        const areaVal = areaPrice ?? medianSale ?? medianHome!;
+        response = { ...response, value_range: { low_estimate: Math.round(areaVal * 0.9), estimated_value: areaVal, high_estimate: Math.round(areaVal * 1.1) } };
       }
       if (isAreaLevelOnly) {
         response = { ...response, is_area_level_estimate: true, us_match_confidence: "low" as const };
@@ -334,14 +351,14 @@ export async function GET(request: NextRequest) {
       response = { ...response, value_source: valueSource };
 
       const valueLevel: "property-level" | "street-level" | "area-level" =
-        ((avm != null && avm > 0) || lastSalePrice != null || salesHistoryFirst != null)
+        ((avm != null && avm > 0) || lastSalePrice != null || salesHistoryFirst != null || latestTxPrice != null)
           ? "property-level"
           : compsAvg != null
             ? "street-level"
             : "area-level";
 
-      const exactValue = (avm != null && avm > 0) || lastSalePrice != null || salesHistoryFirst != null
-        ? (avm ?? lastSalePrice ?? salesHistoryFirst)!
+      const exactValue = (avm != null && avm > 0) || lastSalePrice != null || salesHistoryFirst != null || latestTxPrice != null || compsAvg != null
+        ? (avm ?? lastSalePrice ?? salesHistoryFirst ?? latestTxPrice ?? compsAvg)!
         : null;
 
       const lastTransaction =
@@ -349,10 +366,12 @@ export async function GET(request: NextRequest) {
           ? { amount: lastSalePrice, date: lastSale.date }
           : Array.isArray(salesHistory) && salesHistory.length > 0 && salesHistory[0]?.price != null
             ? { amount: salesHistory[0].price, date: salesHistory[0].date ?? "" }
-            : { amount: 0, date: null as string | null, message: "No recorded transaction found" as const };
+            : latestTxPrice != null && latestTx?.transaction_date
+              ? { amount: latestTxPrice, date: latestTx.transaction_date }
+              : { amount: 0, date: null as string | null, message: "No recorded transaction found" as const };
 
-      const streetAverage = null;
-      const streetAverageMessage = "No street-level average found" as const;
+      const streetAverage = compsAvg != null && compsAvg > 0 ? compsAvg : null;
+      const streetAverageMessage = streetAverage == null ? "No street-level average found" as const : null;
 
       const nsForLivability = r.neighborhood_stats as {
         median_household_income?: number;
