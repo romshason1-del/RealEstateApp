@@ -40,6 +40,15 @@ export type PropertyValueInsightsResponse = {
   last_sale?: { price: number; date: string };
   sales_history?: Array<{ date: string; price: number }>;
   nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number };
+  /** Individual nearby or area sales. When is_same_property=true, these are sales for the searched property. */
+  nearby_sales?: Array<{
+    address: string;
+    price: number;
+    date: string;
+    distance_m?: number;
+    price_per_sqft?: number;
+    is_same_property?: boolean;
+  }>;
   property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string };
   unit_required?: boolean;
   neighborhood_stats?: {

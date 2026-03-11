@@ -351,6 +351,25 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    if (isUS) {
+      const r = response as Record<string, unknown>;
+      const salesHistory = r.sales_history as Array<{ date: string; price: number }> | undefined;
+      const addr = r.address as { city?: string; street?: string; house_number?: string } | undefined;
+      const shortAddr = addr ? [addr.house_number, addr.street, addr.city].filter(Boolean).join(" ").trim() || undefined : undefined;
+      if (Array.isArray(salesHistory) && salesHistory.length > 0) {
+        const pd = r.property_details as { sqft?: number } | undefined;
+        const sqft = pd?.sqft ?? 0;
+        const nearbySales = salesHistory.slice(0, 5).map((s) => ({
+          address: shortAddr ?? "Searched property",
+          price: s.price,
+          date: s.date,
+          price_per_sqft: sqft > 0 ? Math.round((s.price / sqft) * 100) / 100 : undefined,
+          is_same_property: true,
+        }));
+        response = { ...response, nearby_sales: nearbySales };
+      }
+    }
+
     if (isUK && response.uk_land_registry && typeof response.uk_land_registry === "object") {
       const uk = response.uk_land_registry as {
         average_area_price?: number | null;

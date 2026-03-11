@@ -240,6 +240,12 @@ function createUserLocationIconUrl(): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+/** Gold/yellow pin for searched property – distinct from blue user location */
+function createSearchedPropertyIconUrl(): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24"><path fill="#D4AF37" stroke="#B8860B" stroke-width="1.5" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="#fff"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 type CountryProfile = {
   countryCode: string;
   currencySymbol: string;
@@ -412,6 +418,7 @@ export const AddressExplorer = () => {
   const mapRef = React.useRef<google.maps.Map | null>(null);
   const restaurantMarkersRef = React.useRef<google.maps.OverlayView[]>([]);
   const userLocationMarkerRef = React.useRef<google.maps.Marker | null>(null);
+  const searchedPropertyMarkerRef = React.useRef<google.maps.Marker | null>(null);
   const infoWindowRef = React.useRef<google.maps.InfoWindow | null>(null);
   const lastGoogleErrorRef = React.useRef<string | null>(null);
   const hasRequestedInitialLocationRef = React.useRef(false);
@@ -1246,9 +1253,28 @@ export const AddressExplorer = () => {
         userLocationMarkerRef.current.setMap(null);
         userLocationMarkerRef.current = null;
       }
+      if (searchedPropertyMarkerRef.current) {
+        searchedPropertyMarkerRef.current.setMap(null);
+        searchedPropertyMarkerRef.current = null;
+      }
       const oldOverlays = [...restaurantMarkersRef.current];
       restaurantMarkersRef.current = [];
       if (!infoWindowRef.current) infoWindowRef.current = new window.google.maps.InfoWindow();
+
+      if (selectedBuilding && typeof selectedBuilding.position?.lat === "number" && typeof selectedBuilding.position?.lng === "number") {
+        const spMarker = new window.google.maps.Marker({
+          map,
+          position: selectedBuilding.position,
+          title: "Searched property",
+          icon: {
+            url: createSearchedPropertyIconUrl(),
+            scaledSize: new window.google.maps.Size(36, 36),
+            anchor: new window.google.maps.Point(18, 36),
+          },
+          zIndex: 999,
+        });
+        searchedPropertyMarkerRef.current = spMarker;
+      }
 
       if (currentLocation) {
         const userMarker = new window.google.maps.Marker({
@@ -1392,8 +1418,12 @@ export const AddressExplorer = () => {
       }
       restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
       restaurantMarkersRef.current = [];
+      if (searchedPropertyMarkerRef.current) {
+        searchedPropertyMarkerRef.current.setMap(null);
+        searchedPropertyMarkerRef.current = null;
+      }
     };
-  }, [map, filteredRestaurants, selectedRestaurant, currentLocation, isLoaded, toggleSavedRestaurant, savedRestaurants]);
+  }, [map, filteredRestaurants, selectedRestaurant, selectedBuilding, currentLocation, isLoaded, toggleSavedRestaurant, savedRestaurants]);
 
   const toggleSavedProperty = React.useCallback((property: PortfolioAsset) => {
     const isAdding = !savedProperties.some((item) => item.address === property.address);
@@ -1895,6 +1925,10 @@ export const AddressExplorer = () => {
                 if (userLocationMarkerRef.current) {
                   userLocationMarkerRef.current.setMap(null);
                   userLocationMarkerRef.current = null;
+                }
+                if (searchedPropertyMarkerRef.current) {
+                  searchedPropertyMarkerRef.current.setMap(null);
+                  searchedPropertyMarkerRef.current = null;
                 }
                 restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
                 restaurantMarkersRef.current = [];

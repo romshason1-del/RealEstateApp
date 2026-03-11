@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { X, FileText, Sparkles, Building2, BadgeCheck, Bug, ChevronDown, ChevronUp } from "lucide-react";
+import { X, FileText, Sparkles, Building2, BadgeCheck, Bug, ChevronDown, ChevronUp, Info } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
@@ -382,6 +382,7 @@ export function PropertyValueCard({
   const valueRange = insightsData && "value_range" in insightsData ? (insightsData as { value_range?: { low_estimate: number; estimated_value: number; high_estimate: number } }).value_range : undefined;
   const sourceSummary = insightsData && "source_summary" in insightsData ? (insightsData as { source_summary?: string }).source_summary : undefined;
   const lastMarketUpdate = insightsData && "last_market_update" in insightsData ? (insightsData as { last_market_update?: string }).last_market_update : undefined;
+  const nearbySales = insightsData && "nearby_sales" in insightsData ? (insightsData as { nearby_sales?: Array<{ address: string; price: number; date: string; distance_m?: number; price_per_sqft?: number; is_same_property?: boolean }> }).nearby_sales : undefined;
   const estimatedAreaPrice = insightsData && "estimated_area_price" in insightsData ? (insightsData as { estimated_area_price?: number | null }).estimated_area_price : undefined;
   const medianSalePrice = insightsData && "median_sale_price" in insightsData ? (insightsData as { median_sale_price?: number | null }).median_sale_price : undefined;
   const medianPricePerSqft = insightsData && "median_price_per_sqft" in insightsData ? (insightsData as { median_price_per_sqft?: number | null }).median_price_per_sqft : undefined;
@@ -562,6 +563,17 @@ export function PropertyValueCard({
                       Value range: {formatCurrency(valueRange.low_estimate, currencySymbol)} – {formatCurrency(valueRange.high_estimate, currencySymbol)}
                     </div>
                   )}
+                  {(sourceSummary || (dataSources != null && dataSources.length > 0)) && (
+                    <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-400">
+                      <span>{sourceSummary ?? (dataSources != null && dataSources.length > 0 ? `Based on ${dataSources.join(", ")}` : "")}</span>
+                      <span title="Data sources used for this estimate" className="group relative shrink-0">
+                        <Info className="size-3.5 text-zinc-500 cursor-help" aria-hidden />
+                        <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50 w-52 rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-[10px] text-zinc-300 shadow-xl">
+                          This estimate combines data from the listed sources. RentCast provides property-level valuations; Zillow and Redfin add area market data; Census and FHFA add demographic and price trend context.
+                        </span>
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
               <div className="flex items-center gap-2 flex-wrap">
@@ -584,21 +596,6 @@ export function PropertyValueCard({
                   >
                     {usMatchConfidence} confidence
                   </span>
-                )}
-                {sourceSummary && (
-                  <span className="text-[10px] text-zinc-400">{sourceSummary}</span>
-                )}
-                {!sourceSummary && dataSources != null && dataSources.length > 0 && (
-                  <div className="flex items-center gap-1">
-                    {dataSources.map((s) => (
-                      <span
-                        key={s}
-                        className="inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium bg-zinc-500/20 text-zinc-400"
-                      >
-                        {s}
-                      </span>
-                    ))}
-                  </div>
                 )}
               </div>
               {lastMarketUpdate && (
@@ -687,8 +684,36 @@ export function PropertyValueCard({
                   </div>
                 </CollapsibleSection>
               )}
+              {nearbySales != null && nearbySales.length > 0 && (
+                <CollapsibleSection title={nearbySales.some((s) => s.is_same_property) ? "Recent Sales for This Property" : "Nearby Sales"} count={nearbySales.length}>
+                  <div className="space-y-1.5 text-[11px] sm:text-xs text-zinc-300">
+                    {nearbySales.some((s) => s.is_same_property) && (
+                      <div className="text-[10px] text-zinc-500 mb-1">Same-property sale history. Not nearby comps.</div>
+                    )}
+                    {nearbySales.slice(0, 5).map((sale, i) => (
+                      <div key={i} className="flex flex-wrap justify-between gap-x-2 gap-y-0.5 border-b border-zinc-500/20 pb-1 last:border-0 last:pb-0">
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{sale.address}</div>
+                          <div className="flex flex-wrap gap-x-2 gap-y-0 text-zinc-500">
+                            {sale.date && <span>{formatSaleDate(sale.date)}</span>}
+                            {sale.distance_m != null && sale.distance_m > 0 && (
+                              <span>{(sale.distance_m / 1609.34).toFixed(2)} mi away</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-medium text-amber-300">{formatCurrency(sale.price, currencySymbol)}</div>
+                          {sale.price_per_sqft != null && sale.price_per_sqft > 0 && (
+                            <div className="text-[10px] text-zinc-500">{formatCurrency(sale.price_per_sqft, currencySymbol)}/sqft</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CollapsibleSection>
+              )}
               {nearbyComps != null && nearbyComps.count > 0 && (
-                <CollapsibleSection title="Nearby Comparable Sales" count={nearbyComps.count}>
+                <CollapsibleSection title="Nearby Comparable Sales (Area Summary)" count={nearbyComps.count}>
                   <div className="space-y-0.5 text-[11px] sm:text-xs text-zinc-300">
                     <div>Avg price: {formatCurrency(nearbyComps.avg_price, currencySymbol)}</div>
                     {nearbyComps.avg_price_per_sqft > 0 && (
