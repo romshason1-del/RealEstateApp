@@ -8,32 +8,33 @@
 const BASE = process.env.VALIDATE_API_BASE ?? "http://localhost:3000";
 
 const TEST_ADDRESSES = [
-  "568 N Tigertail Rd, Los Angeles, CA",
-  "1600 Amphitheatre Parkway, Mountain View, CA",
-  "350 5th Ave, New York, NY 10118",
-  "123 Main St, Austin, TX 78701",
-  "742 Evergreen Terrace, Springfield, IL",
-  "1 Apple Park Way, Cupertino, CA",
-  "4059 Mt Lee Dr, Hollywood, CA",
-  "100 Universal City Plaza, Universal City, CA",
-  "221B Baker St, London, CA 90210",
-  "456 Oak Ave, Chicago, IL 60601",
-  "10 Downing St, San Francisco, CA 94102",
-  "555 W 5th St, Los Angeles, CA 90013",
-  "2000 Market St, San Francisco, CA 94114",
-  "1001 Pennsylvania Ave NW, Washington, DC 20004",
-  "1 World Trade Center, New York, NY 10007",
-  "400 Broad St, Seattle, WA 98109",
-  "233 S Wacker Dr, Chicago, IL 60606",
-  "888 Brannan St, San Francisco, CA 94103",
-  "1 Main St, Cambridge, MA 02142",
-  "500 S Grand Ave, Los Angeles, CA 90071",
+  "123 Oak St, Springfield, IL 62701",
+  "456 Maple Ave, Columbus, OH 43215",
+  "789 Elm St, Kansas City, MO 64108",
+  "321 Pine Rd, Denver, CO 80202",
+  "555 Cedar Ln, Austin, TX 78701",
+  "100 Birch Dr, Nashville, TN 37201",
+  "200 Walnut St, Charlotte, NC 28202",
+  "300 Spruce Ave, Minneapolis, MN 55401",
+  "400 Ash Blvd, Portland, OR 97201",
+  "500 Hickory Way, Seattle, WA 98101",
+  "600 Willow Ct, Phoenix, AZ 85001",
+  "700 Chestnut St, Philadelphia, PA 19101",
+  "800 Cherry Ln, Indianapolis, IN 46201",
+  "900 Poplar Rd, Atlanta, GA 30301",
+  "1100 Magnolia Dr, Miami, FL 33101",
+  "1200 Dogwood St, San Antonio, TX 78201",
+  "1300 Sycamore Ave, Detroit, MI 48201",
+  "1400 Oakwood Dr, San Diego, CA 92101",
+  "1500 Riverside Ln, Sacramento, CA 95814",
+  "1600 Parkview Dr, Albuquerque, NM 87102",
 ];
 
 type ValueSource =
   | "rentcast_avm"
   | "last_sale"
   | "sales_history"
+  | "latest_transaction"
   | "nearby_comps"
   | "zillow_area"
   | "redfin_area"
