@@ -181,7 +181,7 @@ export async function fetchUKHPIForLocality(city: string, postcode?: string): Pr
         Accept: "application/sparql-results+json",
       },
       body: new URLSearchParams({ query }),
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(3000),
     });
 
     if (!res.ok) return null;
@@ -273,7 +273,7 @@ LIMIT 50
         Accept: "application/sparql-results+json",
       },
       body: new URLSearchParams({ query }),
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return [];
 

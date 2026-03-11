@@ -68,6 +68,37 @@ function validateInput(
   return { valid: true };
 }
 
+const ROUTE_TIMEOUT_MS = 6000;
+const LAND_REGISTRY_TIMEOUT_MS = 4000;
+const PROVIDER_TIMEOUT_MS = 2500;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise.then((v) => {
+      if (process.env.NODE_ENV === "development") console.debug(`[property-value] Provider finished: ${label}`);
+      return v;
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout:${label}`)), ms)
+    ),
+  ]);
+}
+
+function buildUKMinimalResponse(): Record<string, unknown> {
+  return {
+    message: "Request timeout - partial data",
+    property_result: {
+      exact_value: null,
+      exact_value_message: "Request timed out",
+      value_level: "area-level" as const,
+      last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
+      street_average: null,
+      street_average_message: "No street-level average found" as const,
+      livability_rating: "BAD" as const,
+    },
+  };
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   let city = searchParams.get("city") ?? "";
@@ -129,21 +160,38 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(cachedResponse);
   }
 
+  const isUK = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB";
+
+  const runHandler = async (): Promise<Response> => {
   try {
-    const result = await getPropertyValueInsights(
-      {
-        city: city.trim(),
-        street: street.trim(),
-        houseNumber: houseNumber.trim(),
-        state: state.trim() || undefined,
-        zip: zip.trim() || undefined,
-        postcode: postcode.trim() || zip.trim() || undefined,
-        latitude: Number.isFinite(latitude) ? latitude : undefined,
-        longitude: Number.isFinite(longitude) ? longitude : undefined,
-        fullAddress: addressParam || undefined,
-      },
-      countryCode
-    );
+    let result: Awaited<ReturnType<typeof getPropertyValueInsights>>;
+    try {
+      result = await withTimeout(
+        getPropertyValueInsights(
+          {
+            city: city.trim(),
+            street: street.trim(),
+            houseNumber: houseNumber.trim(),
+            state: state.trim() || undefined,
+            zip: zip.trim() || undefined,
+            postcode: postcode.trim() || zip.trim() || undefined,
+            latitude: Number.isFinite(latitude) ? latitude : undefined,
+            longitude: Number.isFinite(longitude) ? longitude : undefined,
+            fullAddress: addressParam || undefined,
+          },
+          countryCode
+        ),
+        isUK ? LAND_REGISTRY_TIMEOUT_MS : 10000,
+        "land_registry"
+      );
+    } catch (e) {
+      if (isUK && e instanceof Error && e.message.startsWith("timeout:")) {
+        if (process.env.NODE_ENV === "development") console.debug("[property-value] Land Registry timed out, using HPI fallback");
+        result = { message: "no transaction found" };
+      } else {
+        throw e;
+      }
+    }
 
     if ("message" in result && "error" in result && result.error) {
       const status =
@@ -156,8 +204,6 @@ export async function GET(request: NextRequest) {
               : 502;
       return NextResponse.json(result, { status });
     }
-
-    const isUK = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB";
 
     if ("message" in result && result.message === "no transaction found") {
       if (isUK && result && typeof result === "object" && "uk_land_registry" in result && (result as { uk_land_registry?: unknown }).uk_land_registry) {
@@ -195,7 +241,11 @@ export async function GET(request: NextRequest) {
           area_data_source: "land_registry",
         };
         try {
-          const hpiResult = await fetchUKHPIForLocality(city.trim(), postcode.trim() || undefined);
+          const hpiResult = await withTimeout(
+            fetchUKHPIForLocality(city.trim(), postcode.trim() || undefined),
+            PROVIDER_TIMEOUT_MS,
+            "HPI"
+          );
           if (hpiResult) {
             ukLandRegistry = {
               ...ukLandRegistry,
@@ -211,7 +261,11 @@ export async function GET(request: NextRequest) {
         }
         let ukLivability: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
         try {
-          const ukStats = await fetchUKNeighborhoodStats(postcode.trim() || "", ukLandRegistry.average_area_price ?? undefined);
+          const ukStats = await withTimeout(
+            fetchUKNeighborhoodStats(postcode.trim() || "", ukLandRegistry.average_area_price ?? undefined),
+            PROVIDER_TIMEOUT_MS,
+            "UK_neighborhood"
+          );
           ukLivability = computeUKLivabilityRating(ukStats);
         } catch {
           if (ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) {
@@ -225,18 +279,22 @@ export async function GET(request: NextRequest) {
           );
           try {
             const epcNoMatchWork = (async () => {
-              const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
-              if (epcAreas.length < 2) return;
-              const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
-              if (avgArea <= 0) return;
-              const pricePerM2 = ukLandRegistry.average_area_price! / avgArea;
-              const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
-                houseNumber: houseNumber.trim() || undefined,
-                street: street.trim() || undefined,
-                city: city.trim() || undefined,
-              });
-              if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
-                noMatchExactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
+              try {
+                const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
+                if (epcAreas.length < 2) return;
+                const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
+                if (avgArea <= 0) return;
+                const pricePerM2 = ukLandRegistry.average_area_price! / avgArea;
+                const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
+                  houseNumber: houseNumber.trim() || undefined,
+                  street: street.trim() || undefined,
+                  city: city.trim() || undefined,
+                });
+                if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
+                  noMatchExactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
+                }
+              } finally {
+                if (process.env.NODE_ENV === "development") console.debug("[property-value] Provider finished: EPC");
               }
             })();
             await Promise.race([epcNoMatchWork, epcNoMatchTimeout]);
@@ -560,7 +618,11 @@ export async function GET(request: NextRequest) {
         (uk.average_area_price == null || uk.average_area_price <= 0) && (uk.area_transaction_count ?? 0) === 0;
       if (hasNoUsableAreaData) {
         try {
-          const hpiResult = await fetchUKHPIForLocality(city.trim(), postcode.trim() || undefined);
+          const hpiResult = await withTimeout(
+            fetchUKHPIForLocality(city.trim(), postcode.trim() || undefined),
+            PROVIDER_TIMEOUT_MS,
+            "HPI"
+          );
           if (hpiResult) {
             response = {
               ...response,
@@ -593,7 +655,11 @@ export async function GET(request: NextRequest) {
       let exactValueFromEPC = false;
       if (latestTx && latestTx.price > 0) {
         try {
-          const indices = await fetchUKHPIIndicesForLocality(city.trim(), postcode.trim() || undefined);
+          const indices = await withTimeout(
+            fetchUKHPIIndicesForLocality(city.trim(), postcode.trim() || undefined),
+            PROVIDER_TIMEOUT_MS,
+            "HPI_indices"
+          );
           const hpiAdjusted = estimateValueFromHPI(latestTx.price, latestTx.date ?? "", indices);
           if (hpiAdjusted) exactValue = hpiAdjusted;
         } catch {
@@ -607,21 +673,25 @@ export async function GET(request: NextRequest) {
         );
         try {
           const epcWork = (async () => {
-            const avgPrice = (streetAvg ?? areaPrice) ?? 0;
-            if (avgPrice <= 0) return;
-            const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
-            if (epcAreas.length < 2) return;
-            const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
-            if (avgArea <= 0) return;
-            const pricePerM2 = avgPrice / avgArea;
-            const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
-              houseNumber: houseNumber.trim() || undefined,
-              street: street.trim() || undefined,
-              city: city.trim() || undefined,
-            });
-            if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
-              exactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
-              exactValueFromEPC = true;
+            try {
+              const avgPrice = (streetAvg ?? areaPrice) ?? 0;
+              if (avgPrice <= 0) return;
+              const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
+              if (epcAreas.length < 2) return;
+              const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
+              if (avgArea <= 0) return;
+              const pricePerM2 = avgPrice / avgArea;
+              const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
+                houseNumber: houseNumber.trim() || undefined,
+                street: street.trim() || undefined,
+                city: city.trim() || undefined,
+              });
+              if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
+                exactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
+                exactValueFromEPC = true;
+              }
+            } finally {
+              if (process.env.NODE_ENV === "development") console.debug("[property-value] Provider finished: EPC");
             }
           })();
           await Promise.race([epcWork, epcTimeout]);
@@ -644,7 +714,11 @@ export async function GET(request: NextRequest) {
 
       let livabilityRating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
       try {
-        const ukStats = await fetchUKNeighborhoodStats(postcode.trim() || "", areaPrice ?? undefined);
+        const ukStats = await withTimeout(
+          fetchUKNeighborhoodStats(postcode.trim() || "", areaPrice ?? undefined),
+          PROVIDER_TIMEOUT_MS,
+          "UK_neighborhood"
+        );
         livabilityRating = computeUKLivabilityRating(ukStats);
       } catch {
         if (areaPrice != null && areaPrice > 0) {
@@ -677,8 +751,19 @@ export async function GET(request: NextRequest) {
       {
         message: "Failed to fetch property value insights. Please try again later.",
         error: err instanceof Error ? err.message : "Unknown error",
+        ...(isUK && { property_result: buildUKMinimalResponse().property_result }),
       },
       { status: 500 }
     );
   }
+  };
+
+  const timeoutResponse = new Promise<Response>((resolve) => {
+    setTimeout(() => {
+      if (process.env.NODE_ENV === "development") console.debug("[property-value] Route timeout (6s), returning minimal response");
+      resolve(NextResponse.json(isUK ? buildUKMinimalResponse() : { message: "Request timeout", error: "TIMEOUT" }, isUK ? { status: 200 } : { status: 503 }));
+    }, ROUTE_TIMEOUT_MS);
+  });
+
+  return Promise.race([runHandler(), timeoutResponse]);
 }

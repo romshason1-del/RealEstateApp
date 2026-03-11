@@ -36,7 +36,7 @@ async function resolvePostcodeFromAddress(address: string): Promise<string | nul
   if (googleKey) {
     try {
       const url = `${GOOGLE_GEOCODE_URL}?address=${encodeURIComponent(q)}&region=gb&key=${googleKey}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
       if (res.ok) {
         const data = (await res.json()) as { results?: Array<{ address_components?: Array<{ long_name: string; types: string[] }> }> };
         const comps = data?.results?.[0]?.address_components ?? [];
@@ -54,7 +54,7 @@ async function resolvePostcodeFromAddress(address: string): Promise<string | nul
     const url = `${NOMINATIM_URL}?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=1`;
     const res = await fetch(url, {
       headers: { "User-Agent": "StreetIQ-PropertyValue/1.0 (UK Land Registry lookup)" },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(3000),
     });
     if (res.ok) {
       const data = (await res.json()) as Array<{ address?: { postcode?: string } }>;
@@ -449,7 +449,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           Accept: "application/sparql-results+json",
         },
         body: new URLSearchParams({ query }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(4000),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -500,7 +500,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             Accept: "application/sparql-results+json",
           },
           body: new URLSearchParams({ query }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(4000),
         });
         if (resFb.ok) {
           const jsonFb = await resFb.json();
@@ -570,7 +570,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             Accept: "application/sparql-results+json",
           },
           body: new URLSearchParams({ query }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(4000),
         });
         if (resFb.ok) {
           const jsonFb = await resFb.json();

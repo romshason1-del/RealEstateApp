@@ -5,7 +5,7 @@
  */
 
 const POSTCODES_IO_URL = "https://api.postcodes.io/postcodes";
-const TIMEOUT_MS = 8000;
+const TIMEOUT_MS = 3000;
 
 export type UKPostcodeResult = {
   postcode: string;
