@@ -321,6 +321,22 @@ export async function GET(request: NextRequest) {
       const primaryValue = avm ?? lastSalePrice ?? salesHistoryFirst ?? areaPrice ?? medianSale ?? compsAvg ?? medianHome;
       const hasPropertyLevelData = (avm != null && avm > 0) || (lastSale?.price != null && lastSale.price > 0) || (Array.isArray(salesHistory) && salesHistory.length > 0) || (compsAvg != null && compsAvg > 0);
       const isAreaLevelOnly = !hasPropertyLevelData && (areaPrice != null || medianSale != null || medianHome != null);
+      const valueSource =
+        avm != null && avm > 0
+          ? "rentcast_avm"
+          : lastSalePrice != null
+            ? "last_sale"
+            : salesHistoryFirst != null
+              ? "sales_history"
+              : compsAvg != null
+                ? "nearby_comps"
+                : areaPrice != null
+                  ? "zillow_area"
+                  : medianSale != null
+                    ? "redfin_area"
+                    : medianHome != null
+                      ? "census_median"
+                      : "none";
       if (typeof primaryValue === "number" && primaryValue > 0) {
         const sources: number[] = [avm, lastSalePrice, salesHistoryFirst, areaPrice, medianSale, compsAvg, medianHome].filter((v): v is number => typeof v === "number" && v > 0);
         const uniqueSources = [...new Set(sources)];
@@ -341,6 +357,7 @@ export async function GET(request: NextRequest) {
       if (isAreaLevelOnly) {
         response = { ...response, is_area_level_estimate: true, us_match_confidence: "low" as const };
       }
+      response = { ...response, value_source: valueSource };
       const dataSrc = (r.data_sources as string[] | undefined) ?? [];
       const parts: string[] = [];
       if (dataSrc.includes("RentCast")) parts.push("RentCast");
