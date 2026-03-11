@@ -374,13 +374,26 @@ export async function GET(request: NextRequest) {
       const r = response as Record<string, unknown>;
       const salesHistory = r.sales_history as Array<{ date: string; price: number }> | undefined;
       const lastSale = r.last_sale as { price: number; date: string } | undefined;
-      const mostRecent = Array.isArray(salesHistory) && salesHistory.length > 0
-        ? salesHistory[0]
-        : lastSale && lastSale.price > 0
-          ? lastSale
-          : null;
-      if (mostRecent && mostRecent.price > 0) {
-        response = { ...response, last_recorded_sale: { price: mostRecent.price, date: mostRecent.date, source: "RentCast" } };
+      const latestTx = r.latest_transaction as { transaction_price?: number; transaction_date?: string } | undefined;
+      const mostRecent =
+        Array.isArray(salesHistory) && salesHistory.length > 0
+          ? { price: salesHistory[0].price, date: salesHistory[0].date, source: "RentCast" as const }
+          : lastSale && lastSale.price > 0
+            ? { price: lastSale.price, date: lastSale.date, source: "RentCast" as const }
+            : latestTx && typeof latestTx.transaction_price === "number" && latestTx.transaction_price > 0
+              ? { price: latestTx.transaction_price, date: latestTx.transaction_date ?? "", source: "RentCast" as const }
+              : null;
+      if (mostRecent) {
+        response = { ...response, last_recorded_sale: mostRecent };
+      } else if (process.env.NODE_ENV === "development" || searchParams.get("trace") === "1") {
+        const trace = {
+          reason: "no_sale_data",
+          checked: ["sales_history", "last_sale", "latest_transaction"],
+          sales_history_count: Array.isArray(salesHistory) ? salesHistory.length : 0,
+          last_sale_present: Boolean(lastSale && lastSale.price > 0),
+          latest_transaction_price: latestTx?.transaction_price ?? null,
+        };
+        response = { ...response, _last_recorded_sale_trace: trace };
       }
     }
 

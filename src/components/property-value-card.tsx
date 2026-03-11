@@ -550,15 +550,19 @@ export function PropertyValueCard({
           ) : isUS ? (
             <div className="space-y-1.5">
               {/* Priority: Estimated Value, Range, Confidence, Sources, Last Update */}
-              {lastRecordedSale != null && lastRecordedSale.price > 0 && (
-                <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
-                  <FileText className="size-3 shrink-0" aria-hidden />
-                  <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
-                  {lastRecordedSale.source && (
-                    <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
-                  )}
-                </div>
-              )}
+              <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
+                <FileText className="size-3 shrink-0" aria-hidden />
+                {lastRecordedSale != null && lastRecordedSale.price > 0 ? (
+                  <>
+                    <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
+                    {lastRecordedSale.source && (
+                      <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-zinc-500">Last Recorded Sale: No recorded sale found</span>
+                )}
+              </div>
               {((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0) > 0) && (
                 <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
                   <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
@@ -852,15 +856,19 @@ export function PropertyValueCard({
                 </div>
               )}
               <div className="space-y-1">
-                {lastRecordedSale != null && lastRecordedSale.price > 0 && (
-                  <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
-                    <FileText className="size-3 shrink-0" aria-hidden />
-                    <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
-                    {lastRecordedSale.source && (
-                      <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
-                    )}
-                  </div>
-                )}
+                <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
+                  <FileText className="size-3 shrink-0" aria-hidden />
+                  {lastRecordedSale != null && lastRecordedSale.price > 0 ? (
+                    <>
+                      <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
+                      {lastRecordedSale.source && (
+                        <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-zinc-500">Last Recorded Sale: No recorded sale found</span>
+                  )}
+                </div>
                 {(ukLandRegistry.has_building_match !== false) && (
                   <>
                     <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 sm:px-2.5 sm:py-1">
