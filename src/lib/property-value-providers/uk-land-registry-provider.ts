@@ -759,11 +759,11 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     if (street && (city || postcode)) {
       let streetTxItems: Tx[] = [];
       const streetNorm = normalizeStreet(street);
+      const outwardPostcode = postcode ? normalizeUKPostcode(postcode).split(/\s/)[0]?.replace(/\s/g, "") || undefined : undefined;
       if (DEBUG_KENSINGTON) {
         console.debug("[street-avg DEBUG] Address: street=", JSON.stringify(street), "city=", JSON.stringify(city), "postcode=", JSON.stringify(postcode));
         console.debug("[street-avg DEBUG] 1. Normalized street:", JSON.stringify(streetNorm), "outwardPostcode:", outwardPostcode ?? "(none)");
       }
-      const outwardPostcode = postcode ? normalizeUKPostcode(postcode).split(/\s/)[0]?.replace(/\s/g, "") || undefined : undefined;
       if (city || outwardPostcode) {
         const streetQuery = buildSparqlQueryStreetExact(street, city, outwardPostcode);
         if (streetQuery) {
