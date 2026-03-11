@@ -108,6 +108,34 @@ const INVALID_CATEGORY_PATTERNS = [
   /power\s*of\s*sale/i,
 ];
 
+/** Residential property types only (exclude "Other" and non-residential) */
+const RESIDENTIAL_PROPERTY_TYPES = new Set([
+  "detached",
+  "semi-detached",
+  "terraced",
+  "flat/maisonette",
+  "flat",
+  "maisonette",
+]);
+
+function isResidentialPropertyType(propertyType: string): boolean {
+  const pt = (propertyType ?? "").trim().toLowerCase();
+  if (!pt) return true; // Older records may lack propertyType; include them
+  return RESIDENTIAL_PROPERTY_TYPES.has(pt);
+}
+
+/** Compute median of sorted amounts (avoids outliers vs mean) */
+function computeMedian(sortedAmounts: number[]): number | null {
+  if (sortedAmounts.length === 0) return null;
+  const mid = Math.floor(sortedAmounts.length / 2);
+  if (sortedAmounts.length % 2 === 1) {
+    return sortedAmounts[mid] ?? null;
+  }
+  const a = sortedAmounts[mid - 1];
+  const b = sortedAmounts[mid];
+  return a != null && b != null ? Math.round((a + b) / 2) : null;
+}
+
 type SparqlBinding = { value?: string };
 type SparqlResult = { results?: { bindings?: Record<string, SparqlBinding>[] } };
 
@@ -172,7 +200,7 @@ PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
 WHERE {
   ${valuesClause}
   ?addr lrcommon:postcode ?postcode.
@@ -180,6 +208,7 @@ WHERE {
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
           lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?transx lrppi:propertyType/skos:prefLabel ?propertyType }
   OPTIONAL { ?addr lrcommon:county ?county }
   OPTIONAL { ?addr lrcommon:paon ?paon }
   OPTIONAL { ?addr lrcommon:saon ?saon }
@@ -212,7 +241,7 @@ PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 
-SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
 WHERE {
   ?addr lrcommon:postcode ?postcode.
   FILTER(STRSTARTS(STR(?postcode), "${prefix}"))
@@ -220,6 +249,7 @@ WHERE {
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
           lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?transx lrppi:propertyType/skos:prefLabel ?propertyType }
   OPTIONAL { ?addr lrcommon:county ?county }
   OPTIONAL { ?addr lrcommon:paon ?paon }
   OPTIONAL { ?addr lrcommon:saon ?saon }
@@ -242,7 +272,7 @@ PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 
-SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
 WHERE {
   ?addr lrcommon:street ?street.
   ?addr lrcommon:town ?town.
@@ -251,6 +281,44 @@ WHERE {
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
           lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?transx lrppi:propertyType/skos:prefLabel ?propertyType }
+  OPTIONAL { ?addr lrcommon:county ?county }
+  OPTIONAL { ?addr lrcommon:paon ?paon }
+  OPTIONAL { ?addr lrcommon:saon ?saon }
+  OPTIONAL { ?addr lrcommon:postcode ?postcode }
+}
+ORDER BY DESC(?date)
+LIMIT 500
+`.trim();
+}
+
+/**
+ * Street-only query for "Average home price on the same street".
+ * Exact match on street name + town. Residential property types only.
+ * Example: street="High Street", town="London" → transactions on High Street in London.
+ */
+function buildSparqlQueryStreetExact(street: string, town: string): string {
+  const streetNorm = normalizeStreet(street ?? "");
+  const townNorm = (town ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toLowerCase();
+  if (!streetNorm || !townNorm) return "";
+  const streetLower = streetNorm.toLowerCase();
+  const streetEsc = streetLower.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const townEsc = townNorm.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
+PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
+WHERE {
+  ?addr lrcommon:street ?street.
+  ?addr lrcommon:town ?town.
+  FILTER(LCASE(STR(?street)) = "${streetEsc}" && CONTAINS(LCASE(STR(?town)), "${townEsc}"))
+  ?transx lrppi:propertyAddress ?addr ;
+          lrppi:pricePaid ?amount ;
+          lrppi:transactionDate ?date ;
+          lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?transx lrppi:propertyType/skos:prefLabel ?propertyType }
   OPTIONAL { ?addr lrcommon:county ?county }
   OPTIONAL { ?addr lrcommon:paon ?paon }
   OPTIONAL { ?addr lrcommon:saon ?saon }
@@ -270,7 +338,7 @@ PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 
-SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category
+SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
 WHERE {
   ?addr lrcommon:town ?town.
   FILTER(CONTAINS(LCASE(STR(?town)), "${townNorm.toLowerCase()}"))
@@ -278,6 +346,7 @@ WHERE {
           lrppi:pricePaid ?amount ;
           lrppi:transactionDate ?date ;
           lrppi:transactionCategory/skos:prefLabel ?category.
+  OPTIONAL { ?transx lrppi:propertyType/skos:prefLabel ?propertyType }
   OPTIONAL { ?addr lrcommon:county ?county }
   OPTIONAL { ?addr lrcommon:paon ?paon }
   OPTIONAL { ?addr lrcommon:saon ?saon }
@@ -517,6 +586,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       dateStr: string;
       amount: number;
       category: string;
+      propertyType: string;
       dateMs: number;
       paon: string;
       saon: string;
@@ -524,7 +594,11 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       addrTown: string;
     };
 
-    function processBindingsToItems(raw: Record<string, SparqlBinding>[], strict = true): Tx[] {
+    function processBindingsToItems(
+      raw: Record<string, SparqlBinding>[],
+      strict = true,
+      residentialOnly = false
+    ): Tx[] {
       const seen = new Set<string>();
       const out: Tx[] = [];
       for (const b of raw) {
@@ -532,12 +606,14 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         const date = parseDate(dateStr);
         const amount = parseAmount(getBinding(b, "amount"));
         const category = getBinding(b, "category");
+        const propertyType = getBinding(b, "propertyType");
         const paon = getBinding(b, "paon");
         const saon = getBinding(b, "saon");
         const addrStreet = getBinding(b, "street");
         const addrTown = getBinding(b, "town");
         if (amount <= 0) continue;
         if (strict && !isValidTransaction(category)) continue;
+        if (residentialOnly && !isResidentialPropertyType(propertyType)) continue;
         const dedupeKey = `${paon}|${saon}|${addrStreet}|${dateStr}|${amount}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
@@ -547,6 +623,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           dateStr,
           amount,
           category,
+          propertyType,
           dateMs,
           paon,
           saon,
@@ -642,34 +719,62 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const latestFromArea = sortedAreaByDate[0] ?? null;
     const hasBuildingMatch = buildingTxs.length > 0;
 
+    const postcode5yResidential = postcode5y.filter((t) => isResidentialPropertyType(t.propertyType));
+
     let buildingAveragePrice: number | null = null;
     if (building5y.length >= 2) {
-      const sum = building5y.reduce((s, t) => s + t.amount, 0);
-      buildingAveragePrice = Math.round(sum / building5y.length);
+      const residential = building5y.filter((t) => isResidentialPropertyType(t.propertyType));
+      const amounts = (residential.length >= 2 ? residential : building5y).map((t) => t.amount).sort((a, b) => a - b);
+      buildingAveragePrice = computeMedian(amounts);
     }
 
     let averageAreaPrice: number | null = null;
-    if (postcode5y.length > 0) {
+    if (postcode5yResidential.length > 0) {
+      const amounts = postcode5yResidential.map((t) => t.amount).sort((a, b) => a - b);
+      const filtered = filterOutliersIQR(amounts);
+      const vals = filtered.length > 0 ? filtered : amounts;
+      averageAreaPrice = computeMedian(vals);
+    } else if (postcode5y.length > 0) {
       const amounts = postcode5y.map((t) => t.amount).sort((a, b) => a - b);
       const filtered = filterOutliersIQR(amounts);
-      if (filtered.length > 0) {
-        const sum = filtered.reduce((s, a) => s + a, 0);
-        averageAreaPrice = Math.round(sum / filtered.length);
-      } else {
-        const sum = amounts.reduce((s, a) => s + a, 0);
-        averageAreaPrice = Math.round(sum / amounts.length);
-      }
+      const vals = filtered.length > 0 ? filtered : amounts;
+      averageAreaPrice = computeMedian(vals);
     }
 
     let streetAveragePrice: number | null = null;
-    if (street && postcode5y.length >= 2) {
-      const streetNorm = normalizeStreet(street);
-      const sameStreetItems = postcode5y.filter((t) => streetMatches(street, t.addrStreet, false));
-      if (sameStreetItems.length >= 2) {
-        const amounts = sameStreetItems.map((t) => t.amount).sort((a, b) => a - b);
-        const filtered = filterOutliersIQR(amounts);
-        const vals = filtered.length > 0 ? filtered : amounts;
-        streetAveragePrice = Math.round(vals.reduce((s, a) => s + a, 0) / vals.length);
+    if (street && (city || postcode)) {
+      let streetTxItems: Tx[] = [];
+      if (city) {
+        const streetQuery = buildSparqlQueryStreetExact(street, city);
+        if (streetQuery) {
+          try {
+            const streetRes = await fetch(SPARQL_ENDPOINT, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                Accept: "application/sparql-results+json",
+              },
+              body: new URLSearchParams({ query: streetQuery }),
+              signal: AbortSignal.timeout(4000),
+            });
+            if (streetRes.ok) {
+              const streetJson = (await streetRes.json()) as SparqlResult;
+              const streetBindings = streetJson?.results?.bindings ?? [];
+              streetTxItems = processBindingsToItems(streetBindings, true, true);
+              streetTxItems = streetTxItems.filter((t) => t.dateMs >= fiveYearsAgo);
+            }
+          } catch {
+            // Street query failed, fall through to postcode
+          }
+        }
+      }
+      if (streetTxItems.length < 3 && postcode5yResidential.length >= 2) {
+        const sameStreetItems = postcode5yResidential.filter((t) => streetMatches(street, t.addrStreet, false));
+        if (sameStreetItems.length >= 3) streetTxItems = sameStreetItems;
+      }
+      if (streetTxItems.length >= 3) {
+        const amounts = streetTxItems.map((t) => t.amount).sort((a, b) => a - b);
+        streetAveragePrice = computeMedian(amounts);
       }
     }
 
