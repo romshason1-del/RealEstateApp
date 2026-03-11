@@ -259,12 +259,17 @@ export async function GET(request: NextRequest) {
               : undefined;
             const medianHome = neighborhoodStats.median_home_value > 0 ? neighborhoodStats.median_home_value : undefined;
             const estimatedPropertyValue = avm ?? areaPrice ?? medianSale ?? (typeof currentEst === "number" && currentEst > 0 ? currentEst : undefined) ?? medianHome;
-            if (typeof estimatedPropertyValue === "number" && estimatedPropertyValue > 0) {
-              const estimatedRoiPercent = (medianRent * 12 / estimatedPropertyValue) * 100;
-              response = { ...response, investment_metrics: { median_rent: medianRent, estimated_roi_percent: estimatedRoiPercent } };
-            } else {
-              response = { ...response, investment_metrics: { median_rent: medianRent, estimated_roi_percent: 0 } };
-            }
+            const grossRentYieldPercent = typeof estimatedPropertyValue === "number" && estimatedPropertyValue > 0
+              ? (medianRent * 12 / estimatedPropertyValue) * 100
+              : 0;
+            const medianPpsf = typeof r.median_price_per_sqft === "number" && r.median_price_per_sqft > 0 ? r.median_price_per_sqft : undefined;
+            const invMetrics: Record<string, unknown> = {
+              median_rent: medianRent,
+              gross_rent_yield_percent: grossRentYieldPercent,
+              estimated_roi_percent: grossRentYieldPercent,
+            };
+            if (medianPpsf != null) invMetrics.median_price_per_sqft = medianPpsf;
+            response = { ...response, investment_metrics: invMetrics };
           }
         }
       } catch {

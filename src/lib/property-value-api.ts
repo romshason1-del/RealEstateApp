@@ -44,7 +44,10 @@ export type PropertyValueInsightsResponse = {
   };
   investment_metrics?: {
     median_rent: number;
-    estimated_roi_percent: number;
+    gross_rent_yield_percent: number;
+    median_price_per_sqft?: number;
+    /** @deprecated Use gross_rent_yield_percent. Kept for backward compatibility. */
+    estimated_roi_percent?: number;
   };
   data_source?: "live" | "cache" | "mock";
   market_trend?: { hpi_index: number; change_1y_percent: number };
