@@ -162,6 +162,9 @@ export class UnitedStatesMockProvider implements PropertyDataProvider {
       median_home_value: medianHomeValue,
       median_household_income: medianIncome,
       population,
+      median_rent: 1850,
+      population_growth_percent: 3.4,
+      income_growth_percent: 5.1,
     };
 
     (result as Record<string, unknown>).market_trend = {
