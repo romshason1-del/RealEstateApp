@@ -240,9 +240,14 @@ function createUserLocationIconUrl(): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-/** Gold/yellow pin for searched property – distinct from blue user location */
+/** Gold circular location indicator for searched property – distinct from blue user dot */
 function createSearchedPropertyIconUrl(): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24"><path fill="#D4AF37" stroke="#B8860B" stroke-width="1.5" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="#fff"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <circle cx="16" cy="16" r="14" fill="#D4AF37" fill-opacity="0.2">
+      <animate attributeName="fill-opacity" values="0.15;0.3;0.15" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="16" cy="16" r="10" fill="#D4AF37" stroke="#ffffff" stroke-width="2.5"/>
+  </svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
@@ -1268,8 +1273,8 @@ export const AddressExplorer = () => {
           title: "Searched property",
           icon: {
             url: createSearchedPropertyIconUrl(),
-            scaledSize: new window.google.maps.Size(36, 36),
-            anchor: new window.google.maps.Point(18, 36),
+            scaledSize: new window.google.maps.Size(32, 32),
+            anchor: new window.google.maps.Point(16, 16),
           },
           zIndex: 999,
         });
