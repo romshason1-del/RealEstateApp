@@ -248,32 +248,6 @@ export async function GET(request: NextRequest) {
         });
         if (neighborhoodStats) {
           response = { ...response, neighborhood_stats: neighborhoodStats };
-          const medianRent = neighborhoodStats.median_rent;
-          if (medianRent != null && medianRent > 0) {
-            const r = response as Record<string, unknown>;
-            const avm = typeof r.avm_value === "number" && r.avm_value > 0 ? r.avm_value : undefined;
-            const lastSale = r.last_sale as { price?: number } | undefined;
-            const salesHistory = r.sales_history as Array<{ price: number }> | undefined;
-            const lastSalePrice = lastSale?.price != null && lastSale.price > 0 ? lastSale.price : undefined;
-            const salesHistoryFirst = Array.isArray(salesHistory) && salesHistory.length > 0 && salesHistory[0]?.price != null ? salesHistory[0].price : undefined;
-            const areaPrice = typeof r.estimated_area_price === "number" && r.estimated_area_price > 0 ? r.estimated_area_price : undefined;
-            const medianSale = typeof r.median_sale_price === "number" && r.median_sale_price > 0 ? r.median_sale_price : undefined;
-            const nearbyComps = r.nearby_comps as { avg_price?: number } | undefined;
-            const compsAvg = nearbyComps?.avg_price != null && nearbyComps.avg_price > 0 ? nearbyComps.avg_price : undefined;
-            const medianHome = neighborhoodStats.median_home_value > 0 ? neighborhoodStats.median_home_value : undefined;
-            const estimatedPropertyValue = avm ?? lastSalePrice ?? salesHistoryFirst ?? areaPrice ?? medianSale ?? compsAvg ?? medianHome;
-            const grossRentYieldPercent = typeof estimatedPropertyValue === "number" && estimatedPropertyValue > 0
-              ? (medianRent * 12 / estimatedPropertyValue) * 100
-              : 0;
-            const medianPpsf = typeof r.median_price_per_sqft === "number" && r.median_price_per_sqft > 0 ? r.median_price_per_sqft : undefined;
-            const invMetrics: Record<string, unknown> = {
-              median_rent: medianRent,
-              gross_rent_yield_percent: grossRentYieldPercent,
-              estimated_roi_percent: grossRentYieldPercent,
-            };
-            if (medianPpsf != null) invMetrics.median_price_per_sqft = medianPpsf;
-            response = { ...response, investment_metrics: invMetrics };
-          }
         }
       } catch {
         // Census failure must not break the property card
@@ -358,6 +332,66 @@ export async function GET(request: NextRequest) {
         response = { ...response, is_area_level_estimate: true, us_match_confidence: "low" as const };
       }
       response = { ...response, value_source: valueSource };
+
+      const valueLevel: "property-level" | "street-level" | "area-level" =
+        ((avm != null && avm > 0) || lastSalePrice != null || salesHistoryFirst != null)
+          ? "property-level"
+          : compsAvg != null
+            ? "street-level"
+            : "area-level";
+
+      const exactValue = (avm != null && avm > 0) || lastSalePrice != null || salesHistoryFirst != null
+        ? (avm ?? lastSalePrice ?? salesHistoryFirst)!
+        : null;
+
+      const lastTransaction =
+        lastSalePrice != null && lastSalePrice > 0 && lastSale?.date
+          ? { amount: lastSalePrice, date: lastSale.date }
+          : Array.isArray(salesHistory) && salesHistory.length > 0 && salesHistory[0]?.price != null
+            ? { amount: salesHistory[0].price, date: salesHistory[0].date ?? "" }
+            : { amount: 0, date: null as string | null, message: "No recorded transaction found" as const };
+
+      const streetAverage = null;
+      const streetAverageMessage = "No street-level average found" as const;
+
+      const nsForLivability = r.neighborhood_stats as {
+        median_household_income?: number;
+        median_home_value?: number;
+        population?: number;
+        population_growth_percent?: number;
+        income_growth_percent?: number;
+      } | undefined;
+      const income = nsForLivability?.median_household_income ?? 0;
+      const homeVal = nsForLivability?.median_home_value ?? 0;
+      const popGrowth = nsForLivability?.population_growth_percent ?? 0;
+      const incGrowth = nsForLivability?.income_growth_percent ?? 0;
+      let livabilityRating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
+      if (income > 0 || homeVal > 0) {
+        const score = (income >= 100000 ? 4 : income >= 75000 ? 3 : income >= 50000 ? 2 : income >= 35000 ? 1 : 0) +
+          (incGrowth > 2 ? 0.5 : incGrowth > 0 ? 0.25 : 0) +
+          (popGrowth > 0 ? 0.25 : 0);
+        if (score >= 4) livabilityRating = "EXCELLENT";
+        else if (score >= 3) livabilityRating = "VERY GOOD";
+        else if (score >= 2) livabilityRating = "GOOD";
+        else if (score >= 1) livabilityRating = "ALMOST GOOD";
+        else livabilityRating = "BAD";
+      }
+
+      response = {
+        ...response,
+        property_result: {
+          exact_value: exactValue,
+          exact_value_message: exactValue == null && (areaPrice != null || medianSale != null || medianHome != null)
+            ? "No exact property-level value found"
+            : null,
+          value_level: valueLevel,
+          last_transaction: lastTransaction,
+          street_average: streetAverage,
+          street_average_message: streetAverageMessage,
+          livability_rating: livabilityRating,
+        },
+      };
+
       const dataSrc = (r.data_sources as string[] | undefined) ?? [];
       const parts: string[] = [];
       if (dataSrc.includes("RentCast")) parts.push("RentCast");
@@ -377,6 +411,19 @@ export async function GET(request: NextRequest) {
       } else if (parts.length > 0) {
         response = { ...response, last_market_update: "Updated monthly" };
       }
+    } else if (isUS) {
+      response = {
+        ...response,
+        property_result: {
+          exact_value: null,
+          exact_value_message: "No exact property-level value found",
+          value_level: "area-level" as const,
+          last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
+          street_average: null,
+          street_average_message: "No street-level average found" as const,
+          livability_rating: "BAD" as const,
+        },
+      };
     }
 
     if (isUS) {
