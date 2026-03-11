@@ -220,24 +220,28 @@ export async function GET(request: NextRequest) {
         }
         let noMatchExactValue: number | null = ukLandRegistry.average_area_price;
         if (noMatchExactValue == null && isEPCConfigured() && ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) {
+          const epcNoMatchTimeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("EPC timeout")), 5500)
+          );
           try {
-            const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
-            if (epcAreas.length >= 2) {
+            const epcNoMatchWork = (async () => {
+              const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
+              if (epcAreas.length < 2) return;
               const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
-              if (avgArea > 0) {
-                const pricePerM2 = ukLandRegistry.average_area_price / avgArea;
-                const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
-                  houseNumber: houseNumber.trim() || undefined,
-                  street: street.trim() || undefined,
-                  city: city.trim() || undefined,
-                });
-                if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
-                  noMatchExactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
-                }
+              if (avgArea <= 0) return;
+              const pricePerM2 = ukLandRegistry.average_area_price! / avgArea;
+              const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
+                houseNumber: houseNumber.trim() || undefined,
+                street: street.trim() || undefined,
+                city: city.trim() || undefined,
+              });
+              if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
+                noMatchExactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
               }
-            }
+            })();
+            await Promise.race([epcNoMatchWork, epcNoMatchTimeout]);
           } catch {
-            // EPC failure must not break
+            // EPC failure must not block response
           }
         }
         const augmented = {
@@ -598,28 +602,33 @@ export async function GET(request: NextRequest) {
       }
 
       if (exactValue == null && isEPCConfigured()) {
+        const epcTimeout = new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error("EPC timeout")), 5500)
+        );
         try {
-          const avgPrice = (streetAvg ?? areaPrice) ?? 0;
-          if (avgPrice > 0) {
+          const epcWork = (async () => {
+            const avgPrice = (streetAvg ?? areaPrice) ?? 0;
+            if (avgPrice <= 0) return;
             const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
-            if (epcAreas.length >= 2) {
-              const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
-              if (avgArea > 0) {
-                const pricePerM2 = avgPrice / avgArea;
-                const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
-                  houseNumber: houseNumber.trim() || undefined,
-                  street: street.trim() || undefined,
-                  city: city.trim() || undefined,
-                });
-                if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
-                  exactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
-                  exactValueFromEPC = true;
-                }
-              }
+            if (epcAreas.length < 2) return;
+            const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
+            if (avgArea <= 0) return;
+            const pricePerM2 = avgPrice / avgArea;
+            const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
+              houseNumber: houseNumber.trim() || undefined,
+              street: street.trim() || undefined,
+              city: city.trim() || undefined,
+            });
+            if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
+              exactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
+              exactValueFromEPC = true;
             }
+          })();
+          await Promise.race([epcWork, epcTimeout]);
+        } catch (e) {
+          if (process.env.NODE_ENV === "development") {
+            console.debug("[property-value] EPC skipped:", e instanceof Error ? e.message : String(e));
           }
-        } catch {
-          // EPC failure must not break the property card
         }
       }
 

@@ -2,10 +2,11 @@
  * UK EPC (Energy Performance Certificate) Provider
  * Uses DLUHC Open Data: https://epc.opendatacommunities.org/
  * Extracts floor area (m²) for valuation: estimated_value = floor_area × average_price_per_m²
+ * Max 5s timeout - EPC failure must never block the valuation response.
  */
 
 const EPC_SEARCH_URL = "https://epc.opendatacommunities.org/api/v1/domestic/search";
-const EPC_TIMEOUT_MS = 12000;
+const EPC_TIMEOUT_MS = 5000;
 
 export type EPCResult = {
   total_floor_area_m2: number;
@@ -27,6 +28,15 @@ function getAuthHeader(): string | null {
   return `Basic ${encoded}`;
 }
 
+function logEPC(method: string, status: number | string, detail?: string): void {
+  const msg = `[EPC] ${method} status=${status}${detail ? ` ${detail}` : ""}`;
+  if (status === "error" || (typeof status === "number" && status >= 400)) {
+    console.warn(msg);
+  } else if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+    console.debug(msg);
+  }
+}
+
 /**
  * Search EPC by postcode. Returns floor areas for matching properties.
  */
@@ -39,11 +49,19 @@ async function searchEPCByPostcode(postcode: string): Promise<Array<{ total_floo
 
   try {
     const params = new URLSearchParams({ postcode: pc, size: "100" });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), EPC_TIMEOUT_MS);
     const res = await fetch(`${EPC_SEARCH_URL}?${params.toString()}`, {
       headers: { Accept: "application/json", Authorization: auth },
-      signal: AbortSignal.timeout(EPC_TIMEOUT_MS),
+      signal: controller.signal,
     });
-    if (!res.ok) return [];
+    clearTimeout(timeoutId);
+    logEPC("postcode", res.status, `postcode=${pc}`);
+
+    if (!res.ok) {
+      logEPC("postcode", res.status, "non-OK, skipping");
+      return [];
+    }
 
     const data = (await res.json()) as { rows?: Array<Record<string, unknown>> };
     const rows = data?.rows ?? [];
@@ -58,7 +76,8 @@ async function searchEPCByPostcode(postcode: string): Promise<Array<{ total_floo
       out.push({ total_floor_area_m2: area, address: addr });
     }
     return out;
-  } catch {
+  } catch (e) {
+    logEPC("postcode", "error", e instanceof Error ? e.message : String(e));
     return [];
   }
 }
@@ -75,11 +94,19 @@ async function searchEPCByAddress(address: string): Promise<Array<{ total_floor_
 
   try {
     const params = new URLSearchParams({ address: q, size: "50" });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), EPC_TIMEOUT_MS);
     const res = await fetch(`${EPC_SEARCH_URL}?${params.toString()}`, {
       headers: { Accept: "application/json", Authorization: auth },
-      signal: AbortSignal.timeout(EPC_TIMEOUT_MS),
+      signal: controller.signal,
     });
-    if (!res.ok) return [];
+    clearTimeout(timeoutId);
+    logEPC("address", res.status, `address=${q.slice(0, 30)}`);
+
+    if (!res.ok) {
+      logEPC("address", res.status, "non-OK, skipping");
+      return [];
+    }
 
     const data = (await res.json()) as { rows?: Array<Record<string, unknown>> };
     const rows = data?.rows ?? [];
@@ -94,7 +121,8 @@ async function searchEPCByAddress(address: string): Promise<Array<{ total_floor_
       out.push({ total_floor_area_m2: area, address: addr });
     }
     return out;
-  } catch {
+  } catch (e) {
+    logEPC("address", "error", e instanceof Error ? e.message : String(e));
     return [];
   }
 }
