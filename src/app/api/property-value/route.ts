@@ -13,6 +13,7 @@ import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
 import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
 import { fetchUKNeighborhoodStats, computeUKLivabilityRating } from "@/lib/property-value-providers/uk-ons-census-provider";
+import { fetchEPCFloorArea, fetchEPCFloorAreasForArea, isEPCConfigured } from "@/lib/property-value-providers/uk-epc-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
@@ -217,14 +218,36 @@ export async function GET(request: NextRequest) {
             ukLivability = computeUKLivabilityRating({ livability_proxy_from_area_price: ukLandRegistry.average_area_price });
           }
         }
+        let noMatchExactValue: number | null = ukLandRegistry.average_area_price;
+        if (noMatchExactValue == null && isEPCConfigured() && ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) {
+          try {
+            const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
+            if (epcAreas.length >= 2) {
+              const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
+              if (avgArea > 0) {
+                const pricePerM2 = ukLandRegistry.average_area_price / avgArea;
+                const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
+                  houseNumber: houseNumber.trim() || undefined,
+                  street: street.trim() || undefined,
+                  city: city.trim() || undefined,
+                });
+                if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
+                  noMatchExactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
+                }
+              }
+            }
+          } catch {
+            // EPC failure must not break
+          }
+        }
         const augmented = {
           ...noMatchResult,
           address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
           uk_land_registry: ukLandRegistry,
           data_source: "live" as const,
           property_result: {
-            exact_value: ukLandRegistry.average_area_price,
-            exact_value_message: ukLandRegistry.average_area_price == null ? "No HPI or Land Registry data" : null,
+            exact_value: noMatchExactValue,
+            exact_value_message: noMatchExactValue == null ? "No HPI or Land Registry data" : null,
             value_level: "area-level" as const,
             last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
             street_average: null,
@@ -563,6 +586,7 @@ export async function GET(request: NextRequest) {
       const streetAvg = ukForResult.street_average_price ?? null;
 
       let exactValue: number | null = null;
+      let exactValueFromEPC = false;
       if (latestTx && latestTx.price > 0) {
         try {
           const indices = await fetchUKHPIIndicesForLocality(city.trim(), postcode.trim() || undefined);
@@ -572,6 +596,33 @@ export async function GET(request: NextRequest) {
           exactValue = latestTx.price;
         }
       }
+
+      if (exactValue == null && isEPCConfigured()) {
+        try {
+          const avgPrice = (streetAvg ?? areaPrice) ?? 0;
+          if (avgPrice > 0) {
+            const epcAreas = await fetchEPCFloorAreasForArea(postcode.trim() || "", street.trim() || undefined);
+            if (epcAreas.length >= 2) {
+              const avgArea = epcAreas.reduce((s, a) => s + a.total_floor_area_m2, 0) / epcAreas.length;
+              if (avgArea > 0) {
+                const pricePerM2 = avgPrice / avgArea;
+                const subjectEPC = await fetchEPCFloorArea(postcode.trim() || "", {
+                  houseNumber: houseNumber.trim() || undefined,
+                  street: street.trim() || undefined,
+                  city: city.trim() || undefined,
+                });
+                if (subjectEPC && subjectEPC.total_floor_area_m2 > 0) {
+                  exactValue = Math.round(subjectEPC.total_floor_area_m2 * pricePerM2);
+                  exactValueFromEPC = true;
+                }
+              }
+            }
+          }
+        } catch {
+          // EPC failure must not break the property card
+        }
+      }
+
       if (exactValue == null && areaPrice != null && areaPrice > 0) exactValue = areaPrice;
 
       const lastTransaction =
@@ -597,7 +648,7 @@ export async function GET(request: NextRequest) {
         property_result: {
           exact_value: exactValue,
           exact_value_message: exactValue == null && areaPrice != null ? "No HPI-adjusted value; area average only" : null,
-          value_level: (exactValue != null && latestTx ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
+          value_level: (exactValue != null && (latestTx || exactValueFromEPC) ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
           last_transaction: lastTransaction,
           street_average: streetAverage,
           street_average_message: streetAverageMessage,
