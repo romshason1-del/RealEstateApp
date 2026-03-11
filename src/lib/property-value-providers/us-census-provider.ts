@@ -7,6 +7,7 @@
 
 const CENSUS_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates";
 const CENSUS_ACS_URL = "https://api.census.gov/data/2022/acs/acs5";
+const CENSUS_ACS_URL_2017 = "https://api.census.gov/data/2017/acs/acs5";
 const CENSUS_TIMEOUT_MS = 20000;
 
 export type NeighborhoodStats = {
@@ -14,6 +15,8 @@ export type NeighborhoodStats = {
   median_household_income: number;
   population: number;
   median_rent?: number;
+  population_growth_percent?: number;
+  income_growth_percent?: number;
 };
 
 type CensusGeoItem = {
@@ -43,6 +46,11 @@ function parseNum(val: unknown): number {
   if (typeof val === "number" && Number.isFinite(val)) return val;
   const n = parseFloat(String(val ?? "").replace(/[^\d.-]/g, ""));
   return Number.isFinite(n) ? n : 0;
+}
+
+function computeGrowthPercent(current: number, previous: number): number | undefined {
+  if (!Number.isFinite(previous) || previous <= 0 || !Number.isFinite(current)) return undefined;
+  return ((current - previous) / previous) * 100;
 }
 
 /**
@@ -108,6 +116,33 @@ async function geocodeCoordinates(
 }
 
 /**
+ * Fetch B01003_001E (population) and B19013_001E (income) from prior-year ACS for growth calculation.
+ */
+async function fetchAcsPriorYear(
+  baseUrl: string,
+  params: URLSearchParams
+): Promise<{ population: number; median_household_income: number } | null> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), CENSUS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${baseUrl}?${params.toString()}`, { signal: controller.signal });
+    clearTimeout(id);
+    if (!res.ok) return null;
+    const rows = (await res.json().catch(() => null)) as unknown;
+    if (!Array.isArray(rows) || rows.length < 2) return null;
+    const header = rows[0] as string[];
+    const dataRow = rows[1] as unknown[];
+    const idx = (name: string) => header.indexOf(name);
+    const population = idx("B01003_001E") >= 0 ? parseNum(dataRow[idx("B01003_001E")]) : 0;
+    const median_household_income = idx("B19013_001E") >= 0 ? parseNum(dataRow[idx("B19013_001E")]) : 0;
+    return { population, median_household_income };
+  } catch {
+    clearTimeout(id);
+    return null;
+  }
+}
+
+/**
  * Fetch ACS variables for a census tract.
  * B25077_001E = Median Home Value
  * B19013_001E = Median Household Income
@@ -158,11 +193,23 @@ async function fetchAcsData(
     const population = populationIdx >= 0 ? parseNum(dataRow[populationIdx]) : 0;
     const median_rent = medianRentIdx >= 0 ? parseNum(dataRow[medianRentIdx]) : undefined;
 
+    const priorParams = new URLSearchParams({
+      get: "B01003_001E,B19013_001E",
+      for: forClause,
+      in: inClause,
+    });
+    if (apiKey) priorParams.set("key", apiKey);
+    const prior = await fetchAcsPriorYear(CENSUS_ACS_URL_2017, priorParams);
+    const population_growth_percent = prior ? computeGrowthPercent(population, prior.population) : undefined;
+    const income_growth_percent = prior ? computeGrowthPercent(median_household_income, prior.median_household_income) : undefined;
+
     return {
       median_home_value,
       median_household_income,
       population,
       ...(median_rent != null && median_rent > 0 && { median_rent }),
+      ...(population_growth_percent != null && { population_growth_percent }),
+      ...(income_growth_percent != null && { income_growth_percent }),
     };
   } catch {
     clearTimeout(id);
@@ -199,11 +246,26 @@ async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
     const dataRow = rows[1] as unknown[];
     const idx = (name: string) => header.indexOf(name);
     const median_rent = idx("B25064_001E") >= 0 ? parseNum(dataRow[idx("B25064_001E")]) : 0;
+    const median_home_value = idx("B25077_001E") >= 0 ? parseNum(dataRow[idx("B25077_001E")]) : 0;
+    const median_household_income = idx("B19013_001E") >= 0 ? parseNum(dataRow[idx("B19013_001E")]) : 0;
+    const population = idx("B01003_001E") >= 0 ? parseNum(dataRow[idx("B01003_001E")]) : 0;
+
+    const priorParams = new URLSearchParams({
+      get: "B01003_001E,B19013_001E",
+      for: `zip code tabulation area:${z}`,
+    });
+    if (apiKey) priorParams.set("key", apiKey);
+    const prior = await fetchAcsPriorYear(CENSUS_ACS_URL_2017, priorParams);
+    const population_growth_percent = prior ? computeGrowthPercent(population, prior.population) : undefined;
+    const income_growth_percent = prior ? computeGrowthPercent(median_household_income, prior.median_household_income) : undefined;
+
     return {
-      median_home_value: idx("B25077_001E") >= 0 ? parseNum(dataRow[idx("B25077_001E")]) : 0,
-      median_household_income: idx("B19013_001E") >= 0 ? parseNum(dataRow[idx("B19013_001E")]) : 0,
-      population: idx("B01003_001E") >= 0 ? parseNum(dataRow[idx("B01003_001E")]) : 0,
+      median_home_value,
+      median_household_income,
+      population,
       ...(median_rent > 0 && { median_rent }),
+      ...(population_growth_percent != null && { population_growth_percent }),
+      ...(income_growth_percent != null && { income_growth_percent }),
     };
   } catch {
     clearTimeout(id);

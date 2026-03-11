@@ -41,6 +41,8 @@ export type PropertyValueInsightsResponse = {
     median_household_income: number;
     population: number;
     median_rent?: number;
+    population_growth_percent?: number;
+    income_growth_percent?: number;
   };
   investment_metrics?: {
     median_rent: number;

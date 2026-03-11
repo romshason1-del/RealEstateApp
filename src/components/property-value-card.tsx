@@ -373,7 +373,7 @@ export function PropertyValueCard({
   }, [salesHistory, lastSaleFromProvider]);
   const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
   const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
-  const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number; median_rent?: number } }).neighborhood_stats : undefined;
+  const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number; median_rent?: number; population_growth_percent?: number; income_growth_percent?: number } }).neighborhood_stats : undefined;
   const investmentMetrics = insightsData && "investment_metrics" in insightsData ? (insightsData as { investment_metrics?: { median_rent: number; gross_rent_yield_percent?: number; estimated_roi_percent?: number; median_price_per_sqft?: number } }).investment_metrics : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
   const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
@@ -719,7 +719,7 @@ export function PropertyValueCard({
                 </CollapsibleSection>
               )}
               <CollapsibleSection title="Neighborhood Stats">
-                {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0) ? (
+                {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0 || neighborhoodStats.population_growth_percent != null || neighborhoodStats.income_growth_percent != null) ? (
                   <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
                     {neighborhoodStats.median_home_value > 0 && (
                       <div>Median Home Value: {formatCurrency(neighborhoodStats.median_home_value, currencySymbol)}</div>
@@ -729,6 +729,12 @@ export function PropertyValueCard({
                     )}
                     {neighborhoodStats.population > 0 && (
                       <div>Area Population: {neighborhoodStats.population.toLocaleString("en-US")}</div>
+                    )}
+                    {neighborhoodStats.population_growth_percent != null && (
+                      <div>Population Growth: {(neighborhoodStats.population_growth_percent >= 0 ? "+" : "")}{neighborhoodStats.population_growth_percent.toFixed(1)}%</div>
+                    )}
+                    {neighborhoodStats.income_growth_percent != null && (
+                      <div>Income Growth: {(neighborhoodStats.income_growth_percent >= 0 ? "+" : "")}{neighborhoodStats.income_growth_percent.toFixed(1)}%</div>
                     )}
                     <div className="mt-1.5 pt-1 border-t border-zinc-500/20 text-[10px] text-zinc-500">
                       Government area-level statistics from the U.S. Census Bureau.
