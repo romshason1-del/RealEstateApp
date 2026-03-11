@@ -381,6 +381,17 @@ export function PropertyValueCard({
   const usMatchConfidence = insightsData && "us_match_confidence" in insightsData ? (insightsData as { us_match_confidence?: "high" | "medium" | "low" }).us_match_confidence : undefined;
   const isAreaLevelEstimate = insightsData && "is_area_level_estimate" in insightsData ? (insightsData as { is_area_level_estimate?: boolean }).is_area_level_estimate : undefined;
   const valueRange = insightsData && "value_range" in insightsData ? (insightsData as { value_range?: { low_estimate: number; estimated_value: number; high_estimate: number } }).value_range : undefined;
+  const propertyResult = insightsData && "property_result" in insightsData ? (insightsData as {
+    property_result?: {
+      exact_value: number | null;
+      exact_value_message: string | null;
+      value_level: "property-level" | "street-level" | "area-level";
+      last_transaction: { amount: number; date: string | null; message?: string };
+      street_average: number | null;
+      street_average_message: string | null;
+      livability_rating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT";
+    };
+  }).property_result : undefined;
   const sourceSummary = insightsData && "source_summary" in insightsData ? (insightsData as { source_summary?: string }).source_summary : undefined;
   const lastMarketUpdate = insightsData && "last_market_update" in insightsData ? (insightsData as { last_market_update?: string }).last_market_update : undefined;
   const nearbySales = insightsData && "nearby_sales" in insightsData ? (insightsData as { nearby_sales?: Array<{ address: string; price: number; date: string; distance_m?: number; price_per_sqft?: number; is_same_property?: boolean }> }).nearby_sales : undefined;
@@ -549,277 +560,50 @@ export function PropertyValueCard({
               )}
             </div>
           ) : isUS ? (
-            <div className="space-y-1.5">
-              {/* Priority: Estimated Value, Range, Confidence, Sources, Last Update */}
-              <div className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
-                <FileText className="size-3 shrink-0" aria-hidden />
-                {lastRecordedSale != null && lastRecordedSale.price > 0 ? (
-                  <>
-                    <span>Last Recorded Sale: {formatCurrency(lastRecordedSale.price, currencySymbol)} — Sold in {lastRecordedSale.date ? formatSaleDate(lastRecordedSale.date) : "—"}</span>
-                    {lastRecordedSale.source && (
-                      <span title={`Source: ${lastRecordedSale.source}`} className="text-[10px] text-zinc-500">({lastRecordedSale.source})</span>
-                    )}
-                  </>
-                ) : (
-                  <span className="text-zinc-500">Last Recorded Sale: No recorded sale found</span>
-                )}
-              </div>
-              {((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0) > 0) && (
-                isAreaLevelEstimate ? (
-                  <div className="rounded-lg border border-zinc-500/30 bg-zinc-500/10 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">
-                      Area-level estimate only — not specific to this property
-                    </div>
-                    <div className="mt-0.5 text-base font-medium text-zinc-300 sm:text-lg">
-                      {formatCurrency((valueRange?.estimated_value ?? estimatedAreaPrice ?? medianSalePrice ?? 0), currencySymbol)}
-                    </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">
-                      Based on area medians (Zillow, Redfin, or Census). Not a property appraisal.
-                    </div>
-                  </div>
-                ) : (
+            <div className="space-y-2">
+              {propertyResult ? (
+                <>
                   <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-violet-400/90">
-                      <Sparkles className="size-3 shrink-0" aria-hidden />
-                      Estimated Property Value
+                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">1. Exact value of this property</div>
+                    <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                      {propertyResult.exact_value != null && propertyResult.exact_value > 0
+                        ? formatCurrency(propertyResult.exact_value, currencySymbol)
+                        : propertyResult.exact_value_message ?? "No exact property-level value found"}
                     </div>
-                    <div className="mt-0.5 text-lg font-semibold text-violet-300 sm:text-xl">
-                      {formatCurrency((valueRange?.estimated_value ?? avmValue ?? estimatedAreaPrice ?? medianSalePrice ?? 0), currencySymbol)}
-                    </div>
-                    {valueRange != null && valueRange.low_estimate > 0 && valueRange.high_estimate > 0 && (
-                      <div className="mt-0.5 text-[11px] text-violet-400/80">
-                        Value range: {formatCurrency(valueRange.low_estimate, currencySymbol)} – {formatCurrency(valueRange.high_estimate, currencySymbol)}
-                      </div>
-                    )}
-                    {(sourceSummary || (dataSources != null && dataSources.length > 0)) && (
-                      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-400">
-                        <span>{sourceSummary ?? (dataSources != null && dataSources.length > 0 ? `Based on ${dataSources.join(", ")}` : "")}</span>
-                        <span title="Data sources used for this estimate" className="group relative shrink-0">
-                          <Info className="size-3.5 text-zinc-500 cursor-help" aria-hidden />
-                          <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50 w-52 rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-[10px] text-zinc-300 shadow-xl">
-                            This estimate combines data from the listed sources. RentCast provides property-level valuations; Zillow and Redfin add area market data; Census and FHFA add demographic and price trend context.
-                          </span>
-                        </span>
-                      </div>
-                    )}
+                    <div className="mt-0.5 text-[10px] text-zinc-500">Level: {propertyResult.value_level}</div>
                   </div>
-                )
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">2. Last recorded transaction</div>
+                    <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                      {propertyResult.last_transaction.amount > 0
+                        ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
+                        : propertyResult.last_transaction.message ?? "No recorded transaction found"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">3. Average home price on the same street</div>
+                    <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                      {propertyResult.street_average != null && propertyResult.street_average > 0
+                        ? formatCurrency(propertyResult.street_average, currencySymbol)
+                        : propertyResult.street_average_message ?? "No street-level average found"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">4. Neighborhood livability rating</div>
+                    <div className={`mt-0.5 text-sm font-medium ${
+                      propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
+                      propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
+                      propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
+                      propertyResult.livability_rating === "ALMOST GOOD" ? "text-amber-500/90" :
+                      "text-zinc-400"
+                    }`}>
+                      {propertyResult.livability_rating}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-[11px] text-zinc-500">Loading property data…</div>
               )}
-              <div className="flex items-center gap-2 flex-wrap">
-                {usMatchConfidence && (
-                  <span
-                    className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider ${
-                      usMatchConfidence === "high"
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : usMatchConfidence === "medium"
-                          ? "bg-amber-500/20 text-amber-400"
-                          : "bg-zinc-500/20 text-zinc-400"
-                    }`}
-                    title={
-                      usMatchConfidence === "high"
-                        ? "RentCast AVM (property-level)"
-                        : usMatchConfidence === "medium"
-                          ? "Zillow + Redfin estimates or RentCast last sale"
-                          : "Census / area-level data only"
-                    }
-                  >
-                    {usMatchConfidence} confidence
-                  </span>
-                )}
-              </div>
-              {lastMarketUpdate && (
-                <div className="text-[10px] text-zinc-500">Last market update: {lastMarketUpdate}</div>
-              )}
-
-              {/* Collapsible: More Details */}
-              {(!avmValue && ((estimatedAreaPrice ?? medianSalePrice) != null || usMarketTrend != null)) ||
-              (avmValue != null && avmValue > 0 && propertyDetails?.sqft != null && propertyDetails.sqft > 0) ||
-              (lastSale != null && lastSale.price > 0) ||
-              (avmRent != null && avmRent > 0) ? (
-              <CollapsibleSection title="More Details" defaultOpen={false}>
-                <div className="space-y-1.5">
-                  {!avmValue && ((estimatedAreaPrice ?? medianSalePrice) != null || usMarketTrend != null) && (
-                    <div className="rounded border border-zinc-500/20 bg-zinc-500/5 px-2 py-0.5">
-                      <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">US Market Data</div>
-                      <div className="mt-0.5 text-sm font-medium text-zinc-300">
-                        {(estimatedAreaPrice ?? medianSalePrice) != null && (estimatedAreaPrice ?? medianSalePrice)! > 0
-                          ? formatCurrency((estimatedAreaPrice ?? medianSalePrice)!, currencySymbol)
-                          : "Area-level market data"}
-                      </div>
-                      {usMarketTrend != null && (
-                        <div className="mt-0.5 text-[10px] text-zinc-500">
-                          {usMarketTrend.change_1y_percent >= 0 ? "+" : ""}{usMarketTrend.change_1y_percent}% YoY
-                        </div>
-                      )}
-                      {medianPricePerSqft != null && medianPricePerSqft > 0 && (
-                        <div className="mt-0.5 text-[10px] text-zinc-500">
-                          {formatCurrency(medianPricePerSqft, currencySymbol)}/sqft median
-                        </div>
-                      )}
-                      {(inventorySignal != null || daysOnMarket != null) && (
-                        <div className="mt-0.5 text-[10px] text-zinc-500">
-                          {inventorySignal != null && inventorySignal >= 0 && `${inventorySignal} for sale`}
-                          {inventorySignal != null && daysOnMarket != null && " · "}
-                          {daysOnMarket != null && daysOnMarket > 0 && `${daysOnMarket} days on market`}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {avmValue != null && avmValue > 0 && propertyDetails?.sqft != null && propertyDetails.sqft > 0 && (
-                    <div className="text-[11px] text-zinc-300">
-                      <span className="text-zinc-500">Price per Sqft:</span> {formatCurrency(avmValue / propertyDetails.sqft, currencySymbol)}/sqft
-                      {nearbyComps?.avg_price_per_sqft != null && nearbyComps.avg_price_per_sqft > 0 && (
-                        <span className="ml-2 text-zinc-500">Area avg: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}</span>
-                      )}
-                    </div>
-                  )}
-                  {lastSale != null && lastSale.price > 0 && (
-                    <div className="text-[11px] text-zinc-300">
-                      <span className="text-zinc-500">Last Sale:</span> {formatCurrency(lastSale.price, currencySymbol)}
-                      {lastSale.date ? ` · ${formatSaleDate(lastSale.date)}` : ""}
-                    </div>
-                  )}
-                  {avmRent != null && avmRent > 0 && (
-                    <div className="text-[11px] text-zinc-300">
-                      <span className="text-zinc-500">Estimated Rent:</span> {formatCurrency(avmRent, currencySymbol)}/mo
-                    </div>
-                  )}
-                </div>
-              </CollapsibleSection>
-              ) : null}
-              {propertyDetails && (propertyDetails.beds != null || propertyDetails.baths != null || propertyDetails.sqft != null || propertyDetails.year_built != null || propertyDetails.property_type) && (
-                <CollapsibleSection title="Property Details">
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] sm:text-xs text-zinc-300">
-                    {propertyDetails.beds != null && <span>{propertyDetails.beds} Beds</span>}
-                    {propertyDetails.baths != null && <span>{propertyDetails.baths} Baths</span>}
-                    {propertyDetails.sqft != null && <span>{propertyDetails.sqft.toLocaleString()} Sqft</span>}
-                    {propertyDetails.year_built != null && <span>Built {propertyDetails.year_built}</span>}
-                    {propertyDetails.property_type && <span>{propertyDetails.property_type}</span>}
-                  </div>
-                </CollapsibleSection>
-              )}
-              {salesHistory != null && salesHistory.length > 0 && (
-                <CollapsibleSection title="Sales History" count={salesHistory.length}>
-                  <div className="space-y-0.5 max-h-24 overflow-y-auto">
-                    {salesHistory.slice(0, 10).map((s, i) => (
-                      <div key={i} className="flex justify-between text-[11px] sm:text-xs text-zinc-300">
-                        <span>{formatSaleDate(s.date)}</span>
-                        <span>{formatCurrency(s.price, currencySymbol)}</span>
-                      </div>
-                    ))}
-                    {salesHistory.length > 10 && (
-                      <div className="text-[10px] text-zinc-500">+{salesHistory.length - 10} more</div>
-                    )}
-                  </div>
-                </CollapsibleSection>
-              )}
-              {nearbySales != null && nearbySales.length > 0 && (
-                <CollapsibleSection title={nearbySales.some((s) => s.is_same_property) ? "Recent Sales for This Property" : "Nearby Sales"} count={nearbySales.length}>
-                  <div className="space-y-1.5 text-[11px] sm:text-xs text-zinc-300">
-                    {nearbySales.some((s) => s.is_same_property) && (
-                      <div className="text-[10px] text-zinc-500 mb-1">Same-property sale history. Not nearby comps.</div>
-                    )}
-                    {nearbySales.slice(0, 5).map((sale, i) => (
-                      <div key={i} className="flex flex-wrap justify-between gap-x-2 gap-y-0.5 border-b border-zinc-500/20 pb-1 last:border-0 last:pb-0">
-                        <div className="min-w-0">
-                          <div className="font-medium truncate">{sale.address}</div>
-                          <div className="flex flex-wrap gap-x-2 gap-y-0 text-zinc-500">
-                            {sale.date && <span>{formatSaleDate(sale.date)}</span>}
-                            {sale.distance_m != null && sale.distance_m > 0 && (
-                              <span>{(sale.distance_m / 1609.34).toFixed(2)} mi away</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="font-medium text-amber-300">{formatCurrency(sale.price, currencySymbol)}</div>
-                          {sale.price_per_sqft != null && sale.price_per_sqft > 0 && (
-                            <div className="text-[10px] text-zinc-500">{formatCurrency(sale.price_per_sqft, currencySymbol)}/sqft</div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CollapsibleSection>
-              )}
-              {nearbyComps != null && nearbyComps.count > 0 && (
-                <CollapsibleSection title="Nearby Comparable Sales (Area Summary)" count={nearbyComps.count}>
-                  <div className="space-y-0.5 text-[11px] sm:text-xs text-zinc-300">
-                    <div>Avg price: {formatCurrency(nearbyComps.avg_price, currencySymbol)}</div>
-                    {nearbyComps.avg_price_per_sqft > 0 && (
-                      <div>Avg price/sqft: {formatCurrency(nearbyComps.avg_price_per_sqft, currencySymbol)}</div>
-                    )}
-                  </div>
-                </CollapsibleSection>
-              )}
-              {((investmentMetrics != null && (investmentMetrics.median_rent > 0 || (investmentMetrics.gross_rent_yield_percent ?? investmentMetrics.estimated_roi_percent ?? 0) > 0 || (investmentMetrics.median_price_per_sqft ?? 0) > 0)) || (medianPricePerSqft != null && medianPricePerSqft > 0)) && (
-                <CollapsibleSection title="Investment Metrics">
-                  <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
-                    {(investmentMetrics?.median_rent ?? 0) > 0 && (
-                      <div>Median Rent: {formatCurrency(investmentMetrics?.median_rent ?? 0, currencySymbol)}</div>
-                    )}
-                    {((investmentMetrics?.gross_rent_yield_percent ?? investmentMetrics?.estimated_roi_percent ?? 0) > 0) && (
-                      <div>Gross Rent Yield: {(investmentMetrics?.gross_rent_yield_percent ?? investmentMetrics?.estimated_roi_percent ?? 0).toFixed(1)}%</div>
-                    )}
-                    {((investmentMetrics?.median_price_per_sqft ?? medianPricePerSqft ?? 0) > 0) && (
-                      <div>Median Price / Sqft: {formatCurrency(investmentMetrics?.median_price_per_sqft ?? medianPricePerSqft ?? 0, currencySymbol)}</div>
-                    )}
-                  </div>
-                </CollapsibleSection>
-              )}
-              <CollapsibleSection title="Neighborhood Stats">
-                {neighborhoodStats != null && (neighborhoodStats.median_home_value > 0 || neighborhoodStats.median_household_income > 0 || neighborhoodStats.population > 0 || neighborhoodStats.population_growth_percent != null || neighborhoodStats.income_growth_percent != null) ? (
-                  <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
-                    {neighborhoodStats.median_home_value > 0 && (
-                      <div>Median Home Value: {formatCurrency(neighborhoodStats.median_home_value, currencySymbol)}</div>
-                    )}
-                    {neighborhoodStats.median_household_income > 0 && (
-                      <div>Median Area Income: {formatCurrency(neighborhoodStats.median_household_income, currencySymbol)}</div>
-                    )}
-                    {neighborhoodStats.population > 0 && (
-                      <div>Area Population: {neighborhoodStats.population.toLocaleString("en-US")}</div>
-                    )}
-                    {neighborhoodStats.population_growth_percent != null && (
-                      <div>Population Growth: {(neighborhoodStats.population_growth_percent >= 0 ? "+" : "")}{neighborhoodStats.population_growth_percent.toFixed(1)}%</div>
-                    )}
-                    {neighborhoodStats.income_growth_percent != null && (
-                      <div>Income Growth: {(neighborhoodStats.income_growth_percent >= 0 ? "+" : "")}{neighborhoodStats.income_growth_percent.toFixed(1)}%</div>
-                    )}
-                    <div className="mt-1.5 pt-1 border-t border-zinc-500/20 text-[10px] text-zinc-500">
-                      Government area-level statistics from the U.S. Census Bureau.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    <div className="text-[11px] sm:text-xs text-zinc-500">No government area data available.</div>
-                    <div className="mt-1 text-[10px] text-zinc-500">
-                      Government area-level statistics from the U.S. Census Bureau.
-                    </div>
-                  </div>
-                )}
-              </CollapsibleSection>
-              <CollapsibleSection title="Market Trend (FHFA)">
-                {marketTrend != null && (marketTrend.hpi_index > 0 || marketTrend.change_1y_percent !== 0) ? (
-                  <div className="space-y-1 text-[11px] sm:text-xs text-zinc-300">
-                    {marketTrend.hpi_index > 0 && (
-                      <div>Housing Price Index: {marketTrend.hpi_index.toLocaleString("en-US")}</div>
-                    )}
-                    <div>
-                      1-Year Price Change: {marketTrend.change_1y_percent >= 0 ? "+" : ""}
-                      {marketTrend.change_1y_percent.toFixed(1)}%
-                    </div>
-                    <div className="mt-1.5 pt-1 border-t border-zinc-500/20 text-[10px] text-zinc-500">
-                      Official housing market trend data from the Federal Housing Finance Agency.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    <div className="text-[11px] sm:text-xs text-zinc-500">No FHFA market trend data available.</div>
-                    <div className="mt-1 text-[10px] text-zinc-500">
-                      Official housing market trend data from the Federal Housing Finance Agency.
-                    </div>
-                  </div>
-                )}
-              </CollapsibleSection>
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">
                   <DebugPanel
@@ -831,9 +615,6 @@ export function PropertyValueCard({
                     currencySymbol={currencySymbol}
                   />
                 </CollapsibleSection>
-              )}
-              {!avmValue && !lastSale && !avmRent && !propertyDetails && (!salesHistory || salesHistory.length === 0) && !nearbyComps && (
-                <div className="text-xs text-zinc-400">No Data Available</div>
               )}
             </div>
           ) : isUK && ukLandRegistry ? (

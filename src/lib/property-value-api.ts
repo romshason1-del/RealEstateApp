@@ -39,6 +39,16 @@ export type PropertyValueInsightsResponse = {
   last_market_update?: string;
   /** US: True when value is from area-level data only (Census/median_sale_price), not property-specific */
   is_area_level_estimate?: boolean;
+  /** US: Simplified 4-line property result */
+  property_result?: {
+    exact_value: number | null;
+    exact_value_message: string | null;
+    value_level: "property-level" | "street-level" | "area-level";
+    last_transaction: { amount: number; date: string | null; message?: string };
+    street_average: number | null;
+    street_average_message: string | null;
+    livability_rating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT";
+  };
   last_sale?: { price: number; date: string };
   sales_history?: Array<{ date: string; price: number }>;
   /** Global: Most recent recorded sale for the searched property when available */
@@ -200,7 +210,7 @@ export async function fetchPropertyValueInsights(
       error: "PARSE_ERROR",
     }));
 
-    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.neighborhood_stats || data.uk_land_registry)) {
+    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.property_result || data.neighborhood_stats || data.uk_land_registry)) {
       CACHE.set(key, { data, ts: Date.now() });
     }
 
