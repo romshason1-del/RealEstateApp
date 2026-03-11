@@ -7,14 +7,6 @@
  */
 import * as fs from "fs/promises";
 import * as path from "path";
-// Load .env.local for Supabase keys (NEXT_PUBLIC_SUPABASE_*, SUPABASE_SERVICE_ROLE_KEY)
-try {
-  const dotenv = await import("dotenv");
-  dotenv.config({ path: ".env.local" });
-} catch {
-  /* dotenv optional */
-}
-
 import { syncZillowZipData, syncZillowCityData } from "../src/lib/property-value-providers/us-zillow-research-provider";
 import { syncRedfinZipData, syncRedfinCityData } from "../src/lib/property-value-providers/us-redfin-provider";
 import {
@@ -31,6 +23,13 @@ function logSection(name: string) {
 }
 
 async function main() {
+  try {
+    const dotenv = await import("dotenv");
+    dotenv.config({ path: ".env.local" });
+  } catch {
+    /* dotenv optional */
+  }
+
   process.stdout.write("Syncing US market data...\n");
   process.on("uncaughtException", (err) => {
     console.error("\n[FATAL] Uncaught exception:", err);

@@ -7,7 +7,7 @@
 
 const CENSUS_GEOCODER_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates";
 const CENSUS_ACS_URL = "https://api.census.gov/data/2022/acs/acs5";
-const CENSUS_TIMEOUT_MS = 10000;
+const CENSUS_TIMEOUT_MS = 20000;
 
 export type NeighborhoodStats = {
   median_home_value: number;
@@ -56,7 +56,7 @@ async function geocodeCoordinates(
     y: String(lat),
     benchmark: "Public_AR_Current",
     vintage: "Current_Current",
-    layers: "14",
+    layers: "14,6",
     format: "json",
   });
 
@@ -76,12 +76,12 @@ async function geocodeCoordinates(
     if (Array.isArray(raw)) {
       geos = raw;
     } else if (raw && typeof raw === "object") {
-      for (const v of Object.values(raw)) {
-        if (Array.isArray(v) && v.length > 0) {
-          geos = v;
-          break;
-        }
-      }
+      const allArrs = Object.values(raw).filter((v): v is CensusGeoItem[] => Array.isArray(v) && v.length > 0);
+      const withTract = allArrs.find((arr) => {
+        const f = arr[0];
+        return f && (f.TRACT || ((f.GEOID ?? "").length >= 11));
+      });
+      geos = withTract ?? allArrs[0] ?? [];
     }
     if (geos.length === 0) return null;
 
@@ -166,24 +166,75 @@ async function fetchAcsData(
 }
 
 /**
+ * Fetch ACS data by ZCTA (ZIP Code Tabulation Area). Fallback when geocoder fails.
+ */
+async function fetchAcsByZcta(zip: string): Promise<NeighborhoodStats | null> {
+  const z = (zip ?? "").replace(/\D/g, "").slice(0, 5);
+  if (z.length < 5) return null;
+
+  const apiKey = env("CENSUS_API_KEY");
+  const variables = "B25077_001E,B19013_001E,B01003_001E";
+  const params = new URLSearchParams({
+    get: variables,
+    for: `zip code tabulation area:${z}`,
+  });
+  if (apiKey) params.set("key", apiKey);
+
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), CENSUS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${CENSUS_ACS_URL}?${params.toString()}`, { signal: controller.signal });
+    clearTimeout(id);
+    if (!res.ok || res.status === 204) return null;
+    const text = await res.text();
+    if (!text.trim()) return null;
+    const rows = JSON.parse(text) as unknown;
+    if (!Array.isArray(rows) || rows.length < 2) return null;
+    const header = rows[0] as string[];
+    const dataRow = rows[1] as unknown[];
+    const idx = (name: string) => header.indexOf(name);
+    return {
+      median_home_value: idx("B25077_001E") >= 0 ? parseNum(dataRow[idx("B25077_001E")]) : 0,
+      median_household_income: idx("B19013_001E") >= 0 ? parseNum(dataRow[idx("B19013_001E")]) : 0,
+      population: idx("B01003_001E") >= 0 ? parseNum(dataRow[idx("B01003_001E")]) : 0,
+    };
+  } catch {
+    clearTimeout(id);
+    return null;
+  }
+}
+
+/**
  * Fetch neighborhood statistics for a US location.
+ * Prefers ZCTA (ZIP) when available (faster, more reliable); falls back to lat/lng geocoder.
  * Returns null on any failure; does not throw.
  */
 export async function fetchNeighborhoodStats(
   latitude: number,
-  longitude: number
+  longitude: number,
+  options?: { zip?: string }
 ): Promise<NeighborhoodStats | null> {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    if (options?.zip) return fetchAcsByZcta(options.zip);
     return null;
   }
 
   try {
+    if (options?.zip) {
+      const zctaStats = await fetchAcsByZcta(options.zip);
+      if (zctaStats && (zctaStats.median_home_value > 0 || zctaStats.median_household_income > 0 || zctaStats.population > 0)) {
+        return zctaStats;
+      }
+    }
     const geo = await geocodeCoordinates(latitude, longitude);
-    if (!geo) return null;
-
-    const stats = await fetchAcsData(geo.state, geo.county, geo.tract);
-    return stats;
+    if (geo) {
+      const stats = await fetchAcsData(geo.state, geo.county, geo.tract);
+      if (stats) return stats;
+    }
+    if (options?.zip) return fetchAcsByZcta(options.zip);
+    return null;
   } catch {
+    if (options?.zip) return fetchAcsByZcta(options.zip);
     return null;
   }
 }

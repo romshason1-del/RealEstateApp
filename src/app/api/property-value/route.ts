@@ -243,7 +243,9 @@ export async function GET(request: NextRequest) {
       Number.isFinite(longitude)
     ) {
       try {
-        const neighborhoodStats = await fetchNeighborhoodStats(latitude!, longitude!);
+        const neighborhoodStats = await fetchNeighborhoodStats(latitude!, longitude!, {
+          zip: zip.trim() || undefined,
+        });
         if (neighborhoodStats) {
           response = { ...response, neighborhood_stats: neighborhoodStats };
         }
