@@ -892,6 +892,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             }
           : null,
       has_building_match: hasBuildingMatch,
+      has_exact_flat_match: Boolean(houseNumber.trim() && buildingTxs.length > 0),
       average_area_price: averageAreaPrice,
       area_transaction_count: postcode5y.length,
       area_fallback_level: areaFallbackLevel,
