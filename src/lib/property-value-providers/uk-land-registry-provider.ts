@@ -793,42 +793,13 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     }
 
     let streetAveragePrice: number | null = null;
-    if (street && (city || postcode)) {
-      let streetTxItems: Tx[] = [];
-      const streetNorm = normalizeStreet(street);
-      const outwardPostcode = postcode ? normalizeUKPostcode(postcode).split(/\s/)[0]?.replace(/\s/g, "") || undefined : undefined;
-      if (city || outwardPostcode) {
-        const streetQuery = buildSparqlQueryStreetExact(street, city, outwardPostcode);
-        if (streetQuery) {
-          try {
-            const streetRes = await fetch(SPARQL_ENDPOINT, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-                Accept: "application/sparql-results+json",
-              },
-              body: new URLSearchParams({ query: streetQuery }),
-              signal: AbortSignal.timeout(15000),
-            });
-            if (streetRes.ok) {
-              const streetJson = (await streetRes.json()) as SparqlResult;
-              const streetBindings = streetJson?.results?.bindings ?? [];
-              const afterProcess = processBindingsToItems(streetBindings, true, true);
-              const after5y = afterProcess.filter((t) => t.dateMs >= fiveYearsAgo);
-              streetTxItems = after5y;
-            }
-          } catch {
-            // Street query failed, try postcode fallback
-          }
-        }
-      }
-      if (streetTxItems.length < 3 && postcode5yResidential.length >= 2) {
-        const sameStreetItems = postcode5yResidential.filter((t) => streetMatches(street, t.addrStreet, false, true));
-        if (sameStreetItems.length >= 3) streetTxItems = sameStreetItems;
-      }
-      if (streetTxItems.length >= 3) {
-        const amounts = streetTxItems.map((t) => t.amount).sort((a, b) => a - b);
-        streetAveragePrice = computeMedian(amounts);
+    if (street && postcode5y.length >= 2) {
+      const sameStreetItems = postcode5y.filter((t) => streetMatches(street, t.addrStreet, false, true));
+      if (sameStreetItems.length >= 2) {
+        const amounts = sameStreetItems.map((t) => t.amount).sort((a, b) => a - b);
+        const filtered = filterOutliersIQR(amounts);
+        const vals = filtered.length > 0 ? filtered : amounts;
+        streetAveragePrice = computeMedian(vals);
       }
     }
 
