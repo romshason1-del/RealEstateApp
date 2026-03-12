@@ -218,7 +218,8 @@ export async function fetchPropertyValueInsights(
       error: "PARSE_ERROR",
     }));
 
-    if (res.ok && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.property_result || data.neighborhood_stats || data.uk_land_registry)) {
+    const isUKTimeoutFallback = isUK && (data as { debug?: { failure_reason?: string } }).debug?.failure_reason === "Land Registry timeout";
+    if (res.ok && !isUKTimeoutFallback && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.property_result || data.neighborhood_stats || data.uk_land_registry)) {
       CACHE.set(key, { data, ts: Date.now() });
     }
 
