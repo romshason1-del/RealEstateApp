@@ -6,8 +6,8 @@ import { UKLandRegistryProvider } from "../src/lib/property-value-providers/uk-l
 import { extractFlatPrefix } from "../src/lib/address-parse";
 import { parseUKAddressFromFullString } from "../src/lib/address-parse";
 
-const RAW = "Flat 12, 1 Peninsula Square, London SE10";
-const SELECTED = "1 Peninsula Square, London SE10 0ET, UK";
+const RAW = "Flat 3, 37 Bedford Gardens, London W8 7EF, UK";
+const SELECTED = "37 Bedford Gardens, London W8 7EF, UK";
 
 function main() {
   const flatFromRaw = extractFlatPrefix(RAW);
@@ -72,8 +72,29 @@ function main() {
           console.log("No match_trace. Full debug:", JSON.stringify(result.debug, null, 2));
         }
         if ("uk_land_registry" in result && result.uk_land_registry) {
-          const uk = result.uk_land_registry as { has_building_match?: boolean };
-          console.log("\nhas_building_match:", uk.has_building_match);
+          const uk = result.uk_land_registry as {
+            has_building_match?: boolean;
+            has_exact_flat_match?: boolean;
+            latest_building_transaction?: { price: number; date: string } | null;
+            latest_nearby_transaction?: { price: number; date: string } | null;
+            street_average_price?: number | null;
+          };
+          const hasExactFlatMatch = uk.has_exact_flat_match === true;
+          const hasBuildingMatch = uk.has_building_match === true;
+          const latestTx = uk.latest_building_transaction ?? uk.latest_nearby_transaction ?? null;
+          const streetAvg = uk.street_average_price ?? null;
+          const valueLevel = (hasExactFlatMatch && latestTx != null && latestTx.price > 0
+            ? "property-level"
+            : hasBuildingMatch
+              ? "building-level"
+              : streetAvg != null && streetAvg > 0
+                ? "street-level"
+                : "area-level") as string;
+          console.log("\n=== ROUTE-LEVEL (value_level computation) ===");
+          console.log("1. has_exact_flat_match:", hasExactFlatMatch);
+          console.log("2. has_building_match:", hasBuildingMatch);
+          console.log("3. latest_transaction:", latestTx ? { price: latestTx.price, date: latestTx.date } : null);
+          console.log("4. final value_level:", valueLevel);
         }
         if ("message" in result) {
           console.log("\nmessage:", (result as { message?: string }).message);
