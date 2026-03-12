@@ -133,6 +133,13 @@ export function parseUKAddressFromFullString(
     streetPart = parts[0] ?? "";
   }
 
+  if (parts.length >= 2 && /^\d+[a-z]?$/.test(parts[0]) && /^\d+[a-z]?\s+.+$/.test(parts[1])) {
+    const flatNum = parts[0];
+    const rest = parts.slice(1).join(", ");
+    const inner = parseUKAddressFromFullString(rest + (postcode ? ` ${postcode}` : ""));
+    return { houseNumber: flatNum, street: [inner.houseNumber, inner.street].filter(Boolean).join(" ").trim() || inner.street, city: inner.city, postcode: inner.postcode || postcode };
+  }
+
   const flatPrefixMatch = streetPart.match(
     /^(flat\s+\d+[a-z]?|apartment\s+\d+[a-z]?|apt\.?\s*\d+[a-z]?|unit\s+\d+[a-z]?|suite\s+\d+[a-z]?|ste\.?\s*\d+[a-z]?|#\s*\d+[a-z]?)/i,
   );
