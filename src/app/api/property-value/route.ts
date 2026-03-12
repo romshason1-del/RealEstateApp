@@ -613,10 +613,9 @@ export async function GET(request: NextRequest) {
         latest_building_transaction?: { price: number; date: string } | null;
         latest_nearby_transaction?: { price: number; date: string } | null;
       };
-      const latest = uk.latest_building_transaction ?? uk.latest_nearby_transaction;
-      if (latest && latest.price > 0) {
+      if (uk.latest_building_transaction && uk.latest_building_transaction.price > 0) {
         const source = uk.area_data_source === "HPI" ? "HPI" : "Land Registry";
-        response = { ...response, last_recorded_sale: { price: latest.price, date: latest.date ?? "", source } };
+        response = { ...response, last_recorded_sale: { price: uk.latest_building_transaction.price, date: uk.latest_building_transaction.date ?? "", source } };
       }
       const hasNoUsableAreaData =
         (uk.average_area_price == null || uk.average_area_price <= 0) && (uk.area_transaction_count ?? 0) === 0;
@@ -651,23 +650,23 @@ export async function GET(request: NextRequest) {
         latest_building_transaction?: { price: number; date: string } | null;
         latest_nearby_transaction?: { price: number; date: string } | null;
       };
-      const latestTx = ukForResult.latest_building_transaction ?? ukForResult.latest_nearby_transaction;
+      const latestBuildingTx = ukForResult.latest_building_transaction ?? null;
       const areaPrice = ukForResult.average_area_price ?? null;
       const streetAvg = ukForResult.street_average_price ?? null;
 
       let exactValue: number | null = null;
       let exactValueFromEPC = false;
-      if (latestTx && latestTx.price > 0) {
+      if (latestBuildingTx && latestBuildingTx.price > 0) {
         try {
           const indices = await withTimeout(
             fetchUKHPIIndicesForLocality(city.trim(), postcode.trim() || undefined),
             PROVIDER_TIMEOUT_MS,
             "HPI_indices"
           );
-          const hpiAdjusted = estimateValueFromHPI(latestTx.price, latestTx.date ?? "", indices);
+          const hpiAdjusted = estimateValueFromHPI(latestBuildingTx.price, latestBuildingTx.date ?? "", indices);
           if (hpiAdjusted) exactValue = hpiAdjusted;
         } catch {
-          exactValue = latestTx.price;
+          exactValue = latestBuildingTx.price;
         }
       }
 
@@ -706,11 +705,12 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      if (exactValue == null && streetAvg != null && streetAvg > 0) exactValue = streetAvg;
       if (exactValue == null && areaPrice != null && areaPrice > 0) exactValue = areaPrice;
 
       const lastTransaction =
-        latestTx && latestTx.price > 0
-          ? { amount: latestTx.price, date: latestTx.date ?? null, message: undefined as string | undefined }
+        latestBuildingTx && latestBuildingTx.price > 0
+          ? { amount: latestBuildingTx.price, date: latestBuildingTx.date ?? null, message: undefined as string | undefined }
           : { amount: 0, date: null as string | null, message: "No recorded transaction found" as const };
 
       const streetAverage = streetAvg != null && streetAvg > 0 ? streetAvg : null;
@@ -735,7 +735,7 @@ export async function GET(request: NextRequest) {
         property_result: {
           exact_value: exactValue,
           exact_value_message: exactValue == null && areaPrice != null ? "No HPI-adjusted value; area average only" : null,
-          value_level: (exactValue != null && (latestTx || exactValueFromEPC) ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
+          value_level: (exactValue != null && (latestBuildingTx || exactValueFromEPC) ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
           last_transaction: lastTransaction,
           street_average: streetAverage,
           street_average_message: streetAverageMessage,

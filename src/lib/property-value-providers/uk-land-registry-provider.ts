@@ -900,7 +900,6 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       area_data_source: "land_registry" as const,
     };
 
-    const effectiveLatest = hasBuildingMatch ? latestBuilding : (latestFromArea ?? latestBuilding);
     const success: PropertyValueInsightsSuccess = {
       address: {
         city: city || postcode,
@@ -908,10 +907,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         house_number: houseNumber,
       },
       match_quality: buildingTxs.length > 0 ? "exact_building" : "no_reliable_match",
-      latest_transaction: effectiveLatest
+      latest_transaction: latestBuilding
         ? {
-            transaction_date: effectiveLatest.date || effectiveLatest.dateStr,
-            transaction_price: effectiveLatest.amount,
+            transaction_date: latestBuilding.date || latestBuilding.dateStr,
+            transaction_price: latestBuilding.amount,
             property_size: 0,
             price_per_m2: 0,
           }
@@ -925,7 +924,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       building_summary_last_3_years: {
         transactions_count_last_3_years: building5y.length,
         transactions_count_last_5_years: building5y.length,
-        latest_building_transaction_price: effectiveLatest?.amount ?? 0,
+        latest_building_transaction_price: latestBuilding?.amount ?? 0,
         average_apartment_value_today: buildingAveragePrice ?? averageAreaPrice ?? 0,
       },
       market_value_source: "exact_provider",
