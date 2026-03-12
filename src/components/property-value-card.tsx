@@ -430,6 +430,8 @@ export function PropertyValueCard({
   const usMarketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { change_1y_percent: number } }).market_trend : undefined;
   const inventorySignal = insightsData && "inventory_signal" in insightsData ? (insightsData as { inventory_signal?: number | null }).inventory_signal : undefined;
   const daysOnMarket = insightsData && "days_on_market" in insightsData ? (insightsData as { days_on_market?: number | null }).days_on_market : undefined;
+  const itOmi = insightsData && "it_omi" in insightsData ? (insightsData as { it_omi?: { omi_zone_used?: string } }).it_omi : undefined;
+  const itOmiZoneUsed = itOmi?.omi_zone_used;
   const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; median_area_price?: number | null; price_trend?: { change_1y_percent: number; ref_month?: string } | null; area_data_source?: "land_registry" | "HPI"; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area"; match_confidence?: "high" | "medium" | "low" } }).uk_land_registry : undefined;
   const ukLandRegistryFallback =
     isUK && insightsData != null && !ukLandRegistryRaw
@@ -581,7 +583,9 @@ export function PropertyValueCard({
                     ? formatCurrency(propertyResult.exact_value, currencySymbol)
                     : propertyResult.exact_value_message ?? "No OMI data for this area"}
                 </div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">Based on official OMI area valuations</div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">
+                  {itOmiZoneUsed ? "Based on official OMI microzone valuations" : "Based on official OMI city-area valuations"}
+                </div>
               </div>
               <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
                 <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>

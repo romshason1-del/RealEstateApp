@@ -3,9 +3,13 @@
  * Uses Agenzia delle Entrate OMI data for area price ranges and microzone valuations.
  * Data accessed via third-party API (3eurotools) that aggregates official OMI data.
  * OMI data: https://www.agenziaentrate.gov.it/portale/schede/fabbricatiterreni/omi/banche-dati/quotazioni-immobiliari
+ * Zone precision: Milan uses ArcGIS MapServer for point-in-zone lookup; others use comune-level.
+ * Cities with true OMI zone lookup: Milan only (Turin, Rome etc. use WFS/GeoServer; add when queryable).
  */
 
 const OMI_API_BASE = "https://3eurotools.it/api-quotazioni-immobiliari-omi/ricerca";
+const MILAN_OMI_MAPSERVER =
+  "https://geoportale.comune.milano.it/arcgisportalh/rest/services/OperationalLayers/Micro_Zone_Censuarie_OMI/MapServer/0/query";
 
 /** Italian comune name (normalized) -> codice catastale for OMI lookup */
 const COMUNE_TO_CODICE: Record<string, string> = {
@@ -80,6 +84,8 @@ export type OMIResult = {
   area_price_min: number;
   area_price_max: number;
   price_source: "OMI";
+  /** Zone code when zone-level (e.g. B12); undefined when comune-level */
+  omi_zone_used?: string;
 };
 
 function normalizeComune(name: string): string {
@@ -108,14 +114,39 @@ type OMIZoneResponse = {
   };
 };
 
+function isMilan(city: string): boolean {
+  const n = normalizeComune(city);
+  return n === "milano" || n === "milan";
+}
+
 /**
- * Fetch OMI area price for a comune.
- * Maps city name to codice catastale and retrieves price band for residential (abitazioni_civili).
- * When zona_omi is omitted, API returns all zones; we use the average of zone midpoints.
+ * Resolve OMI zone code from coordinates for Milan.
+ * Uses Milan geoportal ArcGIS MapServer (Micro_Zone_Censuarie_OMI).
  */
-export async function fetchOMIByComune(
+async function fetchMilanOMIZone(lng: number, lat: number): Promise<string | null> {
+  try {
+    const geometry = encodeURIComponent(JSON.stringify({ x: lng, y: lat }));
+    const url = `${MILAN_OMI_MAPSERVER}?f=json&geometry=${geometry}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnGeometry=false&outFields=*`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000), headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { features?: Array<{ attributes?: Record<string, unknown> }> };
+    const attrs = data?.features?.[0]?.attributes;
+    if (!attrs) return null;
+    const zone = (attrs.COD_ZONA ?? attrs.ZONA ?? attrs.cod_zona ?? attrs.zona ?? attrs.CODICE) as string | undefined;
+    return typeof zone === "string" && /^[A-Z]?\d+/.test(zone) ? zone : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch OMI area price for a comune, optionally for a specific zone.
+ * When zona_omi is provided, returns that zone's valuation; otherwise aggregates all zones.
+ */
+async function fetchOMIRaw(
   city: string,
-  sqm: number = DEFAULT_SQM
+  sqm: number,
+  zonaOmi?: string
 ): Promise<OMIResult | null> {
   const codice = getCodiceCatastale(city);
   if (!codice) return null;
@@ -126,6 +157,7 @@ export async function fetchOMIByComune(
     metri_quadri: String(Math.round(sqm)),
     operazione: "acquisto",
   });
+  if (zonaOmi) params.set("zona_omi", zonaOmi);
 
   try {
     const res = await fetch(`${OMI_API_BASE}?${params}`, {
@@ -135,10 +167,27 @@ export async function fetchOMIByComune(
     if (!res.ok) return null;
 
     const data = (await res.json()) as Record<string, OMIZoneResponse>;
+
+    if (zonaOmi) {
+      const zoneData = data[zonaOmi] ?? Object.values(data).find((v) => v && typeof v === "object");
+      const abit = (zoneData as OMIZoneResponse)?.abitazioni_civili;
+      if (!abit) return null;
+      const min = abit.prezzo_acquisto_min ?? 0;
+      const max = abit.prezzo_acquisto_max ?? 0;
+      const medio = abit.prezzo_acquisto_medio ?? (min + max) / 2;
+      if (medio <= 0) return null;
+      return {
+        estimated_value: Math.round(medio),
+        area_price_min: Math.round(min || medio * 0.8),
+        area_price_max: Math.round(max || medio * 1.2),
+        price_source: "OMI",
+        omi_zone_used: zonaOmi,
+      };
+    }
+
     const zones = Object.values(data).filter(
       (z): z is OMIZoneResponse => z != null && typeof z === "object"
     );
-
     if (zones.length === 0) return null;
 
     const midpoints: number[] = [];
@@ -173,4 +222,41 @@ export async function fetchOMIByComune(
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch OMI area price for a comune.
+ * Maps city name to codice catastale and retrieves price band for residential (abitazioni_civili).
+ * When zona_omi is omitted, API returns all zones; we use the average of zone midpoints.
+ */
+export async function fetchOMIByComune(
+  city: string,
+  sqm: number = DEFAULT_SQM
+): Promise<OMIResult | null> {
+  return fetchOMIRaw(city, sqm);
+}
+
+/**
+ * Fetch OMI area price by coordinates for maximum zone precision.
+ * For Milan: uses ArcGIS to resolve OMI zone from lat/lng, then fetches that zone's valuation.
+ * For other cities: uses comune-level aggregation.
+ */
+export async function fetchOMIByCoordinates(
+  lat: number,
+  lng: number,
+  city: string,
+  sqm: number = DEFAULT_SQM
+): Promise<OMIResult | null> {
+  if (isMilan(city)) {
+    try {
+      const zone = await fetchMilanOMIZone(lng, lat);
+      if (zone) {
+        const zoneResult = await fetchOMIRaw(city, sqm, zone);
+        if (zoneResult) return zoneResult;
+      }
+    } catch {
+      // Zone lookup failed, fall through to comune-level
+    }
+  }
+  return fetchOMIRaw(city, sqm);
 }
