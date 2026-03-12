@@ -7,6 +7,10 @@ export type UsePropertyValueInsightsOptions = {
   latitude?: number;
   longitude?: number;
   countryCode?: string;
+  /** UK only: raw typed input (preserves Flat/Unit) */
+  rawInputAddress?: string;
+  /** UK only: Google formatted_address from selected suggestion */
+  selectedFormattedAddress?: string;
 };
 
 /** Countries that have an official property data provider */
@@ -39,6 +43,8 @@ export function usePropertyValueInsights(
       Number.isFinite(options.longitude)
         ? { latitude: options.latitude, longitude: options.longitude }
         : {}),
+      ...(options?.rawInputAddress != null ? { rawInputAddress: options.rawInputAddress } : {}),
+      ...(options?.selectedFormattedAddress != null ? { selectedFormattedAddress: options.selectedFormattedAddress } : {}),
     };
 
     fetchPropertyValueInsights(address, fetchOpts)
@@ -56,7 +62,7 @@ export function usePropertyValueInsights(
       });
 
     return () => { cancelled = true; };
-  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude]);
+  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress]);
 
   return { data, isLoading };
 }

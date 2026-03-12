@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import getPropertyValueInsights from "@/lib/property-value-insights";
-import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "@/lib/address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
 import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
@@ -110,6 +110,8 @@ export async function GET(request: NextRequest) {
   let zip = searchParams.get("zip") ?? searchParams.get("zipCode") ?? "";
   let postcode = searchParams.get("postcode") ?? searchParams.get("postCode") ?? "";
   const addressParam = searchParams.get("address") ?? "";
+  const rawInputAddress = searchParams.get("rawInputAddress") ?? "";
+  const selectedFormattedAddress = searchParams.get("selectedFormattedAddress") ?? "";
   const countryCode = searchParams.get("countryCode") ?? searchParams.get("country") ?? "IL";
   const latParam = searchParams.get("latitude");
   const lngParam = searchParams.get("longitude");
@@ -126,11 +128,25 @@ export async function GET(request: NextRequest) {
       state = parsed.state || state;
       zip = parsed.zip || zip;
     } else if (code === "UK" || code === "GB") {
-      const parsed = parseUKAddressFromFullString(addressParam);
-      street = parsed.street || street;
-      city = parsed.city || city;
-      postcode = parsed.postcode || postcode;
-      houseNumber = parsed.houseNumber || houseNumber;
+      if (rawInputAddress.trim() && selectedFormattedAddress.trim()) {
+        const flatFromRaw = extractFlatPrefix(rawInputAddress);
+        const parsedSelected = parseUKAddressFromFullString(selectedFormattedAddress);
+        city = parsedSelected.city || city;
+        postcode = parsedSelected.postcode || postcode;
+        houseNumber = flatFromRaw || parsedSelected.houseNumber || houseNumber;
+        const selTrimmed = selectedFormattedAddress.replace(/,?\s*(UK|United Kingdom)\s*$/i, "").trim();
+        const postcodeRe = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i;
+        const pcMatch = selTrimmed.match(postcodeRe);
+        const beforePc = pcMatch ? selTrimmed.slice(0, pcMatch.index).trim() : selTrimmed;
+        const selParts = beforePc.split(",").map((p) => p.trim()).filter(Boolean);
+        street = selParts.length >= 2 ? selParts.slice(0, -1).join(", ") : (parsedSelected.street || street);
+      } else {
+        const parsed = parseUKAddressFromFullString(addressParam);
+        street = parsed.street || street;
+        city = parsed.city || city;
+        postcode = parsed.postcode || postcode;
+        houseNumber = parsed.houseNumber || houseNumber;
+      }
     } else {
       if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);
@@ -180,6 +196,9 @@ export async function GET(request: NextRequest) {
             latitude: Number.isFinite(latitude) ? latitude : undefined,
             longitude: Number.isFinite(longitude) ? longitude : undefined,
             fullAddress: addressParam || undefined,
+            ...(isUK && rawInputAddress.trim()
+              ? { rawInputAddress: rawInputAddress.trim(), selectedFormattedAddress: selectedFormattedAddress.trim() || undefined }
+              : {}),
           },
           countryCode
         ),
