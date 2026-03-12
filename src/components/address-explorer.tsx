@@ -36,7 +36,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { extractFlatPrefix } from "@/lib/address-parse";
 import { getMockPropertyInsight } from "@/lib/mock-data";
 import { createClient } from "@/lib/supabase/client";
 
@@ -979,8 +978,7 @@ export const AddressExplorer = () => {
         const location = results[0].geometry.location;
         const nextCenter = { lat: location.lat(), lng: location.lng() };
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
-        const flatPrefix = extractFlatPrefix(propertyValueAddressQuery);
-        const displayAddress = flatPrefix ? `${flatPrefix}, ${selectedFormatted}` : selectedFormatted;
+        const displayAddress = propertyValueAddressQuery.trim() || selectedFormatted;
         setIsPropertyValueAddressInputOpen(false);
         setPropertyValueAddressQuery("");
         setPropertyValuePredictions([]);
@@ -1027,8 +1025,7 @@ export const AddressExplorer = () => {
         const nextCenter = { lat: location.lat(), lng: location.lng() };
         const selectedFormatted =
           results[0].formatted_address ?? prediction.description;
-        const flatPrefix = extractFlatPrefix(query);
-        const displayAddress = flatPrefix ? `${flatPrefix}, ${selectedFormatted}` : selectedFormatted;
+        const displayAddress = query.trim() || selectedFormatted;
         setQuery(displayAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
@@ -1506,8 +1503,7 @@ export const AddressExplorer = () => {
 
         const location = results[0].geometry.location;
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
-        const flatPrefix = extractFlatPrefix(assetAddressQuery);
-        const displayAddress = flatPrefix ? `${flatPrefix}, ${selectedFormatted}` : selectedFormatted;
+        const displayAddress = assetAddressQuery.trim() || selectedFormatted;
         setAssetSelection({
           address: displayAddress,
           position: { lat: location.lat(), lng: location.lng() },
