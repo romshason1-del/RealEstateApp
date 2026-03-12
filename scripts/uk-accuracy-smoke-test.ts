@@ -31,9 +31,9 @@ const TEST_CASES: TestCase[] = [
     expectedLevel: "building-level",
   },
   {
-    address: "1 High Street, London SW19 5BY, UK",
-    expectedPrice: 850_000,
-    expectedDate: "2021-08-18",
+    address: "55 Compayne Gardens, London NW6 3DB, UK",
+    expectedPrice: 1_900_000,
+    expectedDate: "2024-10-29",
     expectedLevel: "building-level",
   },
   // Parsing edge: Flat/Unit prefix
@@ -66,7 +66,7 @@ const TEST_CASES: TestCase[] = [
 
 const CONSISTENCY_ADDRESSES: Array<{ address: string; raw?: string; selected?: string }> = [
   { address: "37 Bedford Gardens, London W8 7EF, UK", raw: "Flat 3, 37 Bedford Gardens, London W8 7EF, UK", selected: "37 Bedford Gardens, London W8 7EF, UK" },
-  { address: "1 High Street, London SW19 5BY, UK" },
+  { address: "55 Compayne Gardens, London NW6 3DB, UK" },
   { address: "5 Bedford Gardens, London W8 7EF, UK" },
   { address: "37 Bedford Gardens, London W8 7EF, UK", raw: "Unit 3, 37 Bedford Gardens, London W8 7EF, UK", selected: "37 Bedford Gardens, London W8 7EF, UK" },
   { address: "10 Palace Gate, London W8 5NP, UK", raw: "Flat 10, 10 Palace Gate, London W8 5NP, UK", selected: "10 Palace Gate, London W8 5NP, UK" },
