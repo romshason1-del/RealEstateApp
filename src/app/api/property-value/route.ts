@@ -11,6 +11,9 @@ import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
+import { fetchOMIByComune } from "@/lib/property-value-providers/it-omi-provider";
+import { fetchITISTATStats } from "@/lib/property-value-providers/it-istat-provider";
+import { computeNeighborhoodRating } from "@/lib/neighborhood-rating";
 import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
 import { fetchUKNeighborhoodStats, computeUKLivabilityRating } from "@/lib/property-value-providers/uk-ons-census-provider";
 import { fetchEPCFloorArea, fetchEPCFloorAreasForArea, isEPCConfigured } from "@/lib/property-value-providers/uk-epc-provider";
@@ -45,7 +48,8 @@ function validateInput(
   city: string,
   street: string,
   countryCode?: string,
-  postcode?: string
+  postcode?: string,
+  opts?: { latitude?: number; longitude?: number }
 ): { valid: boolean; error?: string } {
   const code = (countryCode ?? "").toUpperCase();
   const isUK = code === "UK" || code === "GB";
@@ -54,6 +58,16 @@ function validateInput(
     const hasStreetAndCity = !!(city.trim() && street.trim());
     if ((!pc || pc.length === 0) && !hasStreetAndCity) return { valid: false, error: "postcode or street and town is required for UK addresses" };
     if (pc.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "postcode too long" };
+      return { valid: true };
+  }
+  const isIT = code === "IT";
+  if (isIT) {
+    const hasCity = !!(city.trim());
+    const lat = opts?.latitude;
+    const lng = opts?.longitude;
+    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+    if (!hasCity && !hasCoords) return { valid: false, error: "city or coordinates required for Italy addresses" };
+    if (city.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "city too long" };
     return { valid: true };
   }
   if (!city || typeof city !== "string" || city.trim().length === 0) {
@@ -151,6 +165,11 @@ export async function GET(request: NextRequest) {
         postcode = parsed.postcode || postcode;
         houseNumber = parsed.houseNumber || houseNumber;
       }
+    } else if (code === "IT") {
+      const parsed = parseAddressFromFullString(addressParam);
+      if (parsed.city) city = city || parsed.city;
+      if (parsed.street) street = street || parsed.street;
+      if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
     } else {
       if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);
@@ -161,7 +180,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const validation = validateInput(city.trim(), street.trim(), countryCode, postcode.trim() || zip.trim());
+  const validation = validateInput(city.trim(), street.trim(), countryCode, postcode.trim() || zip.trim(), { latitude, longitude });
   if (!validation.valid) {
     return NextResponse.json(
       { message: validation.error, error: "INVALID_INPUT" },
@@ -178,7 +197,64 @@ export async function GET(request: NextRequest) {
   // UK: cache key includes raw+selected so same address always yields same cached response (including level)
   const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode) + raw + sel;
   const isUS = (countryCode ?? "").toUpperCase() === "US";
+  const isIT = (countryCode ?? "").toUpperCase() === "IT";
   const usMockMode = isUS && isUSMockEnabled();
+
+  if (isIT) {
+    const itCacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip) + "|IT";
+    const itCached = CACHE.get(itCacheKey);
+    if (itCached && Date.now() - itCached.ts < CACHE_TTL_MS) {
+      return NextResponse.json({ ...itCached.data, data_source: "cache" as const });
+    }
+
+    const itCity = city.trim() || street.trim() || "Roma";
+    let omiResult: Awaited<ReturnType<typeof fetchOMIByComune>> = null;
+    try {
+      omiResult = await withTimeout(fetchOMIByComune(itCity), PROVIDER_TIMEOUT_MS, "IT_OMI");
+    } catch {
+      // OMI failure
+    }
+
+    const estimatedValue = omiResult?.estimated_value ?? null;
+    const areaAverage =
+      omiResult?.estimated_value ??
+      (omiResult?.area_price_min != null && omiResult?.area_price_max != null
+        ? Math.round((omiResult.area_price_min + omiResult.area_price_max) / 2)
+        : null);
+
+    let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
+    try {
+      const itStats = await withTimeout(
+        fetchITISTATStats(itCity, areaAverage ?? estimatedValue ?? undefined),
+        PROVIDER_TIMEOUT_MS,
+        "IT_ISTAT"
+      );
+      livabilityRating = computeNeighborhoodRating(itStats);
+    } catch {
+      if (areaAverage != null && areaAverage > 0) {
+        livabilityRating = computeNeighborhoodRating({ livability_proxy_from_area_price: areaAverage });
+      }
+    }
+
+    const itStreet = street.trim();
+    const itResponse = {
+      address: { city: itCity, street: itStreet, house_number: houseNumber.trim() },
+      data_source: "live" as const,
+      property_result: {
+        exact_value: estimatedValue,
+        exact_value_message: estimatedValue == null ? "No OMI data for this area" : null,
+        value_level: "area-level" as const,
+        last_transaction: { amount: 0, date: null, message: "Not yet available in Italy" as const },
+        street_average: areaAverage,
+        street_average_message: areaAverage == null ? "No OMI data for this area" : null,
+        livability_rating: livabilityRating,
+      },
+      it_omi: omiResult ? { estimated_value: omiResult.estimated_value, area_price_min: omiResult.area_price_min, area_price_max: omiResult.area_price_max, price_source: omiResult.price_source } : undefined,
+    };
+
+    CACHE.set(itCacheKey, { data: itResponse, ts: Date.now() });
+    return NextResponse.json(itResponse);
+  }
 
   const cached = CACHE.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {

@@ -14,7 +14,7 @@ export type UsePropertyValueInsightsOptions = {
 };
 
 /** Countries that have an official property data provider */
-const PROVIDER_COUNTRIES = ["IL", "US", "UK", "GB"];
+const PROVIDER_COUNTRIES = ["IL", "US", "UK", "GB", "IT"];
 
 export function usePropertyValueInsights(
   address: string,
