@@ -522,7 +522,7 @@ function matchesBuildingFuzzy(
   const townOk = postcodeMatch || !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
   if (!townOk) return false;
   if (!paonMatchesHouseNumber(paon, saon, houseNumber, street)) return false;
-  return streetMatches(street, addrStreet, false);
+  return streetMatches(street, addrStreet, false, true);
 }
 
 /** Building-only match: PAON + street + postcode, no SAON requirement (for fallback when flat match fails) */
@@ -547,9 +547,9 @@ function matchesBuildingOnly(
   const paonMatches = !paonNorm ? false
     : buildingNum
       ? (paonNorm === normalizeForMatch(buildingNum) || paonNum === extractNumberPart(buildingNum) || paonNorm.includes(buildingNum))
-      : streetMatches(street, addrStreet, false);
+      : streetMatches(street, addrStreet, false, true);
   if (!paonMatches) return false;
-  return streetMatches(street, addrStreet, false);
+  return streetMatches(street, addrStreet, false, true);
 }
 
 export class UKLandRegistryProvider implements PropertyDataProvider {
@@ -913,6 +913,93 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const providerStreetMatch = streetAveragePrice != null && streetAveragePrice > 0;
     const providerMatchLevelAttempted = providerFlatMatch ? "property" : hasBuildingMatch ? "building" : providerStreetMatch ? "street" : "area";
 
+    const normalizedPcCompact = normalizedPostcode.replace(/\s/g, "");
+    const outwardPc = normalizedPostcode.split(/\s/)[0]?.replace(/\s/g, "") ?? "";
+    const buildingNum = extractBuildingNumberFromStreet(street);
+
+    const rowsWithMatchingPostcode = items.filter((t) =>
+      t.addrPostcode === normalizedPcCompact || (outwardPc && t.addrPostcode.startsWith(outwardPc))
+    ).length;
+    const rowsWithMatchingStreet = items.filter((t) => streetMatches(street, t.addrStreet, false)).length;
+    const rowsWithMatchingPaon = items.filter((t) => {
+      const paonNorm = normalizeForMatch(t.paon);
+      const paonNum = extractNumberPart(t.paon);
+      if (buildingNum) {
+        return paonNorm === normalizeForMatch(buildingNum) || paonNum === extractNumberPart(buildingNum) || paonNorm.includes(buildingNum);
+      }
+      return streetMatches(street, t.addrStreet, false);
+    }).length;
+    const rowsWithMatchingSaon = items.filter((t) => saonMatchesFlat(t.saon, houseNumber)).length;
+
+    const sampleRows = items.slice(0, 8).map((t) => {
+      const pcMatch = t.addrPostcode === normalizedPcCompact || (outwardPc && t.addrPostcode.startsWith(outwardPc));
+      const stMatch = streetMatches(street, t.addrStreet, false);
+      const paonM = (() => {
+        const pn = normalizeForMatch(t.paon);
+        const pnum = extractNumberPart(t.paon);
+        if (buildingNum) return pn === normalizeForMatch(buildingNum) || pnum === extractNumberPart(buildingNum) || pn.includes(buildingNum);
+        return streetMatches(street, t.addrStreet, false);
+      })();
+      const saonM = saonMatchesFlat(t.saon, houseNumber);
+      const exactM = matchesBuildingExact(t.paon, t.saon, t.addrStreet, t.addrTown, t.addrPostcode, houseNumber, street, cityLower, normalizedPostcode);
+      const fuzzyM = matchesBuildingFuzzy(t.paon, t.saon, t.addrStreet, t.addrTown, t.addrPostcode, houseNumber, street, cityLower, normalizedPostcode);
+      const buildingOnlyM = matchesBuildingOnly(t.paon, t.addrStreet, t.addrTown, t.addrPostcode, street, cityLower, normalizedPostcode);
+      return { paon: t.paon, saon: t.saon, street: t.addrStreet, postcode: t.addrPostcode, postcodeMatch: pcMatch, streetMatch: stMatch, paonMatch: paonM, saonMatch: saonM, exactMatch: exactM, fuzzyMatch: fuzzyM, buildingOnlyMatch: buildingOnlyM };
+    });
+
+    let propertyFailedBecause = "";
+    let buildingFailedBecause = "";
+    let streetFailedBecause = "";
+    let areaUsedBecause = "";
+    if (providerMatchLevelAttempted === "property") {
+      propertyFailedBecause = "n/a - property match succeeded";
+      areaUsedBecause = "n/a - property level used";
+    } else if (providerMatchLevelAttempted === "building") {
+      propertyFailedBecause = houseNumber.trim() ? `no row matched flat (houseNumber=${JSON.stringify(houseNumber)}, SAON match required)` : "no flat requested";
+      buildingFailedBecause = "n/a - building match succeeded";
+      areaUsedBecause = "n/a - building level used";
+    } else if (providerMatchLevelAttempted === "street") {
+      propertyFailedBecause = houseNumber.trim() ? `no row matched flat (houseNumber=${JSON.stringify(houseNumber)})` : "no flat requested";
+      buildingFailedBecause = exactMatches.length === 0 && fuzzyMatches.length === 0
+        ? (houseNumber.trim() ? `no exact/fuzzy/buildingOnly match (buildingNum=${JSON.stringify(buildingNum)}, street=${JSON.stringify(street)})` : `no building match for street ${JSON.stringify(street)}`)
+        : "n/a";
+      streetFailedBecause = "n/a - street level used";
+      areaUsedBecause = "n/a - street level used";
+    } else {
+      propertyFailedBecause = houseNumber.trim() ? `no row matched flat (houseNumber=${JSON.stringify(houseNumber)})` : "no flat requested";
+      buildingFailedBecause = exactMatches.length === 0 && fuzzyMatches.length === 0
+        ? (houseNumber.trim()
+          ? `no exact/fuzzy/buildingOnly match (buildingNum=${JSON.stringify(buildingNum)}, street=${JSON.stringify(street)}, sample PAONs: ${items.slice(0, 5).map((r) => r.paon).join("; ")})`
+          : `no building match for street ${JSON.stringify(street)}`)
+        : "n/a";
+      streetFailedBecause = streetAveragePrice == null || streetAveragePrice <= 0
+        ? (street ? `insufficient same-street transactions (need >=2, street=${JSON.stringify(street)})` : "no street parsed")
+        : "n/a";
+      areaUsedBecause = "no property/building/street match; using postcode/area average";
+    }
+
+    const match_trace = {
+      raw_input_address: (input.rawInputAddress ?? "").trim() || "(not provided)",
+      selected_formatted_address: (input.selectedFormattedAddress ?? "").trim() || "(not provided)",
+      parsed_house_number: houseNumber,
+      parsed_street: street,
+      parsed_postcode: postcode,
+      normalized_postcode: normalizedPostcode,
+      land_registry_rows_returned: items.length,
+      rows_with_matching_postcode: rowsWithMatchingPostcode,
+      rows_with_matching_street: rowsWithMatchingStreet,
+      rows_with_matching_paon: rowsWithMatchingPaon,
+      rows_with_matching_saon: rowsWithMatchingSaon,
+      building_num_from_street: buildingNum,
+      fallback_reason: {
+        property_failed_because: propertyFailedBecause,
+        building_failed_because: buildingFailedBecause,
+        street_failed_because: streetFailedBecause,
+        area_used_because: areaUsedBecause,
+      },
+      sample_rows: sampleRows,
+    };
+
     const ukDebug: PropertyValueInsightsDebug = {
       records_fetched: postcodeQueryRawResultCount,
       records_returned: postcodeResultsCount,
@@ -937,6 +1024,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       flat_match: providerFlatMatch,
       building_match: hasBuildingMatch,
       street_match: providerStreetMatch,
+      match_trace,
     };
 
     const ukData = {
