@@ -407,28 +407,52 @@ function extractNumberPart(s: string): string {
   return m ? m[0] : "";
 }
 
-/** Check if PAON matches house number (supports "25", "25A", "34", "FLAT 3" etc.) */
-function paonMatchesHouseNumber(paon: string, saon: string, houseNumber: string): boolean {
+/** Extract leading building number from street (e.g. "25 Kensington Court" -> "25") */
+function extractBuildingNumberFromStreet(street: string): string {
+  const m = (street ?? "").trim().match(/^(\d+[A-Za-z]?)\s/);
+  return m ? m[1] : "";
+}
+
+/** Check if SAON matches flat identifier (Flat 5, Apt 5, 5 all match FLAT 5, 5, etc.) */
+function saonMatchesFlat(saon: string, houseNumber: string): boolean {
+  const saonNorm = normalizeForMatch(saon);
+  const hnNorm = normalizeForMatch(houseNumber);
+  const saonNum = extractNumberPart(saon);
+  const hnNum = extractNumberPart(houseNumber);
+  if (!hnNum && !hnNorm) return !saonNorm;
+  if (!saonNorm) return false;
+  if (saonNum && hnNum && saonNum !== hnNum) return false;
+  if (saonNum && hnNum && saonNum === hnNum) return true;
+  if (saonNorm === hnNorm) return true;
+  const beforeNum = saonNorm.slice(0, -hnNum.length);
+  if (hnNum && saonNorm.endsWith(hnNum) && (!beforeNum.length || !/\d$/.test(beforeNum))) return true;
+  if (hnNorm && saonNorm.includes(hnNorm)) return true;
+  return false;
+}
+
+/** Check if PAON matches house number or building number from street (supports "25", "25A", "34", "FLAT 3" etc.) */
+function paonMatchesHouseNumber(paon: string, saon: string, houseNumber: string, street: string): boolean {
   const hn = normalizeForMatch(houseNumber);
   const paonNorm = normalizeForMatch(paon);
   const saonNorm = normalizeForMatch(saon);
-  if (!hn) {
+  const buildingNum = extractBuildingNumberFromStreet(street);
+
+  if (!hn && !buildingNum) {
     if (saonNorm) return false;
     return true;
   }
   if (!paonNorm && !saonNorm) return true;
+
   if (saonNorm) {
-    const saonNum = extractNumberPart(saon);
-    const hnNum = extractNumberPart(houseNumber);
-    if (saonNum && hnNum && saonNum !== hnNum) return false;
-    const saonMatches = saonNorm === hn || saonNorm.endsWith(hn) || hn.endsWith(saonNorm) || (saonNum && hnNum && saonNum === hnNum);
-    if (!saonMatches) return false;
+    if (!saonMatchesFlat(saon, houseNumber)) return false;
   }
-  if (paonNorm === hn || paonNorm.startsWith(hn) || hn.startsWith(paonNorm)) return true;
-  if (paonNorm.includes(hn) || hn.includes(paonNorm)) return true;
+
   const paonNum = extractNumberPart(paon);
   const hnNum = extractNumberPart(houseNumber);
+  if (paonNorm === hn || paonNorm.startsWith(hn) || hn.startsWith(paonNorm)) return true;
+  if (paonNorm.includes(hn) || hn.includes(paonNorm)) return true;
   if (paonNum && hnNum && paonNum === hnNum) return true;
+  if (buildingNum && (paonNorm === normalizeForMatch(buildingNum) || paonNum === extractNumberPart(buildingNum))) return true;
   if (saonNorm && (saonNorm.includes(hn) || hn.includes(saonNorm))) return true;
   return false;
 }
@@ -475,7 +499,7 @@ function matchesBuildingExact(
   const reqCityNorm = normalizeForMatch(city);
   const townOk = postcodeMatch || !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
   if (!townOk) return false;
-  if (!paonMatchesHouseNumber(paon, saon, houseNumber)) return false;
+  if (!paonMatchesHouseNumber(paon, saon, houseNumber, street)) return false;
   return streetMatches(street, addrStreet, true);
 }
 
@@ -497,7 +521,34 @@ function matchesBuildingFuzzy(
   const reqCityNorm = normalizeForMatch(city);
   const townOk = postcodeMatch || !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
   if (!townOk) return false;
-  if (!paonMatchesHouseNumber(paon, saon, houseNumber)) return false;
+  if (!paonMatchesHouseNumber(paon, saon, houseNumber, street)) return false;
+  return streetMatches(street, addrStreet, false);
+}
+
+/** Building-only match: PAON + street + postcode, no SAON requirement (for fallback when flat match fails) */
+function matchesBuildingOnly(
+  paon: string,
+  addrStreet: string,
+  addrTown: string,
+  addrPostcode: string,
+  street: string,
+  city: string,
+  normalizedPostcode: string
+): boolean {
+  const postcodeMatch = normalizedPostcode && addrPostcode &&
+    (addrPostcode === normalizedPostcode.replace(/\s/g, "") || addrPostcode.startsWith(normalizedPostcode.split(/\s/)[0]?.replace(/\s/g, "") ?? ""));
+  const townNorm = normalizeForMatch(addrTown);
+  const reqCityNorm = normalizeForMatch(city);
+  const townOk = postcodeMatch || !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
+  if (!townOk) return false;
+  const buildingNum = extractBuildingNumberFromStreet(street);
+  const paonNorm = normalizeForMatch(paon);
+  const paonNum = extractNumberPart(paon);
+  const paonMatches = !paonNorm ? false
+    : buildingNum
+      ? (paonNorm === normalizeForMatch(buildingNum) || paonNum === extractNumberPart(buildingNum) || paonNorm.includes(buildingNum))
+      : streetMatches(street, addrStreet, false);
+  if (!paonMatches) return false;
   return streetMatches(street, addrStreet, false);
 }
 
@@ -769,7 +820,15 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         matchesBuildingFuzzy(t.paon, t.saon, t.addrStreet, t.addrTown, t.addrPostcode, houseNumber, street, cityLower, normalizedPostcode)
     );
 
-    const buildingTxs = exactMatches.length > 0 ? exactMatches : fuzzyMatches;
+    let buildingTxs = exactMatches.length > 0 ? exactMatches : fuzzyMatches;
+    if (buildingTxs.length === 0 && houseNumber.trim()) {
+      const buildingOnlyMatches = items.filter((t) =>
+        matchesBuildingOnly(t.paon, t.addrStreet, t.addrTown, t.addrPostcode, street, cityLower, normalizedPostcode)
+      );
+      if (buildingOnlyMatches.length > 0) {
+        buildingTxs = buildingOnlyMatches;
+      }
+    }
     const building5y = buildingTxs.filter((t) => t.dateMs >= fiveYearsAgo);
     const postcode5y = items.filter((t) => t.dateMs >= fiveYearsAgo);
 
