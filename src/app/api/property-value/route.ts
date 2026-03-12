@@ -182,7 +182,23 @@ export async function GET(request: NextRequest) {
 
   const cached = CACHE.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    const cachedResponse = { ...cached.data, data_source: "cache" as const };
+    let cachedResponse = { ...cached.data, data_source: "cache" as const } as Record<string, unknown>;
+    if (isUK) {
+      const uk = (cachedResponse.uk_land_registry ?? {}) as { has_exact_flat_match?: boolean; has_building_match?: boolean; latest_building_transaction?: { price: number; date: string } | null; latest_nearby_transaction?: { price: number; date: string } | null; street_average_price?: number | null };
+      const hasExactFlatMatch = uk.has_exact_flat_match === true;
+      const hasBuildingMatch = uk.has_building_match === true;
+      const latestTx = uk.latest_building_transaction ?? uk.latest_nearby_transaction ?? null;
+      const streetAvg = uk.street_average_price ?? null;
+      const valueLevel = (hasExactFlatMatch && latestTx != null && latestTx.price > 0
+        ? "property-level"
+        : hasBuildingMatch
+          ? "building-level"
+          : streetAvg != null && streetAvg > 0
+            ? "street-level"
+            : "area-level") as "property-level" | "building-level" | "street-level" | "area-level";
+      const pr = (cachedResponse.property_result ?? {}) as Record<string, unknown>;
+      cachedResponse = { ...cachedResponse, property_result: { ...pr, value_level: valueLevel } };
+    }
     if (isUK && process.env.NODE_ENV === "development") {
       const pr = ((cachedResponse as Record<string, unknown>).property_result ?? {}) as { value_level?: string; last_transaction?: { amount?: number; date?: string | null } };
       const lt = pr.last_transaction;
