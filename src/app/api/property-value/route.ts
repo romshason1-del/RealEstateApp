@@ -11,7 +11,8 @@ import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
-import { fetchOMIByComune } from "@/lib/property-value-providers/it-omi-provider";
+import { fetchOMIByCoordinates, fetchOMIByComune } from "@/lib/property-value-providers/it-omi-provider";
+import { fetchItalyMarketListings } from "@/lib/property-value-providers/it-market-provider";
 import { fetchITISTATStats } from "@/lib/property-value-providers/it-istat-provider";
 import { computeNeighborhoodRating } from "@/lib/neighborhood-rating";
 import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
@@ -208,14 +209,36 @@ export async function GET(request: NextRequest) {
     }
 
     const itCity = city.trim() || street.trim() || "Roma";
-    let omiResult: Awaited<ReturnType<typeof fetchOMIByComune>> = null;
+    const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
+    let omiResult: Awaited<ReturnType<typeof fetchOMIByCoordinates>> = null;
     try {
-      omiResult = await withTimeout(fetchOMIByComune(itCity), PROVIDER_TIMEOUT_MS, "IT_OMI");
+      omiResult = hasCoords
+        ? await withTimeout(fetchOMIByCoordinates(latitude!, longitude!, itCity), PROVIDER_TIMEOUT_MS + 4000, "IT_OMI")
+        : await withTimeout(fetchOMIByComune(itCity), PROVIDER_TIMEOUT_MS, "IT_OMI");
     } catch {
       // OMI failure
     }
 
-    const estimatedValue = omiResult?.estimated_value ?? null;
+    let listingResult: Awaited<ReturnType<typeof fetchItalyMarketListings>> = null;
+    try {
+      listingResult = hasCoords
+        ? await withTimeout(fetchItalyMarketListings(latitude!, longitude!, itCity, street.trim() || undefined), PROVIDER_TIMEOUT_MS, "IT_MARKET")
+        : null;
+    } catch {
+      // Listing failure
+    }
+
+    const omiMidpoint = omiResult?.estimated_value ?? null;
+    const listingPerSqm = listingResult?.listing_price_per_sqm;
+    const sqmDefault = 100;
+    const listingValue = listingPerSqm != null && listingPerSqm > 0 ? Math.round(listingPerSqm * sqmDefault) : null;
+
+    // Listing weighting disabled when no real listing source exists (it-market-provider returns null).
+    // When paid listing integration is added, use blended weights: 50% OMI + 35% listing + 15% blend.
+    const hasRealListingData = listingValue != null;
+    const estimatedValue = hasRealListingData && omiMidpoint != null
+      ? Math.round(0.5 * omiMidpoint + 0.35 * listingValue! + 0.15 * (omiMidpoint + listingValue!) / 2)
+      : omiMidpoint;
     const areaAverage =
       omiResult?.estimated_value ??
       (omiResult?.area_price_min != null && omiResult?.area_price_max != null
@@ -249,7 +272,9 @@ export async function GET(request: NextRequest) {
         street_average_message: areaAverage == null ? "No OMI data for this area" : null,
         livability_rating: livabilityRating,
       },
-      it_omi: omiResult ? { estimated_value: omiResult.estimated_value, area_price_min: omiResult.area_price_min, area_price_max: omiResult.area_price_max, price_source: omiResult.price_source } : undefined,
+      it_omi: omiResult ? { estimated_value: omiResult.estimated_value, area_price_min: omiResult.area_price_min, area_price_max: omiResult.area_price_max, price_source: omiResult.price_source, omi_zone_used: omiResult.omi_zone_used } : undefined,
+      it_listing: listingResult ? { listing_price_per_sqm: listingResult.listing_price_per_sqm, listing_source: listingResult.listing_source, listing_confidence: listingResult.listing_confidence } : undefined,
+      it_has_listing_data: hasRealListingData,
     };
 
     CACHE.set(itCacheKey, { data: itResponse, ts: Date.now() });
