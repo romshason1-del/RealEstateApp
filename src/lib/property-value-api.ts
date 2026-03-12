@@ -194,7 +194,6 @@ export async function fetchPropertyValueInsights(
   }
 
   try {
-    console.log("FINAL ADDRESS SENT:", address);
     const params = new URLSearchParams({ address });
     if (options?.countryCode) params.set("countryCode", options.countryCode);
     if (options?.latitude != null && Number.isFinite(options.latitude)) {
