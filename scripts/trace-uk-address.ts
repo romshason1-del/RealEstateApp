@@ -1,6 +1,7 @@
 /**
- * Trace one UK address end-to-end. Invokes provider directly (no server needed).
- * Run: npx tsx scripts/trace-uk-address.ts
+ * Trace one UK address end-to-end.
+ * Mode 1: npx tsx scripts/trace-uk-address.ts (provider only)
+ * Mode 2: Start dev server, then npx tsx scripts/trace-uk-address.ts --api (calls API)
  */
 import { UKLandRegistryProvider } from "../src/lib/property-value-providers/uk-land-registry-provider";
 import { extractFlatPrefix } from "../src/lib/address-parse";
@@ -8,6 +9,8 @@ import { parseUKAddressFromFullString } from "../src/lib/address-parse";
 
 const RAW = "Flat 3, 37 Bedford Gardens, London W8 7EF, UK";
 const SELECTED = "37 Bedford Gardens, London W8 7EF, UK";
+const USE_API = process.argv.includes("--api");
+const BASE = "http://localhost:3000";
 
 function main() {
   const flatFromRaw = extractFlatPrefix(RAW);
@@ -26,6 +29,30 @@ function main() {
       : selParts.length >= 2
         ? selParts.slice(0, -1).join(", ")
         : parsedSelected.street || "";
+
+  if (USE_API) {
+    const params = new URLSearchParams({
+      address: SELECTED,
+      countryCode: "UK",
+      rawInputAddress: RAW,
+      selectedFormattedAddress: SELECTED,
+    });
+    fetch(`${BASE}/api/property-value?${params}`)
+      .then((r) => r.json())
+      .then((data) => {
+        const uk = data.uk_land_registry ?? {};
+        const pr = data.property_result ?? {};
+        console.log("\n=== API RESPONSE (client-facing) ===");
+        console.log("1. has_exact_flat_match:", uk.has_exact_flat_match);
+        console.log("2. has_building_match:", uk.has_building_match);
+        console.log("3. street_avg:", uk.street_average_price ?? null);
+        console.log("4. latest_transaction:", uk.latest_building_transaction ?? uk.latest_nearby_transaction ?? null);
+        console.log("5. final value_level:", pr.value_level);
+        console.log("6. from cache:", data.data_source === "cache");
+      })
+      .catch((e) => console.error("API fetch failed (is dev server running?):", e.message));
+    return;
+  }
 
   const provider = new UKLandRegistryProvider();
   provider
