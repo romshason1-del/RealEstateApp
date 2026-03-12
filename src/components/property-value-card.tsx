@@ -570,6 +570,67 @@ export function PropertyValueCard({
                 No AVM estimate or sale history could be retrieved for this address.
               </p>
             </div>
+          ) : (isIT || propertyResult?.last_transaction?.message === "Not yet available in Italy") ? (
+            <div className="space-y-2">
+              {propertyResult ? (
+                <>
+              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Estimated value for this property</div>
+                <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                  {propertyResult.exact_value != null && propertyResult.exact_value > 0
+                    ? formatCurrency(propertyResult.exact_value, currencySymbol)
+                    : propertyResult.exact_value_message ?? "No OMI data for this area"}
+                </div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">Based on official OMI area valuations</div>
+              </div>
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
+                <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                  Not available in Italy yet
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average price in this area</div>
+                <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                  {propertyResult.street_average != null && propertyResult.street_average > 0
+                    ? formatCurrency(propertyResult.street_average, currencySymbol)
+                    : propertyResult.street_average_message ?? "No OMI data for this area"}
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
+                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Neighborhood livability rating</div>
+                <div className={`mt-0.5 text-sm font-medium ${
+                  propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
+                  propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
+                  propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
+                  propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
+                  "text-zinc-400"
+                }`}>
+                  {propertyResult.livability_rating}
+                </div>
+              </div>
+              <div className="pt-0.5 text-[10px] text-zinc-500">
+                OMI (Osservatorio del Mercato Immobiliare). Agenzia delle Entrate. Government open data.
+              </div>
+              {debugMode && hasOfficialProvider && (
+                <CollapsibleSection title="Debug Info">
+                  <DebugPanel
+                    address={address}
+                    parsed={parsedLocal}
+                    canonical={canonicalLocal}
+                    insightsData={insightsData}
+                    latest={latest}
+                    currencySymbol={currencySymbol}
+                  />
+                </CollapsibleSection>
+              )}
+                </>
+              ) : (
+                <div className="text-[11px] text-zinc-500">
+                  {isLoading ? "Loading property data…" : "No OMI data for this area."}
+                </div>
+              )}
+            </div>
           ) : !hasPropertyData && !ukLandRegistry ? (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-amber-300/90">
@@ -654,67 +715,6 @@ export function PropertyValueCard({
                     currencySymbol={currencySymbol}
                   />
                 </CollapsibleSection>
-              )}
-            </div>
-          ) : isIT ? (
-            <div className="space-y-2">
-              {propertyResult ? (
-                <>
-              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Estimated value for this property</div>
-                <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
-                  {propertyResult.exact_value != null && propertyResult.exact_value > 0
-                    ? formatCurrency(propertyResult.exact_value, currencySymbol)
-                    : propertyResult.exact_value_message ?? "No OMI data for this area"}
-                </div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">Based on official OMI area valuations</div>
-              </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
-                <div className="mt-0.5 text-sm font-medium text-zinc-300">
-                  Not available in Italy yet
-                </div>
-              </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average price in this area</div>
-                <div className="mt-0.5 text-sm font-medium text-zinc-300">
-                  {propertyResult.street_average != null && propertyResult.street_average > 0
-                    ? formatCurrency(propertyResult.street_average, currencySymbol)
-                    : propertyResult.street_average_message ?? "No OMI data for this area"}
-                </div>
-              </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Neighborhood livability rating</div>
-                <div className={`mt-0.5 text-sm font-medium ${
-                  propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
-                  propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
-                  propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
-                  propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
-                  "text-zinc-400"
-                }`}>
-                  {propertyResult.livability_rating}
-                </div>
-              </div>
-              <div className="pt-0.5 text-[10px] text-zinc-500">
-                OMI (Osservatorio del Mercato Immobiliare). Agenzia delle Entrate. Government open data.
-              </div>
-              {debugMode && hasOfficialProvider && (
-                <CollapsibleSection title="Debug Info">
-                  <DebugPanel
-                    address={address}
-                    parsed={parsedLocal}
-                    canonical={canonicalLocal}
-                    insightsData={insightsData}
-                    latest={latest}
-                    currencySymbol={currencySymbol}
-                  />
-                </CollapsibleSection>
-              )}
-                </>
-              ) : (
-                <div className="text-[11px] text-zinc-500">
-                  {isLoading ? "Loading property data…" : "No OMI data for this area."}
-                </div>
               )}
             </div>
           ) : isUK && (propertyResult || ukLandRegistry) ? (
