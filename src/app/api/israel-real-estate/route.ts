@@ -263,10 +263,6 @@ export async function GET(request: NextRequest) {
         const cityLastSale = cityTop20[0];
         const citySqmForEstimate = propertyAreaSqm > 0 ? propertyAreaSqm : 100;
         const cityNeighborhoodEstimate = cityAvgPricePerSqm != null ? Math.round(cityAvgPricePerSqm * citySqmForEstimate) : null;
-        const cityEstimatedValue = cityNeighborhoodEstimate ?? (cityTop10.length > 0
-          ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)
-          : null);
-
         if (cityTop20.length > 0) {
           const cityStreetAvg = cityTop10.length > 0
             ? Math.round(cityTop10.reduce((s: number, t: { price: number }) => s + t.price, 0) / cityTop10.length)

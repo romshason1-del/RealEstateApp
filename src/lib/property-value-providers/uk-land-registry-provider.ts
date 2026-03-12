@@ -292,55 +292,6 @@ LIMIT 500
 `.trim();
 }
 
-/**
- * Street-only query for "Average home price on the same street".
- * Exact match on street name + town (or postcode area when postcode provided).
- * Supports street variants (e.g. "Rd" vs "Road") and town/postcode flexibility.
- */
-function buildSparqlQueryStreetExact(street: string, town: string, postcodePrefix?: string): string {
-  const streetNorm = normalizeStreet(street ?? "");
-  const townNorm = (town ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toLowerCase();
-  if (!streetNorm || (!townNorm && !postcodePrefix)) return "";
-  const streetLower = streetNorm.toLowerCase();
-  const streetEsc = streetLower.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const streetVariants: string[] = [streetEsc];
-  const rawLower = (street ?? "").toLowerCase().trim().replace(/\s+/g, " ");
-  if (rawLower && rawLower !== streetEsc) streetVariants.push(rawLower.replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
-  const rdVariant = streetEsc.replace(/\broad\b/g, "rd");
-  if (rdVariant !== streetEsc && !streetVariants.includes(rdVariant)) streetVariants.push(rdVariant);
-  const streetFilter = streetVariants.map((v) => `LCASE(STR(?street)) = "${v}"`).join(" || ");
-  const townFilter = townNorm
-    ? `CONTAINS(LCASE(STR(?town)), "${townNorm.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`
-    : "false";
-  const postcodeFilter = postcodePrefix
-    ? `STRSTARTS(UCASE(STR(?postcode)), "${postcodePrefix.toUpperCase().replace(/[^A-Z0-9]/g, "")}")`
-    : "false";
-  const localityFilter = postcodePrefix ? `(${townFilter} || ${postcodeFilter})` : townFilter;
-  return `
-PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
-PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
-PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
-
-SELECT ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?category ?propertyType
-WHERE {
-  ?addr lrcommon:street ?street.
-  OPTIONAL { ?addr lrcommon:town ?town }
-  OPTIONAL { ?addr lrcommon:postcode ?postcode }
-  FILTER((${streetFilter}) && (${localityFilter}))
-  ?transx lrppi:propertyAddress ?addr ;
-          lrppi:pricePaid ?amount ;
-          lrppi:transactionDate ?date ;
-          lrppi:transactionCategory/skos:prefLabel ?category.
-  OPTIONAL { ?transx lrppi:propertyType/skos:prefLabel ?propertyType }
-  OPTIONAL { ?addr lrcommon:county ?county }
-  OPTIONAL { ?addr lrcommon:paon ?paon }
-  OPTIONAL { ?addr lrcommon:saon ?saon }
-}
-ORDER BY DESC(?date)
-LIMIT 500
-`.trim();
-}
-
 /** Fallback: query by town/locality only */
 function buildSparqlQueryTown(town: string): string {
   const townNorm = (town ?? "").trim().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").toUpperCase();

@@ -96,32 +96,6 @@ function cityToRegionSlug(city: string): string | null {
   return c;
 }
 
-/** Build SPARQL query for UK HPI: average price, index, and ref month for a region. */
-function buildHPISparqlQuery(regionSlug: string): string {
-  const regionUri = `http://landregistry.data.gov.uk/id/region/${regionSlug}`;
-  return `
-PREFIX ukhpi: <http://landregistry.data.gov.uk/def/ukhpi/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-
-SELECT ?refMonth ?averagePrice ?housePriceIndex ?previousYearIndex
-WHERE {
-  ?obs ukhpi:refRegion <${regionUri}> ;
-       ukhpi:refMonth ?refMonth ;
-       ukhpi:averagePrice ?averagePrice ;
-       ukhpi:housePriceIndex ?housePriceIndex .
-  OPTIONAL {
-    ?prevObs ukhpi:refRegion <${regionUri}> ;
-             ukhpi:refMonth ?prevMonth ;
-             ukhpi:housePriceIndex ?previousYearIndex .
-    FILTER (?prevMonth = ?refMonth - "P1Y"^^xsd:duration)
-  }
-}
-ORDER BY DESC(?refMonth)
-LIMIT 25
-`.trim();
-}
-
 /** Build HPI query. UK HPI: observations link to region via refRegion. */
 function buildHPISparqlQuerySimple(regionSlug: string): string {
   const regionUri = `http://landregistry.data.gov.uk/id/region/${regionSlug}`;
