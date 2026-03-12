@@ -98,14 +98,6 @@ function buildUKMinimalResponse(): Record<string, unknown> {
       street_average_message: "No street-level average found" as const,
       livability_rating: "BAD" as const,
     },
-    debug: {
-      match_level_attempted: "area",
-      flat_match: false,
-      building_match: false,
-      street_match: false,
-      valuation_method: "timeout",
-      fallback_level: "no_match",
-    },
   };
 }
 
@@ -365,15 +357,7 @@ export async function GET(request: NextRequest) {
             street_average_message: "No street-level average found" as const,
             livability_rating: ukLivability,
           },
-          debug: {
-            ...(noMatchResult.debug ?? {}),
-            match_level_attempted: "area",
-            flat_match: false,
-            building_match: false,
-            street_match: false,
-            valuation_method: "area",
-            fallback_level: noMatchLevel,
-          },
+          debug: { ...(noMatchResult.debug ?? {}) },
         };
         CACHE.set(cacheKey, { data: augmented, ts: Date.now() });
         return NextResponse.json(augmented);
@@ -841,15 +825,7 @@ export async function GET(request: NextRequest) {
           street_average_message: streetAverageMessage,
           livability_rating: livabilityRating,
         },
-        debug: {
-          ...existingDebug,
-          match_level_attempted: matchLevelAttempted,
-          flat_match: flatMatch,
-          building_match: buildingMatch,
-          street_match: streetMatch,
-          valuation_method: valuationMethod,
-          fallback_level: valueLevel,
-        },
+        debug: { ...existingDebug },
       };
     }
 

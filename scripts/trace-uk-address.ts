@@ -62,9 +62,10 @@ function main() {
             console.log("   - area used because:", fr.area_used_because);
           }
           console.log("\nSample rows:");
-          ((tr.sample_rows as unknown[]) || []).forEach((r: Record<string, unknown>, i: number) => {
+          ((tr.sample_rows as unknown[]) || []).forEach((r, i) => {
+            const row = r as Record<string, unknown>;
             console.log(
-              `  [${i}] PAON=${r.paon} SAON=${r.saon} street=${r.street} | pc=${r.postcodeMatch} st=${r.streetMatch} paon=${r.paonMatch} saon=${r.saonMatch} exact=${r.exactMatch} fuzzy=${r.fuzzyMatch} buildingOnly=${r.buildingOnlyMatch}`
+              `  [${i}] PAON=${row.paon} SAON=${row.saon} street=${row.street} | pc=${row.postcodeMatch} st=${row.streetMatch} paon=${row.paonMatch} saon=${row.saonMatch} exact=${row.exactMatch} fuzzy=${row.fuzzyMatch} buildingOnly=${row.buildingOnlyMatch}`
             );
           });
         } else {
