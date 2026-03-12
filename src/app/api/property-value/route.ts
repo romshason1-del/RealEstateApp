@@ -13,6 +13,7 @@ import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
 import { fetchOMIByCoordinates, fetchOMIByComune } from "@/lib/property-value-providers/it-omi-provider";
 import { fetchItalyMarketListings } from "@/lib/property-value-providers/it-market-provider";
+import { fetchDVFByCoordinates } from "@/lib/property-value-providers/fr-dvf-provider";
 import { fetchITISTATStats } from "@/lib/property-value-providers/it-istat-provider";
 import { computeNeighborhoodRating } from "@/lib/neighborhood-rating";
 import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
@@ -69,6 +70,17 @@ function validateInput(
     const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
     if (!hasCity && !hasCoords) return { valid: false, error: "city or coordinates required for Italy addresses" };
     if (city.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "city too long" };
+    return { valid: true };
+  }
+  const isFR = code === "FR";
+  if (isFR) {
+    const lat = opts?.latitude;
+    const lng = opts?.longitude;
+    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+    if (!hasCoords) return { valid: false, error: "coordinates required for France addresses (DVF geo lookup)" };
+    const hasCityOrStreet = !!(city.trim() || street.trim());
+    if (!hasCityOrStreet) return { valid: false, error: "city or street required for France addresses" };
+    if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
     return { valid: true };
   }
   if (!city || typeof city !== "string" || city.trim().length === 0) {
@@ -171,6 +183,11 @@ export async function GET(request: NextRequest) {
       if (parsed.city) city = city || parsed.city;
       if (parsed.street) street = street || parsed.street;
       if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+    } else if (code === "FR") {
+      const parsed = parseAddressFromFullString(addressParam);
+      if (parsed.city) city = city || parsed.city;
+      if (parsed.street) street = street || parsed.street;
+      if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
     } else {
       if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);
@@ -199,7 +216,82 @@ export async function GET(request: NextRequest) {
   const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode) + raw + sel;
   const isUS = (countryCode ?? "").toUpperCase() === "US";
   const isIT = (countryCode ?? "").toUpperCase() === "IT";
+  const isFR = (countryCode ?? "").toUpperCase() === "FR";
   const usMockMode = isUS && isUSMockEnabled();
+
+  // FR branch kept for future reactivation. Currently gated in UI (PROVIDER_COUNTRIES, hasOfficialProvider) - DVF source unreliable (502).
+  if (isFR) {
+    const frCacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip) + "|FR";
+    const frCached = CACHE.get(frCacheKey);
+    if (frCached && Date.now() - frCached.ts < CACHE_TTL_MS) {
+      return NextResponse.json({ ...frCached.data, data_source: "cache" as const });
+    }
+
+    const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
+    if (!hasCoords) {
+      return NextResponse.json(
+        { message: "Coordinates required for France addresses (DVF geo lookup)", error: "INVALID_INPUT" },
+        { status: 400 }
+      );
+    }
+
+    let dvfResult: Awaited<ReturnType<typeof fetchDVFByCoordinates>>;
+    try {
+      dvfResult = await withTimeout(
+        fetchDVFByCoordinates(latitude!, longitude!, `${street.trim()}, ${city.trim()}`.trim()),
+        PROVIDER_TIMEOUT_MS + 4000,
+        "FR_DVF"
+      );
+    } catch {
+      dvfResult = {
+        latest_transaction: { amount: 0, date: null },
+        price_per_sqm: null,
+        street_average: null,
+        estimated_value: null,
+        transaction_count: 0,
+        radius_used_m: 0,
+      };
+    }
+
+    const estimatedValue = dvfResult.estimated_value;
+    const streetAverage = dvfResult.street_average;
+    const latestTx = dvfResult.latest_transaction;
+
+    let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
+    if (streetAverage != null && streetAverage > 0) {
+      livabilityRating = computeNeighborhoodRating({ livability_proxy_from_area_price: streetAverage });
+    } else if (estimatedValue != null && estimatedValue > 0) {
+      livabilityRating = computeNeighborhoodRating({ livability_proxy_from_area_price: estimatedValue });
+    }
+
+    const valueLevel = dvfResult.transaction_count >= 3 ? "street-level" : dvfResult.transaction_count > 0 ? "area-level" : "no_match";
+
+    const frResponse = {
+      address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+      data_source: "live" as const,
+      property_result: {
+        exact_value: estimatedValue,
+        exact_value_message: estimatedValue == null ? "No DVF data for this area" : null,
+        value_level: valueLevel as "property-level" | "building-level" | "street-level" | "area-level" | "no_match",
+        last_transaction: {
+          amount: latestTx.amount ?? 0,
+          date: latestTx.date,
+          message: latestTx.amount != null && latestTx.amount > 0 ? undefined : ("No recorded transaction in radius" as const),
+        },
+        street_average: streetAverage,
+        street_average_message: streetAverage == null ? "No DVF data for this area" : null,
+        livability_rating: livabilityRating,
+      },
+      fr_dvf: {
+        transaction_count: dvfResult.transaction_count,
+        radius_used_m: dvfResult.radius_used_m,
+        price_per_sqm: dvfResult.price_per_sqm,
+      },
+    };
+
+    CACHE.set(frCacheKey, { data: frResponse, ts: Date.now() });
+    return NextResponse.json(frResponse);
+  }
 
   if (isIT) {
     const itCacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip) + "|IT";
