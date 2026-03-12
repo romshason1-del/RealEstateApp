@@ -30,6 +30,9 @@ export function parseAddressFromFullString(address: string): { city: string; str
   if (parts[parts.length - 1]?.match(/^(Israel|ישראל)$/i)) {
     parts.pop();
   }
+  if (parts[parts.length - 1]?.match(/^(Italy|Italia|IT)$/i)) {
+    parts.pop();
+  }
 
   const houseMatch = trimmed.match(/\b(\d+)\s*([A-Za-zא-ת])?\b/);
   const houseNumber = houseMatch ? (houseMatch[2] ? `${houseMatch[1]}${houseMatch[2]}` : houseMatch[1]) : "";

@@ -169,10 +169,16 @@ export async function fetchPropertyValueInsights(
             const uk = parseUKAddressFromFullString(address);
             return { city: uk.city, street: uk.street, houseNumber: uk.houseNumber, postcode: uk.postcode };
           })()
-        : (() => {
-            const g = parseAddressFromFullString(address);
-            return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: "" };
-          })();
+        : code === "IT"
+          ? (() => {
+              const g = parseAddressFromFullString(address);
+              const city = g.city || g.street;
+              return { city, street: g.city ? g.street : "", houseNumber: g.houseNumber, postcode: "" };
+            })()
+          : (() => {
+              const g = parseAddressFromFullString(address);
+              return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: "" };
+            })();
   const fullAddress = address.trim() || undefined;
   if (isUK) {
     const hasStreetAndCity = !!(parsed.street.trim() && parsed.city.trim());
@@ -182,7 +188,9 @@ export async function fetchPropertyValueInsights(
         debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
       };
     }
-  } else if (!parsed.city || !parsed.street) {
+  }
+  const isIT = code === "IT";
+  if (!isIT && (!parsed.city || !parsed.street)) {
     return {
       message: "no reliable exact match found",
       debug: {
@@ -196,6 +204,12 @@ export async function fetchPropertyValueInsights(
         exact_matches_count: 0,
         rejection_reason: "Could not parse city and street from address",
       },
+    };
+  }
+  if (isIT && !parsed.city) {
+    return {
+      message: "City required for Italy. Could not parse from address.",
+      debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
     };
   }
 

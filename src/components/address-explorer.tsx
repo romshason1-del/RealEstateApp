@@ -277,12 +277,12 @@ function resolveCountryProfile(address: string): CountryProfile {
   }
 
   if (
-    /italy|rome|milan|naples|florence|venice|turin/.test(normalizedAddress)
+    /italy|rome|milan|naples|florence|venice|turin|roma|milano|napoli|firenze|venezia|torino/.test(normalizedAddress)
   ) {
     return {
       countryCode: "IT",
       currencySymbol: "€",
-      providerLabel: "RentCast Global Mock",
+      providerLabel: "OMI",
     };
   }
 
