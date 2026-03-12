@@ -40,6 +40,25 @@ function formatCurrency(value: number, symbol: string): string {
   return `${symbol}${Math.round(value).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
 
+/** Universal first-card label and support text by value level */
+function getFirstCardWording(valueLevel: string | undefined): { label: string; supportText: string } {
+  const label = "Estimated value for this property";
+  switch (valueLevel) {
+    case "property-level":
+      return { label, supportText: "Based on exact property transaction history" };
+    case "building-level":
+      return { label, supportText: "Based on building transaction history" };
+    case "street-level":
+      return { label, supportText: "Based on recent sales on this street" };
+    case "area-level":
+      return { label, supportText: "Based on area market data" };
+    case "no_match":
+      return { label, supportText: "Map location found; no property record" };
+    default:
+      return { label, supportText: "Based on available market data" };
+  }
+}
+
 /** Heuristic: values in typical monthly rent range (500–25,000) are likely rent, not sale price */
 function isLikelyRent(value: number, source?: string): boolean {
   if (!Number.isFinite(value) || value <= 0) return false;
@@ -397,7 +416,7 @@ export function PropertyValueCard({
       last_transaction: { amount: number; date: string | null; message?: string };
       street_average: number | null;
       street_average_message: string | null;
-      livability_rating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT";
+      livability_rating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT";
     };
   }).property_result : undefined;
   const sourceSummary = insightsData && "source_summary" in insightsData ? (insightsData as { source_summary?: string }).source_summary : undefined;
@@ -471,6 +490,14 @@ export function PropertyValueCard({
   const estimateIsRent = estimate && isLikelyRent(estimate.estimated_value, source);
   const estimateIsStreetValue = estimate && "value_type" in estimate && estimate.value_type === "street_median";
 
+  const providerAddr = insightsData && "address" in insightsData ? (insightsData as { address?: { city?: string; street?: string; house_number?: string } }).address : undefined;
+  const formatProviderAddress = (a: { city?: string; street?: string; house_number?: string }) =>
+    [a.house_number, a.street, a.city].filter(Boolean).join(", ").trim() || "";
+  const displayAddress =
+    selectedFormattedAddress ??
+    (providerAddr ? formatProviderAddress(providerAddr) : null) ??
+    address;
+
   return (
     <div
       className={[
@@ -489,7 +516,7 @@ export function PropertyValueCard({
                 </span>
               )}
             </div>
-            <div className="mt-0.5 truncate text-xs font-semibold text-white">{toEnglishDisplay(address)}</div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-white">{toEnglishDisplay(displayAddress)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {hasOfficialProvider && (
@@ -572,13 +599,16 @@ export function PropertyValueCard({
               {propertyResult ? (
                 <>
                   <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Exact value of this property</div>
+                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">{getFirstCardWording(propertyResult.value_level).label}</div>
                     <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
                       {propertyResult.exact_value != null && propertyResult.exact_value > 0
                         ? formatCurrency(propertyResult.exact_value, currencySymbol)
                         : propertyResult.exact_value_message ?? "No exact property-level value found"}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">Level: {propertyResult.value_level}</div>
+                    <div className="mt-0.5 text-[10px] text-zinc-500">{getFirstCardWording(propertyResult.value_level).supportText}</div>
+                    {propertyResult.value_level && (
+                      <div className="mt-0.5 text-[10px] text-zinc-500/80">Level: {propertyResult.value_level}</div>
+                    )}
                   </div>
                   <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
                     <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
@@ -602,7 +632,7 @@ export function PropertyValueCard({
                       propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
                       propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
                       propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
-                      propertyResult.livability_rating === "ALMOST GOOD" ? "text-amber-500/90" :
+                      propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
                       "text-zinc-400"
                     }`}>
                       {propertyResult.livability_rating}
@@ -630,17 +660,18 @@ export function PropertyValueCard({
               {propertyResult ? (
                 <>
                   <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Exact value of this property</div>
+                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">{getFirstCardWording(propertyResult.value_level).label}</div>
                     <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
                       {propertyResult.exact_value != null && propertyResult.exact_value > 0
                         ? formatCurrency(propertyResult.exact_value, currencySymbol)
                         : propertyResult.exact_value_message ?? "No exact property-level value found"}
                     </div>
+                    <div className="mt-0.5 text-[10px] text-zinc-500">{getFirstCardWording(propertyResult.value_level).supportText}</div>
                     {propertyResult.value_level && propertyResult.value_level !== "no_match" && (
-                      <div className="mt-0.5 text-[10px] text-zinc-500">Level: {propertyResult.value_level}</div>
+                      <div className="mt-0.5 text-[10px] text-zinc-500/80">Level: {propertyResult.value_level}</div>
                     )}
                     {propertyResult.value_level === "no_match" && (
-                      <div className="mt-0.5 text-[10px] text-zinc-500">Map location found; no UK property record</div>
+                      <div className="mt-0.5 text-[10px] text-zinc-500">Map location found; no property record</div>
                     )}
                   </div>
                   <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
@@ -665,7 +696,7 @@ export function PropertyValueCard({
                       propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
                       propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
                       propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
-                      propertyResult.livability_rating === "ALMOST GOOD" ? "text-amber-500/90" :
+                      propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
                       "text-zinc-400"
                     }`}>
                       {propertyResult.livability_rating}

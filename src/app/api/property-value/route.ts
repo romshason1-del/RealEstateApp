@@ -96,7 +96,7 @@ function buildUKMinimalResponse(): Record<string, unknown> {
       last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
       street_average: null,
       street_average_message: "No street-level average found" as const,
-      livability_rating: "BAD" as const,
+      livability_rating: "POOR" as const,
     },
   };
 }
@@ -326,7 +326,7 @@ export async function GET(request: NextRequest) {
         } catch {
           // HPI failure must not break the property card
         }
-        let ukLivability: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
+        let ukLivability: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
         try {
           const ukStats = await withTimeout(
             fetchUKNeighborhoodStats(postcode.trim() || "", ukLandRegistry.average_area_price ?? undefined),
@@ -567,7 +567,7 @@ export async function GET(request: NextRequest) {
       const popGrowth = nsForLivability?.population_growth_percent ?? 0;
       const incGrowth = nsForLivability?.income_growth_percent ?? 0;
       const pctBachelors = nsForLivability?.pct_bachelors_plus ?? 0;
-      let livabilityRating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
+      let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
       if (income > 0 || homeVal > 0) {
         const score = (income >= 100000 ? 4 : income >= 75000 ? 3 : income >= 50000 ? 2 : income >= 35000 ? 1 : 0) +
           (incGrowth > 2 ? 0.5 : incGrowth > 0 ? 0.25 : 0) +
@@ -576,8 +576,8 @@ export async function GET(request: NextRequest) {
         if (score >= 4) livabilityRating = "EXCELLENT";
         else if (score >= 3) livabilityRating = "VERY GOOD";
         else if (score >= 2) livabilityRating = "GOOD";
-        else if (score >= 1) livabilityRating = "ALMOST GOOD";
-        else livabilityRating = "BAD";
+        else if (score >= 1) livabilityRating = "FAIR";
+        else livabilityRating = "POOR";
       }
 
       response = {
@@ -625,7 +625,7 @@ export async function GET(request: NextRequest) {
           last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
           street_average: null,
           street_average_message: "No street-level average found" as const,
-          livability_rating: "BAD" as const,
+          livability_rating: "POOR" as const,
         },
       };
     }
@@ -844,7 +844,7 @@ export async function GET(request: NextRequest) {
       const streetAverage = streetAvg != null && streetAvg > 0 ? streetAvg : null;
       const streetAverageMessage = streetAverage == null ? "No street-level average found" as const : null;
 
-      let livabilityRating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "BAD";
+      let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
       try {
         const ukStats = await withTimeout(
           fetchUKNeighborhoodStats(postcode.trim() || "", areaPrice ?? undefined),

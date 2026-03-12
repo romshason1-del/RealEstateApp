@@ -47,7 +47,7 @@ export type PropertyValueInsightsResponse = {
     last_transaction: { amount: number; date: string | null; message?: string };
     street_average: number | null;
     street_average_message: string | null;
-    livability_rating: "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT";
+    livability_rating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT";
   };
   last_sale?: { price: number; date: string };
   sales_history?: Array<{ date: string; price: number }>;

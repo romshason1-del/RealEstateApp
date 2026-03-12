@@ -890,6 +890,30 @@ export const AddressExplorer = () => {
     handleUseCurrentLocation("recenter");
   }, [handleUseCurrentLocation]);
 
+  const handleMapClick = React.useCallback(
+    async (event: { latLng?: google.maps.LatLng }) => {
+      if (!event.latLng) return;
+      const position = { lat: event.latLng.lat(), lng: event.latLng.lng() };
+      const coordsFallback = `${position.lat.toFixed(5)}, ${position.lng.toFixed(5)}`;
+      setSearchPredictions([]);
+      setIsSearchDropdownOpen(false);
+      if (infoWindowRef.current) infoWindowRef.current.close();
+      setSelectedRestaurant(null);
+      setDismissedBuilding(null);
+      let displayAddress = coordsFallback;
+      try {
+        const { results, status } = await geocodeRequest({ location: position });
+        if (status === "OK" && results?.[0]?.formatted_address) {
+          displayAddress = results[0].formatted_address;
+        }
+      } catch {
+        // Keep coordinates fallback
+      }
+      setSelectedBuilding(getPropertyInsight(position, displayAddress));
+    },
+    [geocodeRequest],
+  );
+
   React.useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -1953,24 +1977,8 @@ export const AddressExplorer = () => {
               }}
               onIdle={handleMapIdle}
               onClick={(event) => {
-                if (!event.latLng) {
-                  return;
-                }
-
-                setSearchPredictions([]);
-                setIsSearchDropdownOpen(false);
-                if (infoWindowRef.current) infoWindowRef.current.close();
-                setSelectedRestaurant(null);
-                setDismissedBuilding(null);
-                setSelectedBuilding(
-                  getPropertyInsight(
-                    {
-                      lat: event.latLng.lat(),
-                      lng: event.latLng.lng(),
-                    },
-                    `${event.latLng.lat().toFixed(5)}, ${event.latLng.lng().toFixed(5)}`,
-                  ),
-                );
+                const latLng = event.latLng ?? undefined;
+                void handleMapClick({ latLng });
               }}
               options={{
                 mapTypeId: "roadmap",
@@ -2031,8 +2039,7 @@ export const AddressExplorer = () => {
             </>
           )}
 
-          <div className="pointer-events-none absolute inset-y-4 right-3 z-30 flex flex-col items-end justify-between">
-            <div />
+          <div className="pointer-events-none absolute right-3 top-4 z-30 flex flex-col items-end">
             <button
               type="button"
               onClick={handleRecenterToLocation}
