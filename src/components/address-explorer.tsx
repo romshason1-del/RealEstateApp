@@ -978,7 +978,7 @@ export const AddressExplorer = () => {
         const location = results[0].geometry.location;
         const nextCenter = { lat: location.lat(), lng: location.lng() };
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
-        const displayAddress = propertyValueAddressQuery.trim() || selectedFormatted;
+        const displayAddress = selectedFormatted;
         setIsPropertyValueAddressInputOpen(false);
         setPropertyValueAddressQuery("");
         setPropertyValuePredictions([]);
@@ -1025,7 +1025,7 @@ export const AddressExplorer = () => {
         const nextCenter = { lat: location.lat(), lng: location.lng() };
         const selectedFormatted =
           results[0].formatted_address ?? prediction.description;
-        const displayAddress = query.trim() || selectedFormatted;
+        const displayAddress = selectedFormatted;
         setQuery(displayAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
@@ -1503,7 +1503,7 @@ export const AddressExplorer = () => {
 
         const location = results[0].geometry.location;
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
-        const displayAddress = assetAddressQuery.trim() || selectedFormatted;
+        const displayAddress = selectedFormatted;
         setAssetSelection({
           address: displayAddress,
           position: { lat: location.lat(), lng: location.lng() },
