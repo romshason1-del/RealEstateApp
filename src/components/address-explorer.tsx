@@ -1851,7 +1851,7 @@ export const AddressExplorer = () => {
   const renderExplore = () => (
     <div className="relative min-h-0 flex-1 flex flex-col gap-0 overflow-hidden">
       <div className="relative flex h-full min-h-0 flex-col gap-0 overflow-hidden bg-[#000000]">
-        <div className="shrink-0 p-3">
+        <div className={`shrink-0 p-3 ${searchPredictions.length ? "relative z-50" : ""}`}>
           <div className="flex items-center gap-2">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-amber-400" />
