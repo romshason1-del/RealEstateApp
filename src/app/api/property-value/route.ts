@@ -69,8 +69,8 @@ function validateInput(
 }
 
 const ROUTE_TIMEOUT_MS = 6000;
-const ROUTE_TIMEOUT_MS_UK = 16000;
-const LAND_REGISTRY_TIMEOUT_MS = 15000;
+const ROUTE_TIMEOUT_MS_UK = 20000;
+const LAND_REGISTRY_TIMEOUT_MS = 18000;
 const PROVIDER_TIMEOUT_MS = 2500;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -97,6 +97,14 @@ function buildUKMinimalResponse(): Record<string, unknown> {
       street_average: null,
       street_average_message: "No street-level average found" as const,
       livability_rating: "BAD" as const,
+    },
+    debug: {
+      match_level_attempted: "area",
+      flat_match: false,
+      building_match: false,
+      street_match: false,
+      valuation_method: "timeout",
+      fallback_level: "no_match",
     },
   };
 }
@@ -175,6 +183,7 @@ export async function GET(request: NextRequest) {
   const isUK = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB";
   const raw = (isUK && rawInputAddress.trim()) ? `|raw:${rawInputAddress.trim()}` : "";
   const sel = (isUK && selectedFormattedAddress.trim()) ? `|sel:${selectedFormattedAddress.trim()}` : "";
+  // UK: cache key includes raw+selected so same address always yields same cached response (including level)
   const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode) + raw + sel;
   const isUS = (countryCode ?? "").toUpperCase() === "US";
   const usMockMode = isUS && isUSMockEnabled();
@@ -187,6 +196,7 @@ export async function GET(request: NextRequest) {
 
   const runHandler = async (): Promise<Response> => {
   try {
+    // Matching runs in provider first; valuation (HPI, EPC) runs after in this route
     let result: Awaited<ReturnType<typeof getPropertyValueInsights>>;
     try {
       result = await withTimeout(
@@ -339,6 +349,7 @@ export async function GET(request: NextRequest) {
         }
         const hasTrustedAreaData = (ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) || noMatchExactValue != null;
         const ukNoPropertyRecord = !hasTrustedAreaData;
+        const noMatchLevel = ukNoPropertyRecord ? "no_match" : "area-level";
         const augmented = {
           ...noMatchResult,
           address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
@@ -348,11 +359,20 @@ export async function GET(request: NextRequest) {
           property_result: {
             exact_value: noMatchExactValue,
             exact_value_message: ukNoPropertyRecord ? "No exact UK property record found for this address" : (noMatchExactValue == null ? "No HPI or Land Registry data" : null),
-            value_level: (ukNoPropertyRecord ? "no_match" : "area-level") as "no_match" | "area-level",
+            value_level: noMatchLevel as "no_match" | "area-level",
             last_transaction: { amount: 0, date: null, message: "No recorded transaction found" as const },
             street_average: null,
             street_average_message: "No street-level average found" as const,
             livability_rating: ukLivability,
+          },
+          debug: {
+            ...(noMatchResult.debug ?? {}),
+            match_level_attempted: "area",
+            flat_match: false,
+            building_match: false,
+            street_match: false,
+            valuation_method: "area",
+            fallback_level: noMatchLevel,
           },
         };
         CACHE.set(cacheKey, { data: augmented, ts: Date.now() });
@@ -752,13 +772,20 @@ export async function GET(request: NextRequest) {
 
       const valuationMethod =
         exactValueFromEPC ? "epc" : latestTx && latestTx.price > 0 ? "exact_transaction" : streetAvg != null ? "street" : "area";
-      const valueLevel = (hasExactFlatMatch && latestTx && latestTx.price > 0
+
+      // Deterministic fallback order: 1 property → 2 building → 3 street → 4 area. Never skip levels.
+      const flatMatch = hasExactFlatMatch && latestTx != null && latestTx.price > 0;
+      const buildingMatch = hasBuildingMatch;
+      const streetMatch = streetAvg != null && streetAvg > 0;
+      const valueLevel = (flatMatch
         ? "property-level"
-        : hasBuildingMatch
+        : buildingMatch
           ? "building-level"
-          : streetAvg != null
+          : streetMatch
             ? "street-level"
             : "area-level") as "property-level" | "building-level" | "street-level" | "area-level";
+
+      const matchLevelAttempted = flatMatch ? "property" : buildingMatch ? "building" : streetMatch ? "street" : "area";
 
       const requestId = crypto.randomUUID();
       if (process.env.NODE_ENV === "development") {
@@ -768,6 +795,11 @@ export async function GET(request: NextRequest) {
           selectedFormattedAddress: selectedFormattedAddress.trim() || "(empty)",
           valuation_method: valuationMethod,
           value_level: valueLevel,
+          match_level_attempted: matchLevelAttempted,
+          flat_match: flatMatch,
+          building_match: buildingMatch,
+          street_match: streetMatch,
+          fallback_level: valueLevel,
           has_exact_flat_match: hasExactFlatMatch,
           has_building_match: hasBuildingMatch,
           street_avg: streetAvg ?? null,
@@ -797,6 +829,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      const existingDebug = (response.debug ?? {}) as Record<string, unknown>;
       response = {
         ...response,
         property_result: {
@@ -807,6 +840,15 @@ export async function GET(request: NextRequest) {
           street_average: streetAverage,
           street_average_message: streetAverageMessage,
           livability_rating: livabilityRating,
+        },
+        debug: {
+          ...existingDebug,
+          match_level_attempted: matchLevelAttempted,
+          flat_match: flatMatch,
+          building_match: buildingMatch,
+          street_match: streetMatch,
+          valuation_method: valuationMethod,
+          fallback_level: valueLevel,
         },
       };
     }

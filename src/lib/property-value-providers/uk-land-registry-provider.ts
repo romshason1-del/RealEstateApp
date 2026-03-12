@@ -618,7 +618,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           Accept: "application/sparql-results+json",
         },
         body: new URLSearchParams({ query }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(18000),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -670,7 +670,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             Accept: "application/sparql-results+json",
           },
           body: new URLSearchParams({ query }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(18000),
         });
         if (resFb.ok) {
           const jsonFb = await resFb.json();
@@ -751,7 +751,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             Accept: "application/sparql-results+json",
           },
           body: new URLSearchParams({ query }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(18000),
         });
         if (resFb.ok) {
           const jsonFb = await resFb.json();
@@ -909,6 +909,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const latestFromAreaIsOtherFlat = latestFromArea && (latestFromArea.saon ?? "").trim().length > 0;
     const avoidWrongFlat = flatRequested && !hasBuildingMatch && latestFromAreaIsOtherFlat;
 
+    const providerFlatMatch = Boolean(houseNumber.trim() && buildingTxs.length > 0);
+    const providerStreetMatch = streetAveragePrice != null && streetAveragePrice > 0;
+    const providerMatchLevelAttempted = providerFlatMatch ? "property" : hasBuildingMatch ? "building" : providerStreetMatch ? "street" : "area";
+
     const ukDebug: PropertyValueInsightsDebug = {
       records_fetched: postcodeQueryRawResultCount,
       records_returned: postcodeResultsCount,
@@ -929,6 +933,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       address_match_mode: addressMatchMode,
       fallback_level_used: fallbackLevelUsed,
       postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
+      match_level_attempted: providerMatchLevelAttempted,
+      flat_match: providerFlatMatch,
+      building_match: hasBuildingMatch,
+      street_match: providerStreetMatch,
     };
 
     const ukData = {
