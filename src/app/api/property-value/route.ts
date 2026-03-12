@@ -172,7 +172,10 @@ export async function GET(request: NextRequest) {
   const ukPostcode = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB"
     ? (postcode.trim() || zip.trim())
     : undefined;
-  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode);
+  const isUK = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB";
+  const raw = (isUK && rawInputAddress.trim()) ? `|raw:${rawInputAddress.trim()}` : "";
+  const sel = (isUK && selectedFormattedAddress.trim()) ? `|sel:${selectedFormattedAddress.trim()}` : "";
+  const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode) + raw + sel;
   const isUS = (countryCode ?? "").toUpperCase() === "US";
   const usMockMode = isUS && isUSMockEnabled();
 
@@ -181,8 +184,6 @@ export async function GET(request: NextRequest) {
     const cachedResponse = { ...cached.data, data_source: "cache" as const };
     return NextResponse.json(cachedResponse);
   }
-
-  const isUK = (countryCode ?? "").toUpperCase() === "UK" || (countryCode ?? "").toUpperCase() === "GB";
 
   const runHandler = async (): Promise<Response> => {
   try {
@@ -749,6 +750,31 @@ export async function GET(request: NextRequest) {
       if (exactValue == null && streetAvg != null && streetAvg > 0) exactValue = streetAvg;
       if (exactValue == null && areaPrice != null && areaPrice > 0) exactValue = areaPrice;
 
+      const valuationMethod =
+        exactValueFromEPC ? "epc" : latestTx && latestTx.price > 0 ? "exact_transaction" : streetAvg != null ? "street" : "area";
+      const valueLevel = (hasExactFlatMatch && latestTx && latestTx.price > 0
+        ? "property-level"
+        : hasBuildingMatch
+          ? "building-level"
+          : streetAvg != null
+            ? "street-level"
+            : "area-level") as "property-level" | "building-level" | "street-level" | "area-level";
+
+      const requestId = crypto.randomUUID();
+      if (process.env.NODE_ENV === "development") {
+        console.debug("[property-value] UK request", {
+          request_id: requestId,
+          rawInputAddress: rawInputAddress.trim() || "(empty)",
+          selectedFormattedAddress: selectedFormattedAddress.trim() || "(empty)",
+          valuation_method: valuationMethod,
+          value_level: valueLevel,
+          has_exact_flat_match: hasExactFlatMatch,
+          has_building_match: hasBuildingMatch,
+          street_avg: streetAvg ?? null,
+          latest_transaction: latestTx ? { price: latestTx.price, date: latestTx.date } : null,
+        });
+      }
+
       const lastTransaction =
         latestTx && latestTx.price > 0
           ? { amount: latestTx.price, date: latestTx.date ?? null, message: undefined as string | undefined }
@@ -776,13 +802,7 @@ export async function GET(request: NextRequest) {
         property_result: {
           exact_value: exactValue,
           exact_value_message: exactValue == null && areaPrice != null ? "No HPI-adjusted value; area average only" : null,
-          value_level: (hasExactFlatMatch && latestTx && latestTx.price > 0
-            ? "property-level"
-            : hasBuildingMatch
-              ? "building-level"
-              : streetAvg != null
-                ? "street-level"
-                : "area-level") as "property-level" | "building-level" | "street-level" | "area-level",
+          value_level: valueLevel,
           last_transaction: lastTransaction,
           street_average: streetAverage,
           street_average_message: streetAverageMessage,
