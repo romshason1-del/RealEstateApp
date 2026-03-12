@@ -422,8 +422,13 @@ function paonMatchesHouseNumber(paon: string, saon: string, houseNumber: string)
   return false;
 }
 
-/** Check if street strings match (partial, normalized). Same-street requires all words to match. */
-function streetMatches(reqStreet: string, addrStreet: string, exact: boolean): boolean {
+/**
+ * Check if street strings match (partial, normalized).
+ * - exact=true: for building exact match (requires min 2 words)
+ * - exact=false, sameStreetOnly=false: for building fuzzy match (permissive - Land Registry may abbreviate)
+ * - exact=false, sameStreetOnly=true: for street average filter (strict - all words must match)
+ */
+function streetMatches(reqStreet: string, addrStreet: string, exact: boolean, sameStreetOnly = false): boolean {
   const req = normalizeStreet(reqStreet);
   const addr = normalizeStreet(addrStreet);
   if (!req) return true;
@@ -435,7 +440,10 @@ function streetMatches(reqStreet: string, addrStreet: string, exact: boolean): b
   if (exact) {
     return matchCount >= Math.min(reqWords.length, 2) && addrWords.length >= 1;
   }
-  return matchCount >= reqWords.length;
+  if (sameStreetOnly) {
+    return matchCount >= reqWords.length;
+  }
+  return matchCount >= 1 || addrWords.some((w) => req.includes(w));
 }
 
 /** Exact building match: strict paon + street + town */
@@ -801,7 +809,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         }
       }
       if (streetTxItems.length < 3 && postcode5yResidential.length >= 2) {
-        const sameStreetItems = postcode5yResidential.filter((t) => streetMatches(street, t.addrStreet, false));
+        const sameStreetItems = postcode5yResidential.filter((t) => streetMatches(street, t.addrStreet, false, true));
         if (DEBUG_KENSINGTON) {
           console.debug("[street-avg DEBUG] 3. Postcode filtered by street: postcode5yResidential=", postcode5yResidential.length, "sameStreetItems=", sameStreetItems.length);
           if (postcode5yResidential.length > 0 && sameStreetItems.length < postcode5yResidential.length) {
