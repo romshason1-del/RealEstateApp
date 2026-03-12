@@ -124,6 +124,17 @@ export function parseUKAddressFromFullString(
     streetPart = parts[0] ?? "";
   }
 
+  const flatPrefixMatch = streetPart.match(
+    /^(flat\s+\d+[a-z]?|apartment\s+\d+[a-z]?|apt\.?\s*\d+[a-z]?|unit\s+\d+[a-z]?|suite\s+\d+[a-z]?|ste\.?\s*\d+[a-z]?|#\s*\d+[a-z]?)/i,
+  );
+  if (flatPrefixMatch && parts.length >= 2) {
+    const houseNumber = flatPrefixMatch[1].trim();
+    const restOfFirst = streetPart.slice(flatPrefixMatch[0].length).trim();
+    const restParts = parts.slice(1, -1).join(", ");
+    const street = [restOfFirst, restParts].filter(Boolean).join(", ").trim();
+    return { houseNumber, street, city, postcode };
+  }
+
   const hnMatch = streetPart.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
   const houseNumber = hnMatch ? hnMatch[1] : "";
   const street = hnMatch ? hnMatch[2].trim() : streetPart;
