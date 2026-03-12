@@ -188,7 +188,16 @@ export async function GET(request: NextRequest) {
     } catch (e) {
       if (isUK && e instanceof Error && e.message.startsWith("timeout:")) {
         if (process.env.NODE_ENV === "development") console.debug("[property-value] Land Registry timed out, using HPI fallback");
-        result = { message: "no transaction found" };
+        result = {
+          message: "no transaction found",
+          debug: {
+            records_fetched: 0,
+            records_returned: 0,
+            records_after_filter: 0,
+            exact_matches_count: 0,
+            failure_reason: "Land Registry timeout",
+          },
+        };
       } else {
         throw e;
       }

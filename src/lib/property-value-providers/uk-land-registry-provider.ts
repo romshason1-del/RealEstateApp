@@ -503,10 +503,19 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
 
     const hasStreetAndCity = !!(street && city);
     const hasGeocodeableAddress = !!(fullAddress || (street && city) || city);
+    const ukDebugBase = (overrides: Partial<Record<string, unknown>> = {}) => ({
+      records_fetched: 0,
+      records_returned: 0,
+      records_after_filter: 0,
+      exact_matches_count: 0,
+      ...overrides,
+    });
+
     if (!postcode && !hasStreetAndCity && !hasGeocodeableAddress) {
       return {
         message: "UK Land Registry requires a postcode or street and town to look up transactions.",
         error: "INVALID_INPUT",
+        debug: ukDebugBase({ failure_reason: "INVALID_INPUT" }),
       } as PropertyValueInsightsError;
     }
 
@@ -534,6 +543,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: "UK Land Registry requires a postcode or street and town to look up transactions.",
         error: "INVALID_INPUT",
+        debug: ukDebugBase({ failure_reason: "INVALID_INPUT" }),
       } as PropertyValueInsightsError;
     }
 
@@ -553,7 +563,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: `Failed to fetch UK Land Registry data: ${msg}`,
         error: "DATA_SOURCE_UNAVAILABLE",
-        debug: { request_error: msg, normalized_postcode: normalizedPostcode },
+        debug: ukDebugBase({ failure_reason: "request_error", request_error: msg, normalized_postcode: normalizedPostcode }),
       } as PropertyValueInsightsError;
     }
 
@@ -561,7 +571,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: `UK Land Registry returned ${res.status}`,
         error: "DATA_SOURCE_UNAVAILABLE",
-        debug: { http_status: res.status, normalized_postcode: normalizedPostcode },
+        debug: ukDebugBase({ failure_reason: "http_error", http_status: res.status, normalized_postcode: normalizedPostcode }),
       } as PropertyValueInsightsError;
     }
 
@@ -572,6 +582,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: "Invalid response from UK Land Registry",
         error: "DATA_SOURCE_UNAVAILABLE",
+        debug: ukDebugBase({ failure_reason: "json_parse_error" }),
       } as PropertyValueInsightsError;
     }
 
@@ -694,12 +705,16 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: "no transaction found",
         debug: {
+          records_fetched: postcodeQueryRawResultCount,
+          records_returned: 0,
+          records_after_filter: 0,
+          exact_matches_count: 0,
+          failure_reason: "no_raw_results",
           postcode,
           normalized_postcode: normalizedPostcode,
           postcode_query_executed: queryMode,
           postcode_query_url: SPARQL_ENDPOINT,
           postcode_query_raw_result_count: postcodeQueryRawResultCount,
-          records_fetched: 0,
           postcode_results_count: 0,
         },
       } as PropertyValueInsightsNoMatch;
@@ -714,12 +729,16 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       return {
         message: "no transaction found",
         debug: {
+          records_fetched: bindings.length,
+          records_returned: 0,
+          records_after_filter: 0,
+          exact_matches_count: 0,
+          failure_reason: "all_filtered_out",
           postcode,
           normalized_postcode: normalizedPostcode,
           postcode_query_executed: queryMode,
           postcode_query_url: SPARQL_ENDPOINT,
           postcode_query_raw_result_count: bindings.length,
-          records_fetched: bindings.length,
           postcode_results_count: 0,
         },
       } as PropertyValueInsightsNoMatch;
@@ -876,6 +895,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           : "low";
 
     const ukDebug: PropertyValueInsightsDebug = {
+      records_fetched: postcodeQueryRawResultCount,
+      records_returned: postcodeResultsCount,
+      records_after_filter: postcodeResultsCount,
+      exact_matches_count: exactMatches.length,
       normalized_postcode: normalizedPostcode,
       postcode_query_executed: queryMode,
       postcode_query_url: SPARQL_ENDPOINT,
