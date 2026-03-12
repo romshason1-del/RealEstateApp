@@ -412,8 +412,18 @@ function paonMatchesHouseNumber(paon: string, saon: string, houseNumber: string)
   const hn = normalizeForMatch(houseNumber);
   const paonNorm = normalizeForMatch(paon);
   const saonNorm = normalizeForMatch(saon);
-  if (!hn) return true;
+  if (!hn) {
+    if (saonNorm) return false;
+    return true;
+  }
   if (!paonNorm && !saonNorm) return true;
+  if (saonNorm) {
+    const saonNum = extractNumberPart(saon);
+    const hnNum = extractNumberPart(houseNumber);
+    if (saonNum && hnNum && saonNum !== hnNum) return false;
+    const saonMatches = saonNorm === hn || saonNorm.endsWith(hn) || hn.endsWith(saonNorm) || (saonNum && hnNum && saonNum === hnNum);
+    if (!saonMatches) return false;
+  }
   if (paonNorm === hn || paonNorm.startsWith(hn) || hn.startsWith(paonNorm)) return true;
   if (paonNorm.includes(hn) || hn.includes(paonNorm)) return true;
   const paonNum = extractNumberPart(paon);
