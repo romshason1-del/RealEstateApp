@@ -26,7 +26,7 @@ UK_SMOKE_BASE=http://localhost:3000 npx tsx scripts/uk-accuracy-smoke-test.ts
 
 | Category | Examples |
 |----------|----------|
-| Building-level (verified) | Flat 3 Bedford Gardens (£7M), 1 High Street SW19 (£850K), Unit 3 Bedford Gardens |
+| Building-level (verified) | Flat 3 Bedford Gardens (£7M), 55 Compayne Gardens (£1.9M), Unit 3 Bedford Gardens |
 | Parsing edge cases | Flat 10 Palace Gate, Unit 3 Bedford Gardens (Flat/Unit prefix) |
 | Area-level / no-data | Park Road W8 5NP, Palace Gate W8 5NP (lightweight residential; avoid landmarks that cause 503s) |
 
