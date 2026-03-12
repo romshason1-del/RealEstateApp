@@ -771,17 +771,17 @@ export async function GET(request: NextRequest) {
       const valuationMethod =
         exactValueFromEPC ? "epc" : latestTx && latestTx.price > 0 ? "exact_transaction" : streetAvg != null ? "street" : "area";
 
-      // Deterministic fallback order: 1 property → 2 building → 3 street → 4 area. Never skip levels.
-      const flatMatch = hasExactFlatMatch && latestTx != null && latestTx.price > 0;
-      const buildingMatch = hasBuildingMatch;
-      const streetMatch = streetAvg != null && streetAvg > 0;
-      const valueLevel = (flatMatch
+      // Property-level requires exact flat (SAON) match; building tx alone must never be labeled property-level.
+      const valueLevel = (hasExactFlatMatch && latestTx != null && latestTx.price > 0
         ? "property-level"
-        : buildingMatch
+        : hasBuildingMatch
           ? "building-level"
-          : streetMatch
+          : streetAvg != null && streetAvg > 0
             ? "street-level"
             : "area-level") as "property-level" | "building-level" | "street-level" | "area-level";
+      const flatMatch = valueLevel === "property-level";
+      const buildingMatch = hasBuildingMatch;
+      const streetMatch = streetAvg != null && streetAvg > 0;
 
       const matchLevelAttempted = flatMatch ? "property" : buildingMatch ? "building" : streetMatch ? "street" : "area";
 
