@@ -860,7 +860,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const latestFromAreaIsOtherFlat = latestFromArea && (latestFromArea.saon ?? "").trim().length > 0;
     const avoidWrongFlat = flatRequested && !hasBuildingMatch && latestFromAreaIsOtherFlat;
 
-    const providerFlatMatch = Boolean(houseNumber.trim() && buildingTxs.length > 0);
+    const providerFlatMatch = Boolean(houseNumber.trim() && (exactMatches.length > 0 || fuzzyMatches.length > 0));
     const providerStreetMatch = streetAveragePrice != null && streetAveragePrice > 0;
     const providerMatchLevelAttempted = providerFlatMatch ? "property" : hasBuildingMatch ? "building" : providerStreetMatch ? "street" : "area";
 
@@ -991,7 +991,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             }
           : null,
       has_building_match: hasBuildingMatch,
-      has_exact_flat_match: Boolean(houseNumber.trim() && buildingTxs.length > 0),
+      has_exact_flat_match: Boolean(houseNumber.trim() && (exactMatches.length > 0 || fuzzyMatches.length > 0)),
       average_area_price: averageAreaPrice,
       area_transaction_count: postcode5y.length,
       area_fallback_level: areaFallbackLevel,
