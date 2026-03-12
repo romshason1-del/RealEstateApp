@@ -370,6 +370,15 @@ function hasSpecificHouseNumber(
   return /\b\d+[A-Za-z]?\b/.test(address);
 }
 
+/** Extract flat/unit/sub-building prefix from start of address (e.g. "Flat 414", "Unit 5", "#10") */
+function extractFlatPrefix(input: string): string | null {
+  const trimmed = (input ?? "").trim();
+  const m = trimmed.match(
+    /^(flat\s+\d+[a-z]?|apartment\s+\d+[a-z]?|apt\.?\s*\d+[a-z]?|unit\s+\d+[a-z]?|suite\s+\d+[a-z]?|ste\.?\s*\d+[a-z]?|#\s*\d+[a-z]?)/i,
+  );
+  return m ? m[1].trim() : null;
+}
+
 function getPropertyInsight(
   position: LatLng,
   address: string,
@@ -973,7 +982,11 @@ export const AddressExplorer = () => {
         }
         const location = results[0].geometry.location;
         const nextCenter = { lat: location.lat(), lng: location.lng() };
-        const formattedAddress = results[0].formatted_address ?? prediction.description;
+        let formattedAddress = results[0].formatted_address ?? prediction.description;
+        const flatPrefix = extractFlatPrefix(propertyValueAddressQuery);
+        if (flatPrefix) {
+          formattedAddress = `${flatPrefix}, ${formattedAddress}`;
+        }
         setIsPropertyValueAddressInputOpen(false);
         setPropertyValueAddressQuery("");
         setPropertyValuePredictions([]);
@@ -991,7 +1004,7 @@ export const AddressExplorer = () => {
         setError("Google Maps geocoding is unavailable right now.");
       }
     },
-    [geocodeRequest, hydrateSearchContext, map, searchNearbyRestaurants],
+    [geocodeRequest, hydrateSearchContext, map, propertyValueAddressQuery, searchNearbyRestaurants],
   );
 
   const handleSelectSearchPrediction = React.useCallback(
@@ -1015,8 +1028,12 @@ export const AddressExplorer = () => {
 
         const location = results[0].geometry.location;
         const nextCenter = { lat: location.lat(), lng: location.lng() };
-        const formattedAddress =
+        let formattedAddress =
           results[0].formatted_address ?? prediction.description;
+        const flatPrefix = extractFlatPrefix(query);
+        if (flatPrefix) {
+          formattedAddress = `${flatPrefix}, ${formattedAddress}`;
+        }
         setQuery(formattedAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
@@ -1037,7 +1054,7 @@ export const AddressExplorer = () => {
         setError("Google Maps geocoding is unavailable right now.");
       }
     },
-    [geocodeRequest, hydrateSearchContext, map, searchNearbyRestaurants],
+    [geocodeRequest, hydrateSearchContext, map, query, searchNearbyRestaurants],
   );
 
   const handleMapIdle = React.useCallback(() => {
@@ -1494,17 +1511,22 @@ export const AddressExplorer = () => {
         }
 
         const location = results[0].geometry.location;
+        let address = results[0].formatted_address ?? prediction.description;
+        const flatPrefix = extractFlatPrefix(assetAddressQuery);
+        if (flatPrefix) {
+          address = `${flatPrefix}, ${address}`;
+        }
         setAssetSelection({
-          address: prediction.description,
+          address,
           position: { lat: location.lat(), lng: location.lng() },
         });
-        setAssetAddressQuery(prediction.description);
+        setAssetAddressQuery(address);
         setAssetPredictions([]);
       } catch {
         setError("Google Maps geocoding is unavailable right now.");
       }
     },
-    [geocodeRequest],
+    [geocodeRequest, assetAddressQuery],
   );
 
   const handleSaveAsset = React.useCallback(() => {
