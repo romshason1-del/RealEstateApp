@@ -978,27 +978,25 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       areaUsedBecause = "no property/building/street match; using postcode/area average";
     }
 
-    const match_trace = {
-      raw_input_address: (input.rawInputAddress ?? "").trim() || "(not provided)",
-      selected_formatted_address: (input.selectedFormattedAddress ?? "").trim() || "(not provided)",
-      parsed_house_number: houseNumber,
-      parsed_street: street,
-      parsed_postcode: postcode,
-      normalized_postcode: normalizedPostcode,
-      land_registry_rows_returned: items.length,
-      rows_with_matching_postcode: rowsWithMatchingPostcode,
-      rows_with_matching_street: rowsWithMatchingStreet,
-      rows_with_matching_paon: rowsWithMatchingPaon,
-      rows_with_matching_saon: rowsWithMatchingSaon,
-      building_num_from_street: buildingNum,
-      fallback_reason: {
-        property_failed_because: propertyFailedBecause,
-        building_failed_because: buildingFailedBecause,
-        street_failed_because: streetFailedBecause,
-        area_used_because: areaUsedBecause,
-      },
-      sample_rows: sampleRows,
-    };
+    if (process.env.NODE_ENV === "development") {
+      const match_trace = {
+        raw_input_address: (input.rawInputAddress ?? "").trim() || "(not provided)",
+        selected_formatted_address: (input.selectedFormattedAddress ?? "").trim() || "(not provided)",
+        parsed_house_number: houseNumber,
+        parsed_street: street,
+        parsed_postcode: postcode,
+        land_registry_rows_returned: items.length,
+        rows_with_matching_postcode: rowsWithMatchingPostcode,
+        rows_with_matching_street: rowsWithMatchingStreet,
+        rows_with_matching_paon: rowsWithMatchingPaon,
+        rows_with_matching_saon: rowsWithMatchingSaon,
+        building_match: hasBuildingMatch,
+        street_match: providerStreetMatch,
+        fallback_reason: { property_failed_because: propertyFailedBecause, building_failed_because: buildingFailedBecause, street_failed_because: streetFailedBecause, area_used_because: areaUsedBecause },
+        sample_rows: sampleRows,
+      };
+      console.log("[UK match trace]", JSON.stringify(match_trace, null, 2));
+    }
 
     const ukDebug: PropertyValueInsightsDebug = {
       records_fetched: postcodeQueryRawResultCount,
@@ -1020,11 +1018,6 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       address_match_mode: addressMatchMode,
       fallback_level_used: fallbackLevelUsed,
       postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
-      match_level_attempted: providerMatchLevelAttempted,
-      flat_match: providerFlatMatch,
-      building_match: hasBuildingMatch,
-      street_match: providerStreetMatch,
-      match_trace,
     };
 
     const ukData = {
