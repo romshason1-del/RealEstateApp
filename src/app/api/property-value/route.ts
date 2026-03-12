@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
       const streetAvg = uk.street_average_price ?? null;
       const valueLevel = (hasExactFlatMatch && latestTx != null && latestTx.price > 0
         ? "property-level"
-        : hasBuildingMatch
+        : hasBuildingMatch || (latestTx != null && latestTx.price > 0)
           ? "building-level"
           : streetAvg != null && streetAvg > 0
             ? "street-level"
@@ -791,9 +791,10 @@ export async function GET(request: NextRequest) {
         exactValueFromEPC ? "epc" : latestTx && latestTx.price > 0 ? "exact_transaction" : streetAvg != null ? "street" : "area";
 
       // Property-level requires exact flat (SAON) match; building tx alone must never be labeled property-level.
+      // Area-level only when no building match, no street avg, no transactions. If latestTx exists, min level is building-level.
       const valueLevel = (hasExactFlatMatch && latestTx != null && latestTx.price > 0
         ? "property-level"
-        : hasBuildingMatch
+        : hasBuildingMatch || (latestTx != null && latestTx.price > 0)
           ? "building-level"
           : streetAvg != null && streetAvg > 0
             ? "street-level"
