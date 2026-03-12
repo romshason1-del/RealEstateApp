@@ -446,37 +446,45 @@ function streetMatches(reqStreet: string, addrStreet: string, exact: boolean, sa
   return matchCount >= 1 || addrWords.some((w) => req.includes(w));
 }
 
-/** Exact building match: strict paon + street + town */
+/** Exact building match: strict paon + street + town (or postcode when available) */
 function matchesBuildingExact(
   paon: string,
   saon: string,
   addrStreet: string,
   addrTown: string,
+  addrPostcode: string,
   houseNumber: string,
   street: string,
-  city: string
+  city: string,
+  normalizedPostcode: string
 ): boolean {
+  const postcodeMatch = normalizedPostcode && addrPostcode &&
+    (addrPostcode === normalizedPostcode.replace(/\s/g, "") || addrPostcode.startsWith(normalizedPostcode.split(/\s/)[0]?.replace(/\s/g, "") ?? ""));
   const townNorm = normalizeForMatch(addrTown);
   const reqCityNorm = normalizeForMatch(city);
-  const townOk = !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
+  const townOk = postcodeMatch || !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
   if (!townOk) return false;
   if (!paonMatchesHouseNumber(paon, saon, houseNumber)) return false;
   return streetMatches(street, addrStreet, true);
 }
 
-/** Fuzzy building match: tolerant paon + street + town */
+/** Fuzzy building match: tolerant paon + street + town (or postcode when available) */
 function matchesBuildingFuzzy(
   paon: string,
   saon: string,
   addrStreet: string,
   addrTown: string,
+  addrPostcode: string,
   houseNumber: string,
   street: string,
-  city: string
+  city: string,
+  normalizedPostcode: string
 ): boolean {
+  const postcodeMatch = normalizedPostcode && addrPostcode &&
+    (addrPostcode === normalizedPostcode.replace(/\s/g, "") || addrPostcode.startsWith(normalizedPostcode.split(/\s/)[0]?.replace(/\s/g, "") ?? ""));
   const townNorm = normalizeForMatch(addrTown);
   const reqCityNorm = normalizeForMatch(city);
-  const townOk = !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
+  const townOk = postcodeMatch || !reqCityNorm || townNorm.includes(reqCityNorm) || reqCityNorm.includes(townNorm);
   if (!townOk) return false;
   if (!paonMatchesHouseNumber(paon, saon, houseNumber)) return false;
   return streetMatches(street, addrStreet, false);
@@ -612,6 +620,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       saon: string;
       addrStreet: string;
       addrTown: string;
+      addrPostcode: string;
     };
 
     function processBindingsToItems(
@@ -631,6 +640,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
         const saon = getBinding(b, "saon");
         const addrStreet = getBinding(b, "street");
         const addrTown = getBinding(b, "town");
+        const addrPostcode = getBinding(b, "postcode");
         if (amount <= 0) continue;
         if (strict && !isValidTransaction(category)) continue;
         if (residentialOnly && !isResidentialPropertyType(propertyType)) continue;
@@ -649,6 +659,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           saon,
           addrStreet: addrStreet.toLowerCase(),
           addrTown: addrTown.toLowerCase(),
+          addrPostcode: addrPostcode.toUpperCase().replace(/\s/g, ""),
         });
       }
       return out;
@@ -720,12 +731,12 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     const cityLower = city.toLowerCase();
 
     const exactMatches = items.filter((t) =>
-      matchesBuildingExact(t.paon, t.saon, t.addrStreet, t.addrTown, houseNumber, street, cityLower)
+      matchesBuildingExact(t.paon, t.saon, t.addrStreet, t.addrTown, t.addrPostcode, houseNumber, street, cityLower, normalizedPostcode)
     );
     const fuzzyMatches = items.filter(
       (t) =>
-        !matchesBuildingExact(t.paon, t.saon, t.addrStreet, t.addrTown, houseNumber, street, cityLower) &&
-        matchesBuildingFuzzy(t.paon, t.saon, t.addrStreet, t.addrTown, houseNumber, street, cityLower)
+        !matchesBuildingExact(t.paon, t.saon, t.addrStreet, t.addrTown, t.addrPostcode, houseNumber, street, cityLower, normalizedPostcode) &&
+        matchesBuildingFuzzy(t.paon, t.saon, t.addrStreet, t.addrTown, t.addrPostcode, houseNumber, street, cityLower, normalizedPostcode)
     );
 
     const buildingTxs = exactMatches.length > 0 ? exactMatches : fuzzyMatches;
@@ -872,6 +883,11 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       postcode_results_count: postcodeResultsCount,
       exact_building_matches_count: exactMatches.length,
       fuzzy_building_matches_count: fuzzyMatches.length,
+      latest_building_transaction_present: hasBuildingMatch,
+      value_level_reason: hasBuildingMatch ? "property-level (exact or fuzzy building match)" : `area-level (no building match: exact=${exactMatches.length} fuzzy=${fuzzyMatches.length})`,
+      parsed_house_number: houseNumber,
+      parsed_street: street,
+      parsed_postcode: postcode,
       address_match_mode: addressMatchMode,
       fallback_level_used: fallbackLevelUsed,
       postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
