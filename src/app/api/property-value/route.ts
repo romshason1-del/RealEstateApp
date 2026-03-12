@@ -645,11 +645,13 @@ export async function GET(request: NextRequest) {
       }
 
       const ukForResult = response.uk_land_registry as {
+        has_building_match?: boolean;
         average_area_price?: number | null;
         street_average_price?: number | null;
         latest_building_transaction?: { price: number; date: string } | null;
         latest_nearby_transaction?: { price: number; date: string } | null;
       };
+      const hasBuildingMatch = ukForResult.has_building_match === true;
       const latestBuildingTx = ukForResult.latest_building_transaction ?? null;
       const areaPrice = ukForResult.average_area_price ?? null;
       const streetAvg = ukForResult.street_average_price ?? null;
@@ -668,6 +670,7 @@ export async function GET(request: NextRequest) {
         } catch {
           exactValue = latestBuildingTx.price;
         }
+        if (exactValue == null && latestBuildingTx.price > 0) exactValue = latestBuildingTx.price;
       }
 
       if (exactValue == null && isEPCConfigured()) {
@@ -735,7 +738,7 @@ export async function GET(request: NextRequest) {
         property_result: {
           exact_value: exactValue,
           exact_value_message: exactValue == null && areaPrice != null ? "No HPI-adjusted value; area average only" : null,
-          value_level: (exactValue != null && (latestBuildingTx || exactValueFromEPC) ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
+          value_level: (hasBuildingMatch || (exactValue != null && (latestBuildingTx || exactValueFromEPC)) ? "property-level" : streetAvg != null ? "street-level" : "area-level") as "property-level" | "street-level" | "area-level",
           last_transaction: lastTransaction,
           street_average: streetAverage,
           street_average_message: streetAverageMessage,
