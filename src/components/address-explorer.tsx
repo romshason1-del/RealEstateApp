@@ -36,6 +36,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { extractFlatPrefix } from "@/lib/address-parse";
 import { getMockPropertyInsight } from "@/lib/mock-data";
 import { createClient } from "@/lib/supabase/client";
 
@@ -96,6 +97,10 @@ type BuildingInsight = {
   requiresHouseNumber: boolean;
   valuationMessage: string | null;
   lastTransactions: string[];
+  /** UK: user's raw typed input (preserves Flat/Unit) - never overwritten by Google */
+  rawInputAddress?: string;
+  /** UK: Google formatted_address from selected suggestion */
+  selectedFormattedAddress?: string;
 };
 
 type GeocodeResult = {
@@ -368,15 +373,6 @@ function hasSpecificHouseNumber(
   }
 
   return /\b\d+[A-Za-z]?\b/.test(address);
-}
-
-/** Extract flat/unit/sub-building prefix from start of address (e.g. "Flat 414", "Unit 5", "#10") */
-function extractFlatPrefix(input: string): string | null {
-  const trimmed = (input ?? "").trim();
-  const m = trimmed.match(
-    /^(flat\s+\d+[a-z]?|apartment\s+\d+[a-z]?|apt\.?\s*\d+[a-z]?|unit\s+\d+[a-z]?|suite\s+\d+[a-z]?|ste\.?\s*\d+[a-z]?|#\s*\d+[a-z]?)/i,
-  );
-  return m ? m[1].trim() : null;
 }
 
 function getPropertyInsight(
@@ -982,21 +978,22 @@ export const AddressExplorer = () => {
         }
         const location = results[0].geometry.location;
         const nextCenter = { lat: location.lat(), lng: location.lng() };
-        let formattedAddress = results[0].formatted_address ?? prediction.description;
+        const selectedFormatted = results[0].formatted_address ?? prediction.description;
         const flatPrefix = extractFlatPrefix(propertyValueAddressQuery);
-        if (flatPrefix) {
-          formattedAddress = `${flatPrefix}, ${formattedAddress}`;
-        }
+        const displayAddress = flatPrefix ? `${flatPrefix}, ${selectedFormatted}` : selectedFormatted;
         setIsPropertyValueAddressInputOpen(false);
         setPropertyValueAddressQuery("");
         setPropertyValuePredictions([]);
-        setSelectedBuilding(
-          getPropertyInsight(nextCenter, formattedAddress, results[0].address_components),
-        );
+        const insight = getPropertyInsight(nextCenter, displayAddress, results[0].address_components);
+        setSelectedBuilding({
+          ...insight,
+          rawInputAddress: propertyValueAddressQuery.trim() || undefined,
+          selectedFormattedAddress: selectedFormatted,
+        });
         setDismissedBuilding(null);
-        setQuery(formattedAddress);
+        setQuery(displayAddress);
         setCenter(nextCenter);
-        hydrateSearchContext(nextCenter, formattedAddress);
+        hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(17);
         searchNearbyRestaurants(nextCenter);
@@ -1028,25 +1025,22 @@ export const AddressExplorer = () => {
 
         const location = results[0].geometry.location;
         const nextCenter = { lat: location.lat(), lng: location.lng() };
-        let formattedAddress =
+        const selectedFormatted =
           results[0].formatted_address ?? prediction.description;
         const flatPrefix = extractFlatPrefix(query);
-        if (flatPrefix) {
-          formattedAddress = `${flatPrefix}, ${formattedAddress}`;
-        }
-        setQuery(formattedAddress);
+        const displayAddress = flatPrefix ? `${flatPrefix}, ${selectedFormatted}` : selectedFormatted;
+        setQuery(displayAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
-        setSelectedBuilding(
-          getPropertyInsight(
-            nextCenter,
-            formattedAddress,
-            results[0].address_components,
-          ),
-        );
+        const insight = getPropertyInsight(nextCenter, displayAddress, results[0].address_components);
+        setSelectedBuilding({
+          ...insight,
+          rawInputAddress: query.trim() || undefined,
+          selectedFormattedAddress: selectedFormatted,
+        });
         setDismissedBuilding(null);
         setError(null);
-        hydrateSearchContext(nextCenter, formattedAddress);
+        hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(16);
         searchNearbyRestaurants(nextCenter);
@@ -1511,16 +1505,14 @@ export const AddressExplorer = () => {
         }
 
         const location = results[0].geometry.location;
-        let address = results[0].formatted_address ?? prediction.description;
+        const selectedFormatted = results[0].formatted_address ?? prediction.description;
         const flatPrefix = extractFlatPrefix(assetAddressQuery);
-        if (flatPrefix) {
-          address = `${flatPrefix}, ${address}`;
-        }
+        const displayAddress = flatPrefix ? `${flatPrefix}, ${selectedFormatted}` : selectedFormatted;
         setAssetSelection({
-          address,
+          address: displayAddress,
           position: { lat: location.lat(), lng: location.lng() },
         });
-        setAssetAddressQuery(address);
+        setAssetAddressQuery(displayAddress);
         setAssetPredictions([]);
       } catch {
         setError("Google Maps geocoding is unavailable right now.");
@@ -2094,6 +2086,8 @@ export const AddressExplorer = () => {
               currencySymbol={selectedBuilding.currencySymbol}
               countryCode={selectedBuilding.countryCode}
               onClose={dismissSelectedBuilding}
+              rawInputAddress={selectedBuilding.rawInputAddress}
+              selectedFormattedAddress={selectedBuilding.selectedFormattedAddress}
               isSaved={isPropertySaved(selectedBuilding.address)}
               onToggleSave={() =>
                 toggleSavedProperty({

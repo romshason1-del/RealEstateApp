@@ -93,6 +93,15 @@ export function parseUSAddressFromFullString(
   return { houseNumber, street, city, state, zip };
 }
 
+/** Extract flat/unit/sub-building prefix from start of address (e.g. "Flat 414", "Unit 5", "#10") */
+export function extractFlatPrefix(input: string): string | null {
+  const trimmed = (input ?? "").trim();
+  const m = trimmed.match(
+    /^(flat\s+\d+[a-z]?|apartment\s+\d+[a-z]?|apt\.?\s*\d+[a-z]?|unit\s+\d+[a-z]?|suite\s+\d+[a-z]?|ste\.?\s*\d+[a-z]?|#\s*\d+[a-z]?)/i,
+  );
+  return m ? m[1].trim() : null;
+}
+
 /**
  * UK address format: "25 Crossharbour Plaza, London E14 9SH" or "10 Downing Street, London SW1A 2AA"
  * Extracts houseNumber, street, city, postcode. UK postcode: e.g. SW1A 2AA, PL6 8RU, M1 4BT.

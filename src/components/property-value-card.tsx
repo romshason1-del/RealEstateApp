@@ -17,6 +17,10 @@ export type PropertyValueCardProps = {
   onClose: () => void;
   isSaved?: boolean;
   onToggleSave?: () => void;
+  /** UK only: raw typed input (preserves Flat/Unit) */
+  rawInputAddress?: string;
+  /** UK only: Google formatted_address from selected suggestion */
+  selectedFormattedAddress?: string;
 };
 
 function formatSaleDate(dateStr: string | null): string {
@@ -327,6 +331,8 @@ export function PropertyValueCard({
   onClose,
   isSaved = false,
   onToggleSave,
+  rawInputAddress,
+  selectedFormattedAddress,
 }: PropertyValueCardProps) {
   const isIsrael = countryCode === "IL";
   const isUS = countryCode === "US";
@@ -340,6 +346,8 @@ export function PropertyValueCard({
     latitude: position?.lat,
     longitude: position?.lng,
     countryCode,
+    rawInputAddress,
+    selectedFormattedAddress,
   });
 
   const [debugMode, setDebugMode] = React.useState(false);

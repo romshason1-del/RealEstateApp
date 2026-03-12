@@ -20,6 +20,10 @@ export type PropertyValueInput = {
   resolvedAddress?: { city: string; street: string; houseNumber?: string; apartmentNumber?: string };
   /** Full address string (e.g. for US RentCast: "123 Main St, City, ST 12345") */
   fullAddress?: string;
+  /** UK only: user's raw typed input before Google autocomplete (preserves Flat/Unit/etc.) */
+  rawInputAddress?: string;
+  /** UK only: Google formatted_address from selected suggestion (building-level) */
+  selectedFormattedAddress?: string;
 };
 
 export type LatestTransaction = {

@@ -846,6 +846,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           ? "medium"
           : "low";
 
+    const flatRequested = Boolean(houseNumber.trim());
+    const latestFromAreaIsOtherFlat = latestFromArea && (latestFromArea.saon ?? "").trim().length > 0;
+    const avoidWrongFlat = flatRequested && !hasBuildingMatch && latestFromAreaIsOtherFlat;
+
     const ukDebug: PropertyValueInsightsDebug = {
       records_fetched: postcodeQueryRawResultCount,
       records_returned: postcodeResultsCount,
@@ -880,7 +884,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           }
         : null,
       latest_nearby_transaction:
-        !hasBuildingMatch && latestFromArea
+        !hasBuildingMatch && latestFromArea && !avoidWrongFlat
           ? {
               price: latestFromArea.amount,
               date: latestFromArea.date || latestFromArea.dateStr,
@@ -896,7 +900,11 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       area_data_source: "land_registry" as const,
     };
 
-    const effectiveLatest = hasBuildingMatch ? latestBuilding : (latestFromArea ?? latestBuilding);
+    const effectiveLatest = hasBuildingMatch
+      ? latestBuilding
+      : avoidWrongFlat
+        ? null
+        : (latestFromArea ?? latestBuilding);
     const success: PropertyValueInsightsSuccess = {
       address: {
         city: city || postcode,

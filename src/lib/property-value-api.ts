@@ -133,6 +133,10 @@ export type FetchPropertyValueOptions = {
   latitude?: number;
   longitude?: number;
   countryCode?: string;
+  /** UK only: raw typed input (preserves Flat/Unit) */
+  rawInputAddress?: string;
+  /** UK only: Google formatted_address from selected suggestion */
+  selectedFormattedAddress?: string;
 };
 
 export async function fetchPropertyValueInsights(
@@ -202,6 +206,8 @@ export async function fetchPropertyValueInsights(
     if (options?.longitude != null && Number.isFinite(options.longitude)) {
       params.set("longitude", String(options.longitude));
     }
+    if (isUK && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
+    if (isUK && options?.selectedFormattedAddress) params.set("selectedFormattedAddress", options.selectedFormattedAddress);
     const res = await fetch(`/api/property-value?${params.toString()}`, {
       signal: AbortSignal.timeout(20000),
     });
