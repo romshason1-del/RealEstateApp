@@ -389,7 +389,10 @@ export async function GET(request: NextRequest) {
           },
           debug: { ...(noMatchResult.debug ?? {}) },
         };
-        CACHE.set(cacheKey, { data: augmented, ts: Date.now() });
+        const isFromProviderTimeout = noMatchResult.debug?.failure_reason === "Land Registry timeout";
+        if (!isFromProviderTimeout) {
+          CACHE.set(cacheKey, { data: augmented, ts: Date.now() });
+        }
         return NextResponse.json(augmented);
       } else {
         return NextResponse.json(result, { status: 404 });
