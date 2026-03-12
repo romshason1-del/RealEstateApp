@@ -69,7 +69,8 @@ function validateInput(
 }
 
 const ROUTE_TIMEOUT_MS = 6000;
-const LAND_REGISTRY_TIMEOUT_MS = 4000;
+const ROUTE_TIMEOUT_MS_UK = 16000;
+const LAND_REGISTRY_TIMEOUT_MS = 15000;
 const PROVIDER_TIMEOUT_MS = 2500;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -777,11 +778,12 @@ export async function GET(request: NextRequest) {
   }
   };
 
+  const routeTimeoutMs = isUK ? ROUTE_TIMEOUT_MS_UK : ROUTE_TIMEOUT_MS;
   const timeoutResponse = new Promise<Response>((resolve) => {
     setTimeout(() => {
-      if (process.env.NODE_ENV === "development") console.debug("[property-value] Route timeout (6s), returning minimal response");
+      if (process.env.NODE_ENV === "development") console.debug("[property-value] Route timeout, returning minimal response");
       resolve(NextResponse.json(isUK ? buildUKMinimalResponse() : { message: "Request timeout", error: "TIMEOUT" }, isUK ? { status: 200 } : { status: 503 }));
-    }, ROUTE_TIMEOUT_MS);
+    }, routeTimeoutMs);
   });
 
   return Promise.race([runHandler(), timeoutResponse]);
