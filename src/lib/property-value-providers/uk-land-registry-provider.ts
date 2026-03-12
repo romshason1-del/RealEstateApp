@@ -556,7 +556,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
           Accept: "application/sparql-results+json",
         },
         body: new URLSearchParams({ query }),
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(15000),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -608,7 +608,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             Accept: "application/sparql-results+json",
           },
           body: new URLSearchParams({ query }),
-          signal: AbortSignal.timeout(4000),
+          signal: AbortSignal.timeout(15000),
         });
         if (resFb.ok) {
           const jsonFb = await resFb.json();
@@ -689,7 +689,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             Accept: "application/sparql-results+json",
           },
           body: new URLSearchParams({ query }),
-          signal: AbortSignal.timeout(4000),
+          signal: AbortSignal.timeout(15000),
         });
         if (resFb.ok) {
           const jsonFb = await resFb.json();
@@ -813,7 +813,7 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
                 Accept: "application/sparql-results+json",
               },
               body: new URLSearchParams({ query: streetQuery }),
-              signal: AbortSignal.timeout(4000),
+              signal: AbortSignal.timeout(15000),
             });
             if (streetRes.ok) {
               const streetJson = (await streetRes.json()) as SparqlResult;
