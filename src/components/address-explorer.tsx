@@ -431,6 +431,15 @@ export const AddressExplorer = () => {
   const infoWindowRef = React.useRef<google.maps.InfoWindow | null>(null);
   const lastGoogleErrorRef = React.useRef<string | null>(null);
   const hasRequestedInitialLocationRef = React.useRef(false);
+  const searchAutocompleteDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchLastRequestedInputRef = React.useRef<string>("");
+  const assetAutocompleteDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const assetLastRequestedInputRef = React.useRef<string>("");
+  const propertyValueAutocompleteDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const propertyValueLastRequestedInputRef = React.useRef<string>("");
+
+  const PLACES_DEBOUNCE_MS = 300;
+  const PLACES_MIN_CHARS = 3;
   const [activeSection, setActiveSection] =
     React.useState<(typeof navItems)[number]["label"]>("Explore");
   const [query, setQuery] = React.useState("");
@@ -1702,31 +1711,53 @@ export const AddressExplorer = () => {
     }
 
     const trimmedQuery = assetAddressQuery.trim();
-    if (trimmedQuery.length < 3) {
+    if (trimmedQuery.length < PLACES_MIN_CHARS) {
       setAssetPredictions([]);
+      assetLastRequestedInputRef.current = "";
       return;
     }
 
-    (async () => {
-      try {
-        const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
-        const { AutocompleteSuggestion } = placesLib;
-        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: trimmedQuery,
-        });
-        setAssetPredictions(
-          (suggestions ?? []).slice(0, 5).map((s) => {
-            const p = s.placePrediction;
-            return {
-              description: p?.text?.text ?? "",
-              placeId: p?.placeId ?? "",
-            };
-          }).filter((x) => x.placeId),
-        );
-      } catch {
-        setAssetPredictions([]);
+    if (trimmedQuery === assetLastRequestedInputRef.current) {
+      return;
+    }
+
+    if (assetAutocompleteDebounceRef.current) {
+      clearTimeout(assetAutocompleteDebounceRef.current);
+      assetAutocompleteDebounceRef.current = null;
+    }
+
+    assetAutocompleteDebounceRef.current = setTimeout(() => {
+      assetAutocompleteDebounceRef.current = null;
+      assetLastRequestedInputRef.current = trimmedQuery;
+
+      (async () => {
+        try {
+          const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
+          const { AutocompleteSuggestion } = placesLib;
+          const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+            input: trimmedQuery,
+          });
+          setAssetPredictions(
+            (suggestions ?? []).slice(0, 5).map((s) => {
+              const p = s.placePrediction;
+              return {
+                description: p?.text?.text ?? "",
+                placeId: p?.placeId ?? "",
+              };
+            }).filter((x) => x.placeId),
+          );
+        } catch {
+          setAssetPredictions([]);
+        }
+      })();
+    }, PLACES_DEBOUNCE_MS);
+
+    return () => {
+      if (assetAutocompleteDebounceRef.current) {
+        clearTimeout(assetAutocompleteDebounceRef.current);
+        assetAutocompleteDebounceRef.current = null;
       }
-    })();
+    };
   }, [assetAddressQuery, isAddAssetOpen, isLoaded]);
 
   React.useEffect(() => {
@@ -1736,40 +1767,62 @@ export const AddressExplorer = () => {
     }
 
     const trimmedQuery = query.trim();
-    if (trimmedQuery.length < 2) {
+    if (trimmedQuery.length < PLACES_MIN_CHARS) {
       setSearchPredictions([]);
+      searchLastRequestedInputRef.current = "";
       return;
     }
 
-    const activeBiasLocation = currentLocation ?? searchBiasLocation;
-    const autocompleteRequest: { input: string; locationBias?: { center: { lat: number; lng: number }; radius: number } } = {
-      input: trimmedQuery,
-    };
-    if (activeBiasLocation) {
-      autocompleteRequest.locationBias = {
-        center: { lat: activeBiasLocation.lat, lng: activeBiasLocation.lng },
-        radius: 1500,
-      };
+    if (trimmedQuery === searchLastRequestedInputRef.current) {
+      return;
     }
 
-    (async () => {
-      try {
-        const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
-        const { AutocompleteSuggestion } = placesLib;
-        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions(autocompleteRequest);
-        setSearchPredictions(
-          (suggestions ?? []).slice(0, 6).map((s) => {
-            const p = s.placePrediction;
-            return {
-              description: p?.text?.text ?? "",
-              placeId: p?.placeId ?? "",
-            };
-          }).filter((x) => x.placeId),
-        );
-      } catch {
-        setSearchPredictions([]);
+    if (searchAutocompleteDebounceRef.current) {
+      clearTimeout(searchAutocompleteDebounceRef.current);
+      searchAutocompleteDebounceRef.current = null;
+    }
+
+    searchAutocompleteDebounceRef.current = setTimeout(() => {
+      searchAutocompleteDebounceRef.current = null;
+      const activeBiasLocation = currentLocation ?? searchBiasLocation;
+      const autocompleteRequest: { input: string; locationBias?: { center: { lat: number; lng: number }; radius: number } } = {
+        input: trimmedQuery,
+      };
+      if (activeBiasLocation) {
+        autocompleteRequest.locationBias = {
+          center: { lat: activeBiasLocation.lat, lng: activeBiasLocation.lng },
+          radius: 1500,
+        };
       }
-    })();
+
+      searchLastRequestedInputRef.current = trimmedQuery;
+
+      (async () => {
+        try {
+          const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
+          const { AutocompleteSuggestion } = placesLib;
+          const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions(autocompleteRequest);
+          setSearchPredictions(
+            (suggestions ?? []).slice(0, 6).map((s) => {
+              const p = s.placePrediction;
+              return {
+                description: p?.text?.text ?? "",
+                placeId: p?.placeId ?? "",
+              };
+            }).filter((x) => x.placeId),
+          );
+        } catch {
+          setSearchPredictions([]);
+        }
+      })();
+    }, PLACES_DEBOUNCE_MS);
+
+    return () => {
+      if (searchAutocompleteDebounceRef.current) {
+        clearTimeout(searchAutocompleteDebounceRef.current);
+        searchAutocompleteDebounceRef.current = null;
+      }
+    };
   }, [currentLocation, isLoaded, isSearchDropdownOpen, query, searchBiasLocation]);
 
   React.useEffect(() => {
@@ -1778,30 +1831,53 @@ export const AddressExplorer = () => {
       return;
     }
     const trimmed = propertyValueAddressQuery.trim();
-    if (trimmed.length < 3) {
+    if (trimmed.length < PLACES_MIN_CHARS) {
       setPropertyValuePredictions([]);
+      propertyValueLastRequestedInputRef.current = "";
       return;
     }
-    (async () => {
-      try {
-        const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
-        const { AutocompleteSuggestion } = placesLib;
-        const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
-          input: trimmed,
-        });
-        setPropertyValuePredictions(
-          (suggestions ?? []).slice(0, 5).map((s) => {
-            const p = s.placePrediction;
-            return {
-              description: p?.text?.text ?? "",
-              placeId: p?.placeId ?? "",
-            };
-          }).filter((x) => x.placeId),
-        );
-      } catch {
-        setPropertyValuePredictions([]);
+
+    if (trimmed === propertyValueLastRequestedInputRef.current) {
+      return;
+    }
+
+    if (propertyValueAutocompleteDebounceRef.current) {
+      clearTimeout(propertyValueAutocompleteDebounceRef.current);
+      propertyValueAutocompleteDebounceRef.current = null;
+    }
+
+    propertyValueAutocompleteDebounceRef.current = setTimeout(() => {
+      propertyValueAutocompleteDebounceRef.current = null;
+      propertyValueLastRequestedInputRef.current = trimmed;
+
+      (async () => {
+        try {
+          const placesLib = (await window.google.maps.importLibrary("places")) as google.maps.PlacesLibrary;
+          const { AutocompleteSuggestion } = placesLib;
+          const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+            input: trimmed,
+          });
+          setPropertyValuePredictions(
+            (suggestions ?? []).slice(0, 5).map((s) => {
+              const p = s.placePrediction;
+              return {
+                description: p?.text?.text ?? "",
+                placeId: p?.placeId ?? "",
+              };
+            }).filter((x) => x.placeId),
+          );
+        } catch {
+          setPropertyValuePredictions([]);
+        }
+      })();
+    }, PLACES_DEBOUNCE_MS);
+
+    return () => {
+      if (propertyValueAutocompleteDebounceRef.current) {
+        clearTimeout(propertyValueAutocompleteDebounceRef.current);
+        propertyValueAutocompleteDebounceRef.current = null;
       }
-    })();
+    };
   }, [isPropertyValueAddressInputOpen, isLoaded, propertyValueAddressQuery]);
 
   React.useEffect(() => {
@@ -1860,14 +1936,14 @@ export const AddressExplorer = () => {
                 onChange={(event) => {
                   const nextQuery = event.target.value;
                   setQuery(nextQuery);
-                  setIsSearchDropdownOpen(nextQuery.trim().length >= 2);
+                  setIsSearchDropdownOpen(nextQuery.trim().length >= PLACES_MIN_CHARS);
                   if (!nextQuery.trim()) {
                     setSearchPredictions([]);
                   }
                   setSelectedBuilding(null);
                 }}
                 onFocus={() => {
-                  if (query.trim().length >= 2) {
+                  if (query.trim().length >= PLACES_MIN_CHARS) {
                     setIsSearchDropdownOpen(true);
                   }
                 }}
