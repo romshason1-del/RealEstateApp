@@ -371,7 +371,8 @@ export async function GET(request: NextRequest) {
         }
         const hasTrustedAreaData = (ukLandRegistry.average_area_price != null && ukLandRegistry.average_area_price > 0) || noMatchExactValue != null;
         const ukNoPropertyRecord = !hasTrustedAreaData;
-        const noMatchLevel = ukNoPropertyRecord ? "no_match" : "area-level";
+        // No-data cases: always area-level for consistency (HPI may or may not return data)
+        const noMatchLevel = "area-level" as const;
         const augmented = {
           ...noMatchResult,
           address: { city: city.trim() || postcode.trim(), street: street.trim() || postcode.trim(), house_number: houseNumber.trim() },
