@@ -413,6 +413,7 @@ function paonMatchesHouseNumber(paon: string, saon: string, houseNumber: string)
   const paonNorm = normalizeForMatch(paon);
   const saonNorm = normalizeForMatch(saon);
   if (!hn) return true;
+  if (!paonNorm && !saonNorm) return true;
   if (paonNorm === hn || paonNorm.startsWith(hn) || hn.startsWith(paonNorm)) return true;
   if (paonNorm.includes(hn) || hn.includes(paonNorm)) return true;
   const paonNum = extractNumberPart(paon);
@@ -792,16 +793,10 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
     }
 
     let streetAveragePrice: number | null = null;
-    const DEBUG_KENSINGTON = (postcode ?? "").toUpperCase().replace(/\s/g, "").includes("W112EU") ||
-      ((street ?? "").toLowerCase().includes("kensington park") && (city ?? "").toLowerCase().includes("london"));
     if (street && (city || postcode)) {
       let streetTxItems: Tx[] = [];
       const streetNorm = normalizeStreet(street);
       const outwardPostcode = postcode ? normalizeUKPostcode(postcode).split(/\s/)[0]?.replace(/\s/g, "") || undefined : undefined;
-      if (DEBUG_KENSINGTON) {
-        console.debug("[street-avg DEBUG] Address: street=", JSON.stringify(street), "city=", JSON.stringify(city), "postcode=", JSON.stringify(postcode));
-        console.debug("[street-avg DEBUG] 1. Normalized street:", JSON.stringify(streetNorm), "outwardPostcode:", outwardPostcode ?? "(none)");
-      }
       if (city || outwardPostcode) {
         const streetQuery = buildSparqlQueryStreetExact(street, city, outwardPostcode);
         if (streetQuery) {
@@ -818,46 +813,22 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
             if (streetRes.ok) {
               const streetJson = (await streetRes.json()) as SparqlResult;
               const streetBindings = streetJson?.results?.bindings ?? [];
-              const rawCount = streetBindings.length;
               const afterProcess = processBindingsToItems(streetBindings, true, true);
               const after5y = afterProcess.filter((t) => t.dateMs >= fiveYearsAgo);
               streetTxItems = after5y;
-              if (DEBUG_KENSINGTON) {
-                const afterProcessNoRes = processBindingsToItems(streetBindings, true, false);
-                const after5yNoRes = afterProcessNoRes.filter((t) => t.dateMs >= fiveYearsAgo);
-                console.debug("[street-avg DEBUG] 2a. Exact street+town query: raw=", rawCount, "after_valid+residential=", afterProcess.length, "after_5y=", after5y.length);
-                console.debug("[street-avg DEBUG] 2b. (For comparison: after_valid_only, no residential filter) after_process=", afterProcessNoRes.length, "after_5y=", after5yNoRes.length);
-                if (streetBindings.length > 0 && streetBindings.length <= 5) {
-                  console.debug("[street-avg DEBUG] 2c. Sample raw street values:", streetBindings.slice(0, 3).map((b) => getBinding(b, "street")));
-                  console.debug("[street-avg DEBUG] 2d. Sample raw town values:", streetBindings.slice(0, 3).map((b) => getBinding(b, "town")));
-                }
-              }
             }
-          } catch (e) {
-            if (DEBUG_KENSINGTON) console.debug("[street-avg DEBUG] 2. Street query failed:", e instanceof Error ? e.message : String(e));
+          } catch {
+            // Street query failed, try postcode fallback
           }
         }
       }
       if (streetTxItems.length < 3 && postcode5yResidential.length >= 2) {
         const sameStreetItems = postcode5yResidential.filter((t) => streetMatches(street, t.addrStreet, false, true));
-        if (DEBUG_KENSINGTON) {
-          console.debug("[street-avg DEBUG] 3. Postcode filtered by street: postcode5yResidential=", postcode5yResidential.length, "sameStreetItems=", sameStreetItems.length);
-          if (postcode5yResidential.length > 0 && sameStreetItems.length < postcode5yResidential.length) {
-            const sampleAddrStreets = [...new Set(postcode5yResidential.slice(0, 15).map((t) => t.addrStreet))];
-            console.debug("[street-avg DEBUG] 3b. Sample addrStreet values in postcode:", sampleAddrStreets);
-          }
-        }
         if (sameStreetItems.length >= 3) streetTxItems = sameStreetItems;
       }
       if (streetTxItems.length >= 3) {
         const amounts = streetTxItems.map((t) => t.amount).sort((a, b) => a - b);
         streetAveragePrice = computeMedian(amounts);
-      }
-      if (DEBUG_KENSINGTON) {
-        console.debug("[street-avg DEBUG] 4. Final: streetTxItems=", streetTxItems.length, "streetAveragePrice=", streetAveragePrice);
-        console.debug("[street-avg DEBUG] 5. Root cause: street_average_price is null because", streetTxItems.length < 3
-          ? `streetTxItems.length (${streetTxItems.length}) < 3`
-          : "median computed successfully");
       }
     }
 
@@ -915,9 +886,6 @@ export class UKLandRegistryProvider implements PropertyDataProvider {
       fallback_level_used: fallbackLevelUsed,
       postcode_query_snippet: query.slice(0, 300) + (query.length > 300 ? "..." : ""),
     };
-    if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
-      console.debug("[UK Land Registry] postcode:", normalizedPostcode, "query_mode:", queryMode, "raw_count:", postcodeQueryRawResultCount);
-    }
 
     const ukData = {
       building_average_price: buildingAveragePrice,
