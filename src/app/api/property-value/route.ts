@@ -183,6 +183,20 @@ export async function GET(request: NextRequest) {
   const cached = CACHE.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     const cachedResponse = { ...cached.data, data_source: "cache" as const };
+    if (isUK && process.env.NODE_ENV === "development") {
+      const pr = ((cachedResponse as Record<string, unknown>).property_result ?? {}) as { value_level?: string; last_transaction?: { amount?: number; date?: string | null } };
+      const lt = pr.last_transaction;
+      const txSource = pr.value_level === "property-level" ? "exact_flat_match" : pr.value_level === "building-level" ? "building_match" : pr.value_level === "street-level" ? "street_match" : "area_fallback";
+      console.log("[UK capture CACHE]", JSON.stringify({
+        rawInputAddress: rawInputAddress.trim() || "(empty)",
+        selectedFormattedAddress: selectedFormattedAddress.trim() || "(empty)",
+        parsed_houseNumber: houseNumber.trim() || "(empty)",
+        parsed_street: street.trim() || "(empty)",
+        parsed_postcode: postcode.trim() || "(empty)",
+        latest_transaction: lt && (lt.amount ?? 0) > 0 ? { price: lt.amount, date: lt.date } : null,
+        source: txSource,
+      }));
+    }
     return NextResponse.json(cachedResponse);
   }
 
@@ -789,6 +803,16 @@ export async function GET(request: NextRequest) {
           street_avg: streetAvg ?? null,
           latest_transaction: latestTx ? { price: latestTx.price, date: latestTx.date } : null,
         });
+        const txSource = flatMatch ? "exact_flat_match" : buildingMatch ? "building_match" : streetMatch ? "street_match" : "area_fallback";
+        console.log("[UK capture]", JSON.stringify({
+          rawInputAddress: rawInputAddress.trim() || "(empty)",
+          selectedFormattedAddress: selectedFormattedAddress.trim() || "(empty)",
+          parsed_houseNumber: houseNumber.trim() || "(empty)",
+          parsed_street: street.trim() || "(empty)",
+          parsed_postcode: postcode.trim() || "(empty)",
+          latest_transaction: latestTx ? { price: latestTx.price, date: latestTx.date } : null,
+          source: txSource,
+        }));
       }
 
       const lastTransaction =
