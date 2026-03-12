@@ -82,6 +82,7 @@ export type PropertyValueInsightsResponse = {
   };
   data_source?: "live" | "cache" | "mock";
   market_trend?: { hpi_index: number; change_1y_percent: number; latest_date?: string };
+  fr_dvf?: { transaction_count: number; radius_used_m: number; price_per_sqm: number | null };
   uk_land_registry?: {
     building_average_price: number | null;
     transactions_in_building: number;
@@ -175,7 +176,12 @@ export async function fetchPropertyValueInsights(
               const city = g.city || g.street;
               return { city, street: g.city ? g.street : "", houseNumber: g.houseNumber, postcode: "" };
             })()
-          : (() => {
+          : code === "FR"
+            ? (() => {
+                const g = parseAddressFromFullString(address);
+                return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: "" };
+              })()
+            : (() => {
               const g = parseAddressFromFullString(address);
               return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: "" };
             })();
@@ -190,7 +196,8 @@ export async function fetchPropertyValueInsights(
     }
   }
   const isIT = code === "IT";
-  if (!isIT && (!parsed.city || !parsed.street)) {
+  const isFR = code === "FR";
+  if (!isIT && !isFR && (!parsed.city || !parsed.street)) {
     return {
       message: "no reliable exact match found",
       debug: {
@@ -211,6 +218,21 @@ export async function fetchPropertyValueInsights(
       message: "City required for Italy. Could not parse from address.",
       debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
     };
+  }
+  if (isFR) {
+    const hasCoords = Number.isFinite(options?.latitude) && Number.isFinite(options?.longitude);
+    if (!hasCoords) {
+      return {
+        message: "Coordinates required for France (DVF geo lookup). Select a location on the map.",
+        debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
+      };
+    }
+    if (!parsed.city && !parsed.street) {
+      return {
+        message: "City or street required for France. Could not parse from address.",
+        debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
+      };
+    }
   }
 
   try {
@@ -233,7 +255,9 @@ export async function fetchPropertyValueInsights(
     }));
 
     const isUKTimeoutFallback = isUK && (data as { debug?: { failure_reason?: string } }).debug?.failure_reason === "Land Registry timeout";
-    if (res.ok && !isUKTimeoutFallback && (data.address || data.avm_value || data.avm_rent || data.last_sale || data.property_result || data.neighborhood_stats || data.uk_land_registry)) {
+    const isFR = code === "FR";
+    const hasValidData = data.address || data.avm_value || data.avm_rent || data.last_sale || data.property_result || data.neighborhood_stats || data.uk_land_registry || (isFR && data.fr_dvf);
+    if (res.ok && !isUKTimeoutFallback && hasValidData) {
       CACHE.set(key, { data, ts: Date.now() });
     }
 

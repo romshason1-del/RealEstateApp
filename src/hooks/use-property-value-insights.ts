@@ -13,7 +13,7 @@ export type UsePropertyValueInsightsOptions = {
   selectedFormattedAddress?: string;
 };
 
-/** Countries that have an official property data provider */
+/** Countries that have an official property data provider. FR temporarily disabled: DVF source (api.cquest.org) returns 502. Re-enable by adding "FR" when stable. */
 const PROVIDER_COUNTRIES = ["IL", "US", "UK", "GB", "IT"];
 
 export function usePropertyValueInsights(
