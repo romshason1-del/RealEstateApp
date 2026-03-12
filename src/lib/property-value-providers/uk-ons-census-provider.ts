@@ -6,8 +6,9 @@
  */
 
 import { lookupUKPostcode } from "./uk-postcode-provider";
+import { computeNeighborhoodRating, type NeighborhoodRating, type NeighborhoodScoreInputs } from "@/lib/neighborhood-rating";
 
-export type UKNeighborhoodStats = {
+export type UKNeighborhoodStats = NeighborhoodScoreInputs & {
   median_household_income?: number;
   median_home_value?: number;
   population?: number;
@@ -42,14 +43,8 @@ export async function fetchUKNeighborhoodStats(
 
 /**
  * Compute livability rating from UK neighborhood stats.
- * Uses area price proxy: <200k BAD, 200-350k ALMOST GOOD, 350-500k GOOD, 500-750k VERY GOOD, >750k EXCELLENT.
+ * Uses area price proxy: <200k POOR, 200-350k FAIR, 350-500k GOOD, 500-750k VERY GOOD, >750k EXCELLENT.
  */
-export function computeUKLivabilityRating(stats: UKNeighborhoodStats | null): "BAD" | "ALMOST GOOD" | "GOOD" | "VERY GOOD" | "EXCELLENT" {
-  const price = stats?.median_home_value ?? stats?.livability_proxy_from_area_price ?? 0;
-  if (price <= 0) return "BAD";
-  if (price >= 750000) return "EXCELLENT";
-  if (price >= 500000) return "VERY GOOD";
-  if (price >= 350000) return "GOOD";
-  if (price >= 200000) return "ALMOST GOOD";
-  return "BAD";
+export function computeUKLivabilityRating(stats: UKNeighborhoodStats | null): NeighborhoodRating {
+  return computeNeighborhoodRating(stats);
 }
