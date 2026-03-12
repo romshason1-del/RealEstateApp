@@ -25,6 +25,8 @@ export function usePropertyValueInsights(
   const [isLoading, setIsLoading] = React.useState(false);
   const hasProvider = PROVIDER_COUNTRIES.includes((countryCode ?? "").toUpperCase());
 
+  const requestIdRef = React.useRef(0);
+
   React.useEffect(() => {
     if (!address.trim() || !hasProvider) {
       setData(null);
@@ -32,7 +34,7 @@ export function usePropertyValueInsights(
       return;
     }
 
-    let cancelled = false;
+    const thisRequestId = ++requestIdRef.current;
     setIsLoading(true);
 
     const fetchOpts = {
@@ -49,19 +51,19 @@ export function usePropertyValueInsights(
 
     fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
-        if (!cancelled) setData(res);
+        if (thisRequestId === requestIdRef.current) setData(res);
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (thisRequestId === requestIdRef.current) {
           console.error("[usePropertyValueInsights]", err);
           setData({ message: "Failed to fetch", error: String(err) });
         }
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (thisRequestId === requestIdRef.current) setIsLoading(false);
       });
 
-    return () => { cancelled = true; };
+    return () => {};
   }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress]);
 
   return { data, isLoading };

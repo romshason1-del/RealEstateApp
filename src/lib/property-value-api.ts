@@ -145,17 +145,19 @@ export async function fetchPropertyValueInsights(
 ): Promise<PropertyValueInsightsResponse> {
   const lat = options?.latitude;
   const lng = options?.longitude;
+  const code = (options?.countryCode ?? "").toUpperCase();
+  const isUK = code === "UK" || code === "GB";
+  const raw = (isUK && options?.rawInputAddress) ? `|raw:${options.rawInputAddress.trim()}` : "";
+  const sel = (isUK && options?.selectedFormattedAddress) ? `|sel:${options.selectedFormattedAddress.trim()}` : "";
   const key =
     Number.isFinite(lat) && Number.isFinite(lng)
-      ? `${address.trim().toLowerCase()}|${lat}|${lng}`
-      : address.trim().toLowerCase();
+      ? `${address.trim().toLowerCase()}${raw}${sel}|${lat}|${lng}`
+      : `${address.trim().toLowerCase()}${raw}${sel}`;
   const cached = CACHE.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.data;
   }
 
-  const code = (options?.countryCode ?? "").toUpperCase();
-  const isUK = code === "UK" || code === "GB";
   const parsed =
     code === "US"
       ? (() => {
