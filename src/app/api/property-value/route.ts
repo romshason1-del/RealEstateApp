@@ -139,7 +139,11 @@ export async function GET(request: NextRequest) {
         const pcMatch = selTrimmed.match(postcodeRe);
         const beforePc = pcMatch ? selTrimmed.slice(0, pcMatch.index).trim() : selTrimmed;
         const selParts = beforePc.split(",").map((p) => p.trim()).filter(Boolean);
-        street = selParts.length >= 2 ? selParts.slice(0, -1).join(", ") : (parsedSelected.street || street);
+        street = (parsedSelected.houseNumber && parsedSelected.street?.trim())
+          ? parsedSelected.street.trim()
+          : selParts.length >= 2
+            ? selParts.slice(0, -1).join(", ")
+            : (parsedSelected.street || street);
       } else {
         const parsed = parseUKAddressFromFullString(addressParam);
         street = parsed.street || street;
