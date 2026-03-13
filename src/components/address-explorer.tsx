@@ -438,7 +438,7 @@ export const AddressExplorer = () => {
   const propertyValueAutocompleteDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const propertyValueLastRequestedInputRef = React.useRef<string>("");
 
-  const PLACES_DEBOUNCE_MS = 300;
+  const PLACES_DEBOUNCE_MS = 600;
   const PLACES_MIN_CHARS = 3;
   const [activeSection, setActiveSection] =
     React.useState<(typeof navItems)[number]["label"]>("Explore");
@@ -571,57 +571,28 @@ export const AddressExplorer = () => {
     [map],
   );
 
-  const getGeocoder = React.useCallback(async () => {
-    if (!window.google?.maps) {
-      return null;
-    }
-
-    const mapsApi = window.google.maps as typeof google.maps & {
-      importLibrary?: (libraryName: string) => Promise<unknown>;
-    };
-
-    if (typeof mapsApi.importLibrary === "function") {
-      try {
-        const geocodingLibrary = (await mapsApi.importLibrary("geocoding")) as {
-          Geocoder?: typeof google.maps.Geocoder;
-        };
-
-        if (typeof geocodingLibrary.Geocoder === "function") {
-          return new geocodingLibrary.Geocoder();
-        }
-      } catch {
-        // Fall back to the classic constructor path below.
-      }
-    }
-
-    if (typeof window.google.maps.Geocoder === "function") {
-      return new window.google.maps.Geocoder();
-    }
-
-    return null;
-  }, []);
-
   const geocodeRequest = React.useCallback(
     async (request: google.maps.GeocoderRequest) => {
-      const geocoder = await getGeocoder();
-
-      if (!geocoder) {
-        throw new Error("Google geocoding is unavailable.");
+      const body: Record<string, unknown> = {};
+      if (request.address) body.address = request.address;
+      if (request.placeId) body.placeId = request.placeId;
+      if (request.location) {
+        const loc = request.location as { lat: number | (() => number); lng: number | (() => number) };
+        body.lat = typeof loc.lat === "function" ? loc.lat() : loc.lat;
+        body.lng = typeof loc.lng === "function" ? loc.lng() : loc.lng;
       }
 
-      return new Promise<{
-        results: GeocodeResult[] | null;
-        status: string;
-      }>((resolve) => {
-        geocoder.geocode(
-          request,
-          (results: GeocodeResult[] | null, status: string) => {
-            resolve({ results, status });
-          },
-        );
+      const res = await fetch("/api/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10000),
       });
+      const data = (await res.json()) as { results?: GeocodeResult[] | null; status?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Geocoding failed");
+      return { results: data.results ?? null, status: data.status ?? "UNKNOWN_ERROR" };
     },
-    [getGeocoder],
+    [],
   );
 
   const hydrateSearchContext = React.useCallback(
@@ -1087,8 +1058,9 @@ export const AddressExplorer = () => {
     if (!mapCenter) return;
     const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
     setCenter(viewCenter);
-    searchNearbyRestaurants(viewCenter);
-  }, [map, searchNearbyRestaurants]);
+    // Do NOT auto-trigger searchNearbyRestaurants on map move (cost control).
+    // User must click "Search this area" to fetch restaurants.
+  }, [map]);
 
   React.useEffect(() => {
     if (loadError) {
@@ -2115,7 +2087,21 @@ export const AddressExplorer = () => {
             </>
           )}
 
-          <div className="pointer-events-none absolute right-3 top-4 z-30 flex flex-col items-end">
+          <div className="pointer-events-none absolute right-3 top-4 z-30 flex flex-col items-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const mc = map?.getCenter();
+                const loc = mc
+                  ? { lat: mc.lat(), lng: mc.lng() }
+                  : center;
+                if (loc) searchNearbyRestaurants(loc);
+              }}
+              className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-amber-400/40 bg-black/80 px-3 py-2 text-xs font-medium text-amber-200 shadow-lg shadow-amber-500/10 backdrop-blur hover:bg-[#151515]"
+            >
+              <Search className="size-3.5" />
+              <span>Search this area</span>
+            </button>
             <button
               type="button"
               onClick={handleRecenterToLocation}
