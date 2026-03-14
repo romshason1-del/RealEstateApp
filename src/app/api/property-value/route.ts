@@ -7,6 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import getPropertyValueInsights from "@/lib/property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
@@ -70,6 +71,13 @@ function validateInput(
     const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
     if (!hasCity && !hasCoords) return { valid: false, error: "city or coordinates required for Italy addresses" };
     if (city.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "city too long" };
+    return { valid: true };
+  }
+  const isIL = code === "IL";
+  if (isIL) {
+    const hasAddress = !!(city.trim() || street.trim() || postcode.trim());
+    if (!hasAddress) return { valid: false, error: "address is required for Israel" };
+    if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
     return { valid: true };
   }
   const isFR = code === "FR";
@@ -217,7 +225,65 @@ export async function GET(request: NextRequest) {
   const isUS = (countryCode ?? "").toUpperCase() === "US";
   const isIT = (countryCode ?? "").toUpperCase() === "IT";
   const isFR = (countryCode ?? "").toUpperCase() === "FR";
+  const isIL = (countryCode ?? "").toUpperCase() === "IL";
   const usMockMode = isUS && isUSMockEnabled();
+
+  // Israel: check Supabase properties_israel first (real data from odata.org.il import)
+  if (isIL) {
+    const fullAddress = addressParam.trim() || [street.trim(), houseNumber.trim(), city.trim()].filter(Boolean).join(", ").trim();
+    if (fullAddress) {
+      try {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+        if (supabaseUrl && supabaseKey) {
+          const supabase = createClient(supabaseUrl, supabaseKey, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+          });
+          const norm = fullAddress.trim().toLowerCase().replace(/\s+/g, " ");
+          const { data: rows } = await supabase
+            .from("properties_israel")
+            .select("address, current_value, last_sale_info, street_avg_price, neighborhood_quality")
+            .ilike("address", `%${norm}%`)
+            .limit(5);
+
+          const match = (rows ?? [])[0];
+
+          if (match) {
+            const currentValue = match.current_value != null ? Number(match.current_value) : null;
+            const streetAvg = match.street_avg_price != null ? Number(match.street_avg_price) : null;
+            const lastSaleParts = (match.last_sale_info ?? "").split(" · ");
+            const lastAmount = lastSaleParts[0] ? parseFloat(String(lastSaleParts[0]).replace(/[^\d.-]/g, "")) : 0;
+            const lastDate = lastSaleParts[1]?.trim() ?? null;
+            const nq = (match.neighborhood_quality ?? "").toLowerCase().trim();
+            const livabilityMap: Record<string, "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT"> = {
+              poor: "POOR", fair: "FAIR", good: "GOOD", "very good": "VERY GOOD", excellent: "EXCELLENT",
+            };
+            const livability = livabilityMap[nq] ?? "FAIR";
+
+            return NextResponse.json({
+              address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+              data_source: "properties_israel" as const,
+              property_result: {
+                exact_value: currentValue,
+                exact_value_message: currentValue == null ? "No data for this address" : null,
+                value_level: "property-level" as const,
+                last_transaction: {
+                  amount: Number.isFinite(lastAmount) ? lastAmount : 0,
+                  date: lastDate,
+                  message: lastAmount > 0 ? undefined : "No recorded transaction",
+                },
+                street_average: streetAvg,
+                street_average_message: streetAvg == null ? "No street average" : null,
+                livability_rating: livability,
+              },
+            });
+          }
+        }
+      } catch {
+        // Fall through to provider
+      }
+    }
+  }
 
   // FR branch kept for future reactivation. Currently gated in UI (PROVIDER_COUNTRIES, hasOfficialProvider) - DVF source unreliable (502).
   if (isFR) {

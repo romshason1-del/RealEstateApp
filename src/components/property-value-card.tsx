@@ -631,6 +631,57 @@ export function PropertyValueCard({
                 </CollapsibleSection>
               )}
             </div>
+          ) : isIsrael && propertyResult ? (
+            <div className="space-y-2" dir="rtl">
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
+                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">שווי נכס כיום</div>
+                <div className="mt-1 text-base font-semibold text-white sm:text-lg">
+                  {propertyResult.exact_value != null && propertyResult.exact_value > 0
+                    ? formatCurrency(propertyResult.exact_value, currencySymbol)
+                    : propertyResult.exact_value_message ?? "—"}
+                </div>
+              </div>
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
+                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">מכירה אחרונה</div>
+                <div className="mt-1 text-sm font-medium text-zinc-200">
+                  {propertyResult.last_transaction.amount > 0
+                    ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
+                    : propertyResult.last_transaction.message ?? "—"}
+                </div>
+              </div>
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
+                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">ממוצע רחוב</div>
+                <div className="mt-1 text-sm font-medium text-zinc-200">
+                  {propertyResult.street_average != null && propertyResult.street_average > 0
+                    ? formatCurrency(propertyResult.street_average, currencySymbol)
+                    : propertyResult.street_average_message ?? "—"}
+                </div>
+              </div>
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
+                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">איכות השכונה</div>
+                <div className={`mt-1 text-sm font-medium ${
+                  propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
+                  propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
+                  propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
+                  propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
+                  "text-zinc-400"
+                }`}>
+                  {propertyResult.livability_rating}
+                </div>
+              </div>
+              {debugMode && hasOfficialProvider && (
+                <CollapsibleSection title="Debug Info">
+                  <DebugPanel
+                    address={address}
+                    parsed={parsedLocal}
+                    canonical={canonicalLocal}
+                    insightsData={insightsData}
+                    latest={latest}
+                    currencySymbol={currencySymbol}
+                  />
+                </CollapsibleSection>
+              )}
+            </div>
           ) : (isIT || propertyResult?.last_transaction?.message === "Not yet available in Italy") ? (
             <div className="space-y-2">
               {propertyResult ? (
