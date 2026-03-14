@@ -2309,7 +2309,7 @@ export const AddressExplorer = () => {
                   type="button"
                   onClick={handlePropertyValueCurrentLocation}
                   disabled={isWaitingForLocation}
-                  className="text-xs text-amber-300/90 underline-offset-2 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="mt-2 inline-flex items-center justify-center rounded-full border border-amber-400/30 bg-black/90 px-4 py-2 text-xs font-medium text-amber-200 shadow-lg backdrop-blur transition-colors hover:border-amber-400/50 hover:bg-[#151515] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-black/90 disabled:active:scale-100"
                 >
                   {isWaitingForLocation ? "Getting location..." : "Search the value of your current location"}
                 </button>
