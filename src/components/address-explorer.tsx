@@ -571,6 +571,20 @@ export const AddressExplorer = () => {
     [map],
   );
 
+  const getGeocoder = React.useCallback(async () => {
+    if (!window.google?.maps) return null;
+    const mapsApi = window.google.maps as typeof google.maps & { importLibrary?: (n: string) => Promise<unknown> };
+    if (typeof mapsApi.importLibrary === "function") {
+      try {
+        const lib = (await mapsApi.importLibrary("geocoding")) as { Geocoder?: new () => google.maps.Geocoder };
+        if (typeof lib.Geocoder === "function") return new lib.Geocoder();
+      } catch {
+        // fall through
+      }
+    }
+    return typeof window.google.maps.Geocoder === "function" ? new window.google.maps.Geocoder() : null;
+  }, []);
+
   const geocodeRequest = React.useCallback(
     async (request: google.maps.GeocoderRequest) => {
       const body: Record<string, unknown> = {};
@@ -582,17 +596,28 @@ export const AddressExplorer = () => {
         body.lng = typeof loc.lng === "function" ? loc.lng() : loc.lng;
       }
 
-      const res = await fetch("/api/geocode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10000),
+      try {
+        const res = await fetch("/api/geocode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10000),
+        });
+        const data = (await res.json()) as { results?: GeocodeResult[] | null; status?: string; error?: string };
+        if (res.ok) return { results: data.results ?? null, status: data.status ?? "UNKNOWN_ERROR" };
+      } catch {
+        // API failed - fall through to client Geocoder
+      }
+
+      const geocoder = await getGeocoder();
+      if (!geocoder) throw new Error("Google geocoding is unavailable.");
+      return new Promise<{ results: GeocodeResult[] | null; status: string }>((resolve) => {
+        geocoder.geocode(request, (results: GeocodeResult[] | null, status: string) => {
+          resolve({ results, status });
+        });
       });
-      const data = (await res.json()) as { results?: GeocodeResult[] | null; status?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Geocoding failed");
-      return { results: data.results ?? null, status: data.status ?? "UNKNOWN_ERROR" };
     },
-    [],
+    [getGeocoder],
   );
 
   const hydrateSearchContext = React.useCallback(
@@ -667,9 +692,7 @@ export const AddressExplorer = () => {
   );
 
   const handleSearch = React.useCallback(async () => {
-    if (!window.google?.maps || !query.trim()) {
-      return;
-    }
+    if (!query.trim()) return;
 
     const normalizedQuery = query.trim().toLowerCase();
     if (
@@ -1921,8 +1944,9 @@ export const AddressExplorer = () => {
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
+                    event.preventDefault();
                     setIsSearchDropdownOpen(false);
-                    handleSearch();
+                    void handleSearch();
                   }
                 }}
                 placeholder="Search addresses or streets..."
@@ -1948,7 +1972,7 @@ export const AddressExplorer = () => {
 
             <button
               type="button"
-              onClick={handleSearch}
+              onClick={() => void handleSearch()}
               className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-black transition-colors hover:bg-amber-300"
             >
               <Search className="size-5" />
