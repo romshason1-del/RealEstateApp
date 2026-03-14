@@ -46,19 +46,16 @@ function cachedToGeocodeResult(cached: {
   lat: number | null;
   lng: number | null;
   address_components: unknown;
-}): { results: Array<{ formatted_address?: string; address_components?: unknown; geometry: { location: { lat: () => number; lng: () => number } } }>; status: string } {
-  const lat = cached.lat ?? 0;
-  const lng = cached.lng ?? 0;
+}) {
+  const lat = Number(cached.lat) || 0;
+  const lng = Number(cached.lng) || 0;
   return {
     results: [
       {
         formatted_address: cached.formatted_address ?? undefined,
         address_components: cached.address_components as unknown[] | undefined,
         geometry: {
-          location: {
-            lat: () => lat,
-            lng: () => lng,
-          },
+          location: { lat, lng },
         },
       },
     ],

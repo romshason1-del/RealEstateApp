@@ -106,12 +106,21 @@ type GeocodeResult = {
   formatted_address?: string;
   address_components?: GeocodeAddressComponent[];
   geometry: {
-    location: {
-      lat: () => number;
-      lng: () => number;
-    };
+    location:
+      | { lat: number; lng: number }
+      | { lat: () => number; lng: () => number };
   };
 };
+
+function extractGeocodeLatLng(
+  location: { lat: number | (() => number); lng: number | (() => number) } | undefined
+): LatLng | null {
+  if (!location) return null;
+  const lat = typeof location.lat === "function" ? location.lat() : location.lat;
+  const lng = typeof location.lng === "function" ? location.lng() : location.lng;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
 
 type PlacesSearchResult = {
   geometry?: {
@@ -561,11 +570,10 @@ export const AddressExplorer = () => {
           return nextRestaurants.find((r) => r.id === current.id) ?? current;
         });
         setError(null);
-      } catch (err) {
-        console.error("Restaurant search error:", err);
+      } catch {
         setRestaurants([]);
         setSelectedRestaurant(null);
-        setError("Unable to load nearby restaurants right now.");
+        // Show map even if restaurants fail—don't block with error
       }
     },
     [map],
@@ -728,8 +736,11 @@ export const AddressExplorer = () => {
         return;
       }
 
-      const location = results[0].geometry.location;
-      const nextCenter = { lat: location.lat(), lng: location.lng() };
+      const nextCenter = extractGeocodeLatLng(results[0].geometry.location);
+      if (!nextCenter) {
+        setError("Location not found. Try a different address or city.");
+        return;
+      }
       const formattedAddress = results[0].formatted_address ?? query.trim();
 
       setSearchPredictions([]);
@@ -737,18 +748,18 @@ export const AddressExplorer = () => {
       setCenter(nextCenter);
       setSelectedRestaurant(null);
       setSelectedBuilding(
-        getPropertyInsight(
-          nextCenter,
-          formattedAddress,
-          results[0].address_components,
-        ),
+        getPropertyInsight(nextCenter, formattedAddress, results[0].address_components),
       );
       setDismissedBuilding(null);
       setError(null);
       hydrateSearchContext(nextCenter, formattedAddress);
       map?.panTo(nextCenter);
       map?.setZoom(16);
-      searchNearbyRestaurants(nextCenter);
+      try {
+        await searchNearbyRestaurants(nextCenter);
+      } catch {
+        // Show map even if restaurants fail
+      }
     } catch {
       setError("Search is temporarily unavailable. Please try again.");
     }
@@ -1002,8 +1013,11 @@ export const AddressExplorer = () => {
           setError("Unable to resolve the selected address.");
           return;
         }
-        const location = results[0].geometry.location;
-        const nextCenter = { lat: location.lat(), lng: location.lng() };
+        const nextCenter = extractGeocodeLatLng(results[0].geometry.location);
+        if (!nextCenter) {
+          setError("Unable to resolve the selected address.");
+          return;
+        }
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
         const displayAddress = selectedFormatted;
         setIsPropertyValueAddressInputOpen(false);
@@ -1021,7 +1035,11 @@ export const AddressExplorer = () => {
         hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(17);
-        searchNearbyRestaurants(nextCenter);
+        try {
+          await searchNearbyRestaurants(nextCenter);
+        } catch {
+          // Show map even if restaurants fail
+        }
       } catch {
         setError("Unable to resolve the selected address.");
       }
@@ -1048,8 +1066,11 @@ export const AddressExplorer = () => {
           return;
         }
 
-        const location = results[0].geometry.location;
-        const nextCenter = { lat: location.lat(), lng: location.lng() };
+        const nextCenter = extractGeocodeLatLng(results[0].geometry.location);
+        if (!nextCenter) {
+          setError("Location not found. Try a different address or city.");
+          return;
+        }
         const selectedFormatted =
           results[0].formatted_address ?? prediction.description;
         const displayAddress = selectedFormatted;
@@ -1067,7 +1088,11 @@ export const AddressExplorer = () => {
         hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(16);
-        searchNearbyRestaurants(nextCenter);
+        try {
+          await searchNearbyRestaurants(nextCenter);
+        } catch {
+          // Show map even if restaurants fail
+        }
       } catch {
         setError("Search is temporarily unavailable. Please try again.");
       }
@@ -1529,12 +1554,16 @@ export const AddressExplorer = () => {
           return;
         }
 
-        const location = results[0].geometry.location;
+        const nextCenter = extractGeocodeLatLng(results[0].geometry.location);
+        if (!nextCenter) {
+          setError("Unable to resolve the selected address.");
+          return;
+        }
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
         const displayAddress = selectedFormatted;
         setAssetSelection({
           address: displayAddress,
-          position: { lat: location.lat(), lng: location.lng() },
+          position: nextCenter,
         });
         setAssetAddressQuery(displayAddress);
         setAssetPredictions([]);
