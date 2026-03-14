@@ -93,13 +93,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid lookup parameters" }, { status: 400 });
     }
 
-    const supabase = createAdminClient();
-
-    const { data: cached } = await supabase
-      .from("cached_locations")
-      .select("formatted_address, lat, lng, address_components")
-      .eq("lookup_key", lookupKey)
-      .maybeSingle();
+    let cached: { formatted_address: string | null; lat: number | null; lng: number | null; address_components: unknown } | null = null;
+    try {
+      const supabase = createAdminClient();
+      const { data } = await supabase
+        .from("cached_locations")
+        .select("formatted_address, lat, lng, address_components")
+        .eq("lookup_key", lookupKey)
+        .maybeSingle();
+      cached = data;
+    } catch {
+      // Supabase not configured or cached_locations missing - skip cache, go to Google
+    }
 
     if (cached) {
       return NextResponse.json(cachedToGeocodeResult(cached));
@@ -137,18 +142,23 @@ export async function POST(request: NextRequest) {
     const geoLat = loc?.lat ?? 0;
     const geoLng = loc?.lng ?? 0;
 
-    await supabase.from("cached_locations").upsert(
-      {
-        lookup_key: lookupKey,
-        lookup_type: lookupType,
-        formatted_address: first.formatted_address ?? null,
-        lat: geoLat,
-        lng: geoLng,
-        place_id: first.place_id ?? null,
-        address_components: first.address_components ?? null,
-      },
-      { onConflict: "lookup_key" }
-    );
+    try {
+      const supabase = createAdminClient();
+      await supabase.from("cached_locations").upsert(
+        {
+          lookup_key: lookupKey,
+          lookup_type: lookupType,
+          formatted_address: first.formatted_address ?? null,
+          lat: geoLat,
+          lng: geoLng,
+          place_id: first.place_id ?? null,
+          address_components: first.address_components ?? null,
+        },
+        { onConflict: "lookup_key" }
+      );
+    } catch {
+      // Cache save failed - still return results
+    }
 
     return NextResponse.json(cachedToGeocodeResult({
       formatted_address: first.formatted_address ?? null,
