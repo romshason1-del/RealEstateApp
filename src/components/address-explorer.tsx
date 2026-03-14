@@ -458,6 +458,7 @@ export const AddressExplorer = () => {
     React.useState<LatLng | null>(null);
   const [searchCountryCode, setSearchCountryCode] = React.useState("");
   const [restaurants, setRestaurants] = React.useState<Restaurant[]>([]);
+  const [isPlacesSearching, setIsPlacesSearching] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [map, setMap] = React.useState<google.maps.Map | null>(null);
   const [currentLocation, setCurrentLocation] = React.useState<LatLng | null>(null);
@@ -511,15 +512,14 @@ export const AddressExplorer = () => {
     libraries,
   });
 
-  const searchNearbyRestaurants = React.useCallback(
-    async (location: LatLng) => {
+  const searchNearbyPlaces = React.useCallback(
+    async (location: LatLng, radiusMeters: number) => {
       if (!window.google?.maps?.importLibrary || !map) return;
 
       setRestaurants([]);
       restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
       restaurantMarkersRef.current = [];
-
-      const radius = 1500;
+      setIsPlacesSearching(true);
 
       try {
         const placesLib = (await window.google.maps.importLibrary(
@@ -528,10 +528,10 @@ export const AddressExplorer = () => {
         const { Place, SearchNearbyRankPreference } = placesLib;
 
         const request = {
-          fields: ["id", "displayName", "location", "rating", "formattedAddress", "userRatingCount"],
+          fields: ["id", "displayName", "location"],
           locationRestriction: {
             center: { lat: location.lat, lng: location.lng },
-            radius,
+            radius: radiusMeters,
           },
           includedPrimaryTypes: ["restaurant"],
           rankPreference: SearchNearbyRankPreference.DISTANCE,
@@ -551,9 +551,9 @@ export const AddressExplorer = () => {
             const r: Restaurant = {
               id: place.id ?? `restaurant-${index}`,
               name,
-              address: place.formattedAddress ?? "Address unavailable",
-              rating: place.rating ?? undefined,
-              reviews: place.userRatingCount ?? 0,
+              address: "Address unavailable",
+              rating: undefined,
+              reviews: 0,
               location: coords,
             };
             return r;
@@ -573,7 +573,8 @@ export const AddressExplorer = () => {
       } catch {
         setRestaurants([]);
         setSelectedRestaurant(null);
-        // Show map even if restaurants fail—don't block with error
+      } finally {
+        setIsPlacesSearching(false);
       }
     },
     [map],
@@ -679,6 +680,9 @@ export const AddressExplorer = () => {
       setSearchPredictions([]);
       setIsSearchDropdownOpen(false);
       setSelectedRestaurant(null);
+      setRestaurants([]);
+      restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
+      restaurantMarkersRef.current = [];
       const nextBuildingInsight =
         options?.openPropertyInsight === false
           ? null
@@ -694,9 +698,9 @@ export const AddressExplorer = () => {
 
       map?.panTo(nextCenter);
       map?.setZoom(zoom);
-      searchNearbyRestaurants(nextCenter);
+      // Places fetched only via "Search this area" button (cost control)
     },
-    [hydrateSearchContext, map, searchNearbyRestaurants],
+    [hydrateSearchContext, map],
   );
 
   const handleSearch = React.useCallback(async () => {
@@ -719,10 +723,12 @@ export const AddressExplorer = () => {
       setSelectedBuilding(null);
       setDismissedBuilding(null);
       setError(null);
+      setRestaurants([]);
+      restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
+      restaurantMarkersRef.current = [];
       map?.panTo(targetLocation);
       map?.setZoom(16);
-      searchNearbyRestaurants(targetLocation);
-      setFlashMessage("Showing results near you");
+      setFlashMessage("Click 'Search this area' to find nearby places");
       return;
     }
 
@@ -747,6 +753,9 @@ export const AddressExplorer = () => {
       setQuery(formattedAddress);
       setCenter(nextCenter);
       setSelectedRestaurant(null);
+      setRestaurants([]);
+      restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
+      restaurantMarkersRef.current = [];
       setSelectedBuilding(
         getPropertyInsight(nextCenter, formattedAddress, results[0].address_components),
       );
@@ -755,15 +764,11 @@ export const AddressExplorer = () => {
       hydrateSearchContext(nextCenter, formattedAddress);
       map?.panTo(nextCenter);
       map?.setZoom(16);
-      try {
-        await searchNearbyRestaurants(nextCenter);
-      } catch {
-        // Show map even if restaurants fail
-      }
+      // Places fetched only via "Search this area" button (cost control)
     } catch {
       setError("Search is temporarily unavailable. Please try again.");
     }
-  }, [center, currentLocation, geocodeRequest, hydrateSearchContext, map, query, searchBiasLocation, searchNearbyRestaurants]);
+  }, [center, currentLocation, geocodeRequest, hydrateSearchContext, map, query, searchBiasLocation]);
 
   const handleGeolocationError = React.useCallback(
     (geoError: GeolocationPositionError | null) => {
@@ -1032,19 +1037,18 @@ export const AddressExplorer = () => {
         setDismissedBuilding(null);
         setQuery(displayAddress);
         setCenter(nextCenter);
+        setRestaurants([]);
+        restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
+        restaurantMarkersRef.current = [];
         hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(17);
-        try {
-          await searchNearbyRestaurants(nextCenter);
-        } catch {
-          // Show map even if restaurants fail
-        }
+        // Places fetched only via "Search this area" button (cost control)
       } catch {
         setError("Unable to resolve the selected address.");
       }
     },
-    [geocodeRequest, hydrateSearchContext, map, propertyValueAddressQuery, searchNearbyRestaurants],
+    [geocodeRequest, hydrateSearchContext, map, propertyValueAddressQuery],
   );
 
   const handleSelectSearchPrediction = React.useCallback(
@@ -1085,19 +1089,18 @@ export const AddressExplorer = () => {
         });
         setDismissedBuilding(null);
         setError(null);
+        setRestaurants([]);
+        restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
+        restaurantMarkersRef.current = [];
         hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(16);
-        try {
-          await searchNearbyRestaurants(nextCenter);
-        } catch {
-          // Show map even if restaurants fail
-        }
+        // Places fetched only via "Search this area" button (cost control)
       } catch {
         setError("Search is temporarily unavailable. Please try again.");
       }
     },
-    [geocodeRequest, hydrateSearchContext, map, query, searchNearbyRestaurants],
+    [geocodeRequest, hydrateSearchContext, map, query],
   );
 
   const handleMapIdle = React.useCallback(() => {
@@ -1106,8 +1109,8 @@ export const AddressExplorer = () => {
     if (!mapCenter) return;
     const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
     setCenter(viewCenter);
-    // Do NOT auto-trigger searchNearbyRestaurants on map move (cost control).
-    // User must click "Search this area" to fetch restaurants.
+    // Do NOT auto-trigger places search on map move (cost control).
+    // User must click "Search this area" to fetch places.
   }, [map]);
 
   React.useEffect(() => {
@@ -2143,17 +2146,34 @@ export const AddressExplorer = () => {
           <div className="pointer-events-none absolute right-3 top-4 z-30 flex flex-col items-end gap-2">
             <button
               type="button"
+              disabled={!map || isPlacesSearching}
               onClick={() => {
                 const mc = map?.getCenter();
-                const loc = mc
-                  ? { lat: mc.lat(), lng: mc.lng() }
-                  : center;
-                if (loc) searchNearbyRestaurants(loc);
+                const loc = mc ? { lat: mc.lat(), lng: mc.lng() } : center;
+                if (!loc || !map) return;
+                const bounds = map.getBounds();
+                let radius = 1500;
+                if (bounds && window.google?.maps?.geometry?.spherical) {
+                  const ne = bounds.getNorthEast();
+                  const from = new window.google.maps.LatLng(loc.lat, loc.lng);
+                  const to = new window.google.maps.LatLng(ne.lat(), ne.lng());
+                  radius = Math.max(500, Math.round(window.google.maps.geometry.spherical.computeDistanceBetween(from, to)));
+                }
+                void searchNearbyPlaces(loc, radius);
               }}
-              className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-amber-400/40 bg-black/80 px-3 py-2 text-xs font-medium text-amber-200 shadow-lg shadow-amber-500/10 backdrop-blur hover:bg-[#151515]"
+              className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-amber-400/40 bg-black/80 px-3 py-2 text-xs font-medium text-amber-200 shadow-lg shadow-amber-500/10 backdrop-blur hover:bg-[#151515] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <Search className="size-3.5" />
-              <span>Search this area</span>
+              {isPlacesSearching ? (
+                <>
+                  <span className="size-3.5 animate-spin rounded-full border-2 border-amber-400 border-t-transparent" />
+                  <span>Searching...</span>
+                </>
+              ) : (
+                <>
+                  <Search className="size-3.5" />
+                  <span>Search this area</span>
+                </>
+              )}
             </button>
             <button
               type="button"
