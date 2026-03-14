@@ -972,6 +972,19 @@ export const AddressExplorer = () => {
 
   const showRestoreButton = Boolean(selectedBuilding || dismissedBuilding || center || currentLocation);
 
+  const COORDS_THRESHOLD = 0.00005;
+  const coordsMatch = React.useCallback(
+    (a: LatLng, b: LatLng) =>
+      Math.abs(a.lat - b.lat) < COORDS_THRESHOLD && Math.abs(a.lng - b.lng) < COORDS_THRESHOLD,
+    [],
+  );
+  const focusedPosition = selectedBuilding?.position ?? center;
+  const isViewingCurrentLocation =
+    currentLocation != null &&
+    focusedPosition != null &&
+    coordsMatch(currentLocation, focusedPosition);
+  const showCurrentLocationValueButton = !isViewingCurrentLocation;
+
   const handlePropertyValueButtonClick = React.useCallback(() => {
     if (selectedBuilding) {
       dismissSelectedBuilding();
@@ -2305,14 +2318,20 @@ export const AddressExplorer = () => {
                   <BadgeDollarSign className="size-5 shrink-0 stroke-[2.4] text-black" />
                   <span>Property Value</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handlePropertyValueCurrentLocation}
-                  disabled={isWaitingForLocation}
-                  className="mt-2 inline-flex items-center justify-center rounded-full border border-amber-400/30 bg-black/90 px-4 py-2 text-xs font-medium text-amber-200 shadow-lg backdrop-blur transition-colors hover:border-amber-400/50 hover:bg-[#151515] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-black/90 disabled:active:scale-100"
+                <div
+                  className={`mt-2 transition-opacity duration-200 ${
+                    showCurrentLocationValueButton ? "opacity-100" : "pointer-events-none opacity-0"
+                  }`}
                 >
-                  {isWaitingForLocation ? "Getting location..." : "Search the value of your current location"}
-                </button>
+                  <button
+                    type="button"
+                    onClick={handlePropertyValueCurrentLocation}
+                    disabled={isWaitingForLocation}
+                    className="inline-flex items-center justify-center rounded-full border border-amber-400/30 bg-black/90 px-4 py-2 text-xs font-medium text-amber-200 shadow-lg backdrop-blur transition-colors hover:border-amber-400/50 hover:bg-[#151515] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-black/90 disabled:active:scale-100"
+                  >
+                    {isWaitingForLocation ? "Getting location..." : "Search the value of your current location"}
+                  </button>
+                </div>
               </div>
             </div>
           ) : null}
