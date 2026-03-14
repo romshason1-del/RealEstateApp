@@ -1,13 +1,23 @@
 /**
  * Geocoding API with Supabase cache.
- * Check cached_locations before calling Google; save on miss.
- * Reduces Google Geocoding API costs.
+ * 1. Check cached_locations in Supabase first.
+ * 2. If not found, fetch from Google Maps Geocoding API.
+ * 3. Save result to cached_locations on miss.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@supabase/supabase-js";
 
 const GEOCODE_BASE = "https://maps.googleapis.com/maps/api/geocode/json";
+
+function getSupabaseClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  if (!url || !key) return null;
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
 
 function buildLookupKey(
   type: "address" | "place_id" | "reverse",
@@ -68,12 +78,11 @@ export async function POST(request: NextRequest) {
     const lat = raw.lat ?? raw.location?.lat;
     const lng = raw.lng ?? raw.location?.lng;
 
-    const apiKey = (process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "").trim();
-    const apiKeyPresent = apiKey.length > 0;
-    const apiKeyPreview = apiKeyPresent
-      ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`
-      : "MISSING";
-    console.log("[geocode] API key:", apiKeyPreview, "| present:", apiKeyPresent);
+    const apiKey = (
+      process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ??
+      process.env.GOOGLE_MAPS_API_KEY ??
+      ""
+    ).trim();
     if (!apiKey) {
       return NextResponse.json({ error: "Google API key not configured" }, { status: 503 });
     }
@@ -98,19 +107,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid lookup parameters" }, { status: 400 });
     }
 
-    console.log("[geocode] Request:", { lookupType, lookupKey, address: address ?? "(none)", placeId: placeId ?? "(none)", lat, lng });
-
     let cached: { formatted_address: string | null; lat: number | null; lng: number | null; address_components: unknown } | null = null;
-    try {
-      const supabase = createAdminClient();
-      const { data } = await supabase
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase
         .from("cached_locations")
         .select("formatted_address, lat, lng, address_components")
         .eq("lookup_key", lookupKey)
         .maybeSingle();
-      cached = data;
-    } catch {
-      // Supabase not configured or cached_locations missing - skip cache, go to Google
+        cached = data;
+      } catch {
+        // cached_locations missing or error - skip cache, go to Google
+      }
     }
 
     if (cached) {
@@ -125,12 +134,8 @@ export async function POST(request: NextRequest) {
     } else if (lookupType === "reverse" && Number.isFinite(lat) && Number.isFinite(lng)) {
       url = `${GEOCODE_BASE}?latlng=${lat},${lng}&key=${apiKey}`;
     } else {
-      console.error("[geocode] Invalid URL params:", { lookupType, address, placeId, lat, lng });
       return NextResponse.json({ error: "Invalid geocode parameters" }, { status: 400 });
     }
-
-    const urlSafe = url.replace(/key=[^&]+/, "key=***");
-    console.log("[geocode] Google URL:", urlSafe);
 
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     const data = (await res.json()) as {
@@ -144,13 +149,6 @@ export async function POST(request: NextRequest) {
       }>;
     };
 
-    console.log("[geocode] Google API response:", {
-      status: data.status,
-      error_message: data.error_message ?? "(none)",
-      results_count: data.results?.length ?? 0,
-      full: JSON.stringify(data),
-    });
-
     if (data.status !== "OK" || !data.results?.[0]) {
       return NextResponse.json(
         { results: null, status: data.status ?? "UNKNOWN_ERROR" },
@@ -163,9 +161,9 @@ export async function POST(request: NextRequest) {
     const geoLat = loc?.lat ?? 0;
     const geoLng = loc?.lng ?? 0;
 
-    try {
-      const supabase = createAdminClient();
-      await supabase.from("cached_locations").upsert(
+    if (supabase) {
+      try {
+        await supabase.from("cached_locations").upsert(
         {
           lookup_key: lookupKey,
           lookup_type: lookupType,
@@ -176,9 +174,10 @@ export async function POST(request: NextRequest) {
           address_components: first.address_components ?? null,
         },
         { onConflict: "lookup_key" }
-      );
-    } catch {
-      // Cache save failed - still return results
+        );
+      } catch {
+        // Cache save failed - still return results
+      }
     }
 
     return NextResponse.json(cachedToGeocodeResult({
