@@ -8,6 +8,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 const GEOCODE_BASE = "https://maps.googleapis.com/maps/api/geocode/json";
 
 function getSupabaseClient() {
@@ -78,11 +81,7 @@ export async function POST(request: NextRequest) {
     const lat = raw.lat ?? raw.location?.lat;
     const lng = raw.lng ?? raw.location?.lng;
 
-    const apiKey = (
-      process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ??
-      process.env.GOOGLE_MAPS_API_KEY ??
-      ""
-    ).trim();
+    const apiKey = (process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "").trim();
     if (!apiKey) {
       return NextResponse.json({ error: "Google API key not configured" }, { status: 503 });
     }
@@ -137,7 +136,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid geocode parameters" }, { status: 400 });
     }
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { "Accept": "application/json", "User-Agent": "StreetIQ-Geocode/1.0" },
+      signal: AbortSignal.timeout(8000),
+      cache: "no-store",
+    });
     const data = (await res.json()) as {
       status: string;
       error_message?: string;
@@ -186,11 +190,7 @@ export async function POST(request: NextRequest) {
       lng: geoLng,
       address_components: first.address_components ?? null,
     }));
-  } catch (err) {
-    console.error("[geocode] Error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Geocoding failed" },
-      { status: 500 }
-    );
+  } catch {
+    return NextResponse.json({ error: "Geocoding failed" }, { status: 500 });
   }
 }
