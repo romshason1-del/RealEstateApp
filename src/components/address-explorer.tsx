@@ -2171,7 +2171,7 @@ export const AddressExplorer = () => {
               ) : (
                 <>
                   <Search className="size-3.5" />
-                  <span>Search this area</span>
+                  <span>Restaurants nearby</span>
                 </>
               )}
             </button>
