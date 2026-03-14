@@ -75,7 +75,7 @@ function validateInput(
   }
   const isIL = code === "IL";
   if (isIL) {
-    const hasAddress = !!(city.trim() || street.trim() || postcode.trim());
+    const hasAddress = !!(city.trim() || street.trim() || (postcode ?? "").trim());
     if (!hasAddress) return { valid: false, error: "address is required for Israel" };
     if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
     return { valid: true };
