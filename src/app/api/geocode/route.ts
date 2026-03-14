@@ -69,6 +69,11 @@ export async function POST(request: NextRequest) {
     const lng = raw.lng ?? raw.location?.lng;
 
     const apiKey = (process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "").trim();
+    const apiKeyPresent = apiKey.length > 0;
+    const apiKeyPreview = apiKeyPresent
+      ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`
+      : "MISSING";
+    console.log("[geocode] API key:", apiKeyPreview, "| present:", apiKeyPresent);
     if (!apiKey) {
       return NextResponse.json({ error: "Google API key not configured" }, { status: 503 });
     }
@@ -93,6 +98,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid lookup parameters" }, { status: 400 });
     }
 
+    console.log("[geocode] Request:", { lookupType, lookupKey, address: address ?? "(none)", placeId: placeId ?? "(none)", lat, lng });
+
     let cached: { formatted_address: string | null; lat: number | null; lng: number | null; address_components: unknown } | null = null;
     try {
       const supabase = createAdminClient();
@@ -111,17 +118,24 @@ export async function POST(request: NextRequest) {
     }
 
     let url: string;
-    if (lookupType === "address") {
-      url = `${GEOCODE_BASE}?address=${encodeURIComponent(address!)}&key=${apiKey}`;
-    } else if (lookupType === "place_id") {
-      url = `${GEOCODE_BASE}?place_id=${encodeURIComponent(placeId!)}&key=${apiKey}`;
-    } else {
+    if (lookupType === "address" && typeof address === "string") {
+      url = `${GEOCODE_BASE}?address=${encodeURIComponent(address)}&key=${apiKey}`;
+    } else if (lookupType === "place_id" && typeof placeId === "string") {
+      url = `${GEOCODE_BASE}?place_id=${encodeURIComponent(placeId)}&key=${apiKey}`;
+    } else if (lookupType === "reverse" && Number.isFinite(lat) && Number.isFinite(lng)) {
       url = `${GEOCODE_BASE}?latlng=${lat},${lng}&key=${apiKey}`;
+    } else {
+      console.error("[geocode] Invalid URL params:", { lookupType, address, placeId, lat, lng });
+      return NextResponse.json({ error: "Invalid geocode parameters" }, { status: 400 });
     }
+
+    const urlSafe = url.replace(/key=[^&]+/, "key=***");
+    console.log("[geocode] Google URL:", urlSafe);
 
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     const data = (await res.json()) as {
       status: string;
+      error_message?: string;
       results?: Array<{
         formatted_address?: string;
         address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
@@ -129,6 +143,13 @@ export async function POST(request: NextRequest) {
         place_id?: string;
       }>;
     };
+
+    console.log("[geocode] Google API response:", {
+      status: data.status,
+      error_message: data.error_message ?? "(none)",
+      results_count: data.results?.length ?? 0,
+      full: JSON.stringify(data),
+    });
 
     if (data.status !== "OK" || !data.results?.[0]) {
       return NextResponse.json(

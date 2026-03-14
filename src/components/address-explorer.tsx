@@ -960,6 +960,17 @@ export const AddressExplorer = () => {
     setIsPropertyValueChoiceOpen(true);
   }, []);
 
+  const runSupabaseTest = React.useCallback(async (): Promise<string> => {
+    try {
+      const res = await fetch("/api/supabase-test", { method: "POST" });
+      const data = (await res.json()) as { success?: boolean; error?: string; message?: string };
+      if (data.success) return "Supabase OK – test record saved to cached_locations.";
+      return `Supabase test failed: ${data.error ?? "unknown"}`;
+    } catch (e) {
+      return `Supabase test failed: ${e instanceof Error ? e.message : "network error"}`;
+    }
+  }, []);
+
   const handlePropertyValueYes = React.useCallback(async () => {
     setIsPropertyValueChoiceOpen(false);
     if (!currentLocation) {
@@ -969,7 +980,8 @@ export const AddressExplorer = () => {
     try {
       const { results, status } = await geocodeRequest({ location: currentLocation });
       if (status !== "OK" || !results?.[0]) {
-        setLocationNotice("Could not resolve your location. Try searching an address instead.");
+        const supabaseResult = await runSupabaseTest();
+        setLocationNotice(`Could not resolve your location. ${supabaseResult}`);
         return;
       }
       const formattedAddress = results[0].formatted_address ?? `${currentLocation.lat.toFixed(5)}, ${currentLocation.lng.toFixed(5)}`;
@@ -982,9 +994,10 @@ export const AddressExplorer = () => {
       map?.panTo(currentLocation);
       map?.setZoom(17);
     } catch {
-      setLocationNotice("Unable to get your address. Try searching instead.");
+      const supabaseResult = await runSupabaseTest();
+      setLocationNotice(`Unable to get your address. ${supabaseResult}`);
     }
-  }, [currentLocation, geocodeRequest, map]);
+  }, [currentLocation, geocodeRequest, map, runSupabaseTest]);
 
   const handlePropertyValueNo = React.useCallback(() => {
     setIsPropertyValueChoiceOpen(false);
@@ -999,7 +1012,8 @@ export const AddressExplorer = () => {
       try {
         const { results, status } = await geocodeRequest({ placeId: prediction.placeId });
         if (status !== "OK" || !results?.[0]) {
-          setError("Unable to resolve the selected address.");
+          const supabaseResult = await runSupabaseTest();
+          setError(`Unable to resolve the selected address. ${supabaseResult}`);
           return;
         }
         const location = results[0].geometry.location;
@@ -1023,10 +1037,11 @@ export const AddressExplorer = () => {
         map?.setZoom(17);
         searchNearbyRestaurants(nextCenter);
       } catch {
-        setError("Google Maps geocoding is unavailable right now.");
+        const supabaseResult = await runSupabaseTest();
+        setError(`Google Maps geocoding is unavailable right now. ${supabaseResult}`);
       }
     },
-    [geocodeRequest, hydrateSearchContext, map, propertyValueAddressQuery, searchNearbyRestaurants],
+    [geocodeRequest, hydrateSearchContext, map, propertyValueAddressQuery, runSupabaseTest, searchNearbyRestaurants],
   );
 
   const handleSelectSearchPrediction = React.useCallback(
