@@ -972,9 +972,54 @@ export const AddressExplorer = () => {
 
   const showRestoreButton = Boolean(selectedBuilding || dismissedBuilding || center || currentLocation);
 
-  const handleShowPropertyValueCard = React.useCallback(() => {
-    setIsPropertyValueChoiceOpen(true);
-  }, []);
+  const handlePropertyValueButtonClick = React.useCallback(() => {
+    if (selectedBuilding) {
+      dismissSelectedBuilding();
+    } else if (dismissedBuilding) {
+      setSelectedBuilding(dismissedBuilding);
+      setDismissedBuilding(null);
+    } else {
+      setIsPropertyValueChoiceOpen(true);
+    }
+  }, [dismissedBuilding, selectedBuilding, dismissSelectedBuilding]);
+
+  const handlePropertyValueCurrentLocation = React.useCallback(async () => {
+    if (!navigator.geolocation) {
+      setLocationNotice("Location is not supported. Search an address instead.");
+      return;
+    }
+    setIsWaitingForLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const loc = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setIsWaitingForLocation(false);
+        setCurrentLocation(loc);
+        setCenter(loc);
+        map?.panTo(loc);
+        map?.setZoom(17);
+        try {
+          const { results, status } = await geocodeRequest({ location: loc });
+          if (status !== "OK" || !results?.[0]) {
+            setLocationNotice("Could not resolve your address. Try searching instead.");
+            return;
+          }
+          const formattedAddress = results[0].formatted_address ?? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`;
+          setSelectedBuilding(
+            getPropertyInsight(loc, formattedAddress, results[0].address_components),
+          );
+          setDismissedBuilding(null);
+          setQuery(formattedAddress);
+        } catch {
+          setLocationNotice("Unable to get your address. Try searching instead.");
+        }
+      },
+      (err) => {
+        setIsWaitingForLocation(false);
+        handleGeolocationError(err);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    );
+  }, [geocodeRequest, handleGeolocationError, map]);
 
   const handlePropertyValueYes = React.useCallback(async () => {
     setIsPropertyValueChoiceOpen(false);
@@ -2143,6 +2188,17 @@ export const AddressExplorer = () => {
             </>
           )}
 
+          <div className="pointer-events-none absolute left-3 top-4 z-30 flex flex-col items-start gap-2">
+            <button
+              type="button"
+              onClick={handleRecenterToLocation}
+              className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-black/80 px-3 py-2 text-xs font-medium text-sky-200 shadow-lg shadow-sky-500/10 backdrop-blur hover:bg-[#151515]"
+            >
+              <span className="size-2.5 rounded-full bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.8)]" />
+              <span>Recenter</span>
+            </button>
+          </div>
+
           <div className="pointer-events-none absolute right-3 top-4 z-30 flex flex-col items-end gap-2">
             <button
               type="button"
@@ -2174,14 +2230,6 @@ export const AddressExplorer = () => {
                   <span>Restaurants nearby</span>
                 </>
               )}
-            </button>
-            <button
-              type="button"
-              onClick={handleRecenterToLocation}
-              className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-black/80 px-3 py-2 text-xs font-medium text-sky-200 shadow-lg shadow-sky-500/10 backdrop-blur hover:bg-[#151515]"
-            >
-              <span className="size-2.5 rounded-full bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.8)]" />
-              <span>Recenter</span>
             </button>
           </div>
 
@@ -2245,17 +2293,25 @@ export const AddressExplorer = () => {
           ) : null}
 
           {showRestoreButton ? (
-            <div className="pointer-events-none absolute bottom-3 left-1/2 z-[5] -translate-x-1/2">
-              <div className="pointer-events-auto">
+            <div className="pointer-events-none absolute bottom-3 left-1/2 z-[5] flex -translate-x-1/2 flex-col items-center gap-2">
+              <div className="pointer-events-auto flex flex-col items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleShowPropertyValueCard}
-                  aria-label="Show property value"
-                  title="Show property value"
+                  onClick={handlePropertyValueButtonClick}
+                  aria-label={selectedBuilding ? "Hide property value" : "Show property value"}
+                  title={selectedBuilding ? "Hide property value" : "Show property value"}
                   className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-amber-400 px-4 py-2 text-sm font-semibold text-black shadow-xl shadow-amber-500/20 ring-1 ring-amber-200/60 transition-colors hover:bg-amber-300"
                 >
                   <BadgeDollarSign className="size-5 shrink-0 stroke-[2.4] text-black" />
                   <span>Property Value</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePropertyValueCurrentLocation}
+                  disabled={isWaitingForLocation}
+                  className="text-xs text-amber-300/90 underline-offset-2 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isWaitingForLocation ? "Getting location..." : "Search the value of your current location"}
                 </button>
               </div>
             </div>
