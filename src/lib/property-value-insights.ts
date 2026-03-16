@@ -62,10 +62,16 @@ export async function getPropertyValueInsights(
       };
     }
   } else if (!city || !street) {
-    return {
-      message: "Address must include city and street. Coordinates should be resolved to a structured address first.",
-      error: "INVALID_INPUT",
-    };
+    const isFR = code === "FR";
+    const hasPostcodeOrStreet = !!(postcode?.trim() || street?.trim());
+    if (isFR && hasPostcodeOrStreet) {
+      // France: allow postcode + street (house number optional)
+    } else if (!isFR) {
+      return {
+        message: "Address must include city and street. Coordinates should be resolved to a structured address first.",
+        error: "INVALID_INPUT",
+      };
+    }
   }
 
   const provider = getPropertyDataProvider(countryCode);

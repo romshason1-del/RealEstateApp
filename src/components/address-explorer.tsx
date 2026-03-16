@@ -100,6 +100,10 @@ type BuildingInsight = {
   rawInputAddress?: string;
   /** UK: Google formatted_address from selected suggestion */
   selectedFormattedAddress?: string;
+  /** France: exact typed address when user pressed Enter (sent to API as-is) */
+  typedAddressForFrance?: string;
+  /** France: postcode from Google address_components (avoids "Postcode required" when formatted_address omits it) */
+  postcode?: string;
 };
 
 type GeocodeResult = {
@@ -296,12 +300,19 @@ function resolveCountryProfile(address: string): CountryProfile {
   }
 
   if (
-    /france|paris|lyon|marseille|nice|bordeaux/.test(normalizedAddress)
+    /france|paris|lyon|marseille|nice|bordeaux|chaley|delivr|promenade des anglais/.test(normalizedAddress)
   ) {
     return {
       countryCode: "FR",
       currencySymbol: "€",
-      providerLabel: "RentCast Global Mock",
+      providerLabel: "DVF (data.gouv.fr)",
+    };
+  }
+  if (/,\s*\d{4,5}\s+[a-z\u00e0-\u00ff\s'-]+$/i.test(normalizedAddress) && !/uk|england|usa|italy|spain|israel|deutschland|germany/.test(normalizedAddress)) {
+    return {
+      countryCode: "FR",
+      currencySymbol: "€",
+      providerLabel: "DVF (data.gouv.fr)",
     };
   }
 
@@ -383,6 +394,11 @@ function hasSpecificHouseNumber(
   return /\b\d+[A-Za-z]?\b/.test(address);
 }
 
+function extractPostcodeFromComponents(components?: GeocodeAddressComponent[]): string | undefined {
+  const postal = components?.find((c) => c.types.includes("postal_code"));
+  return postal?.long_name?.trim() || postal?.short_name?.trim() || undefined;
+}
+
 function getPropertyInsight(
   position: LatLng,
   address: string,
@@ -403,6 +419,7 @@ function getPropertyInsight(
       4) *
       Math.max(25000, Math.round(streetAverageValueNumber * 0.012));
   const requiresHouseNumber = !hasSpecificHouseNumber(address, addressComponents);
+  const postcode = countryProfile.countryCode === "FR" ? extractPostcodeFromComponents(addressComponents) : undefined;
 
   return {
     position,
@@ -427,6 +444,7 @@ function getPropertyInsight(
       ? "Please add a house number for an accurate valuation"
       : null,
     lastTransactions: insight.lastTransactions,
+    ...(postcode ? { postcode } : {}),
   };
 }
 
@@ -706,7 +724,8 @@ export const AddressExplorer = () => {
   const handleSearch = React.useCallback(async () => {
     if (!query.trim()) return;
 
-    const normalizedQuery = query.trim().toLowerCase();
+    const typedAddress = query.trim();
+    const normalizedQuery = typedAddress.toLowerCase();
     if (
       normalizedQuery === "near me" ||
       normalizedQuery === "near me restaurant" ||
@@ -734,10 +753,30 @@ export const AddressExplorer = () => {
 
     try {
       const { results, status } = await geocodeRequest({
-        address: query.trim(),
+        address: typedAddress,
       });
 
       if (status !== "OK" || !results?.[0]) {
+        const countryProfile = resolveCountryProfile(typedAddress);
+        if (countryProfile.countryCode === "FR") {
+          const franceCenter = { lat: 46.603354, lng: 1.888334 };
+          setSearchPredictions([]);
+          setIsSearchDropdownOpen(false);
+          setQuery(typedAddress);
+          setCenter(franceCenter);
+          setSelectedRestaurant(null);
+          setRestaurants([]);
+          restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
+          restaurantMarkersRef.current = [];
+          const insight = getPropertyInsight(franceCenter, typedAddress);
+          setSelectedBuilding({ ...insight, typedAddressForFrance: typedAddress });
+          setDismissedBuilding(null);
+          setError(null);
+          hydrateSearchContext(franceCenter, typedAddress);
+          map?.panTo(franceCenter);
+          map?.setZoom(10);
+          return;
+        }
         setError("Location not found. Try a different address or city.");
         return;
       }
@@ -747,7 +786,9 @@ export const AddressExplorer = () => {
         setError("Location not found. Try a different address or city.");
         return;
       }
-      const formattedAddress = results[0].formatted_address ?? query.trim();
+      const formattedAddress = results[0].formatted_address ?? typedAddress;
+      const countryProfile = resolveCountryProfile(formattedAddress);
+      const addressForCard = countryProfile.countryCode === "FR" ? typedAddress : formattedAddress;
 
       setSearchPredictions([]);
       setQuery(formattedAddress);
@@ -756,9 +797,11 @@ export const AddressExplorer = () => {
       setRestaurants([]);
       restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
       restaurantMarkersRef.current = [];
-      setSelectedBuilding(
-        getPropertyInsight(nextCenter, formattedAddress, results[0].address_components),
-      );
+      const insight = getPropertyInsight(nextCenter, addressForCard, results[0].address_components);
+      setSelectedBuilding({
+        ...insight,
+        typedAddressForFrance: countryProfile.countryCode === "FR" ? typedAddress : undefined,
+      });
       setDismissedBuilding(null);
       setError(null);
       hydrateSearchContext(nextCenter, formattedAddress);
@@ -2287,6 +2330,8 @@ export const AddressExplorer = () => {
               onClose={dismissSelectedBuilding}
               rawInputAddress={selectedBuilding.rawInputAddress}
               selectedFormattedAddress={selectedBuilding.selectedFormattedAddress}
+              typedAddressForFrance={selectedBuilding.typedAddressForFrance}
+              postcode={selectedBuilding.postcode}
               isSaved={isPropertySaved(selectedBuilding.address)}
               onToggleSave={() =>
                 toggleSavedProperty({

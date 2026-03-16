@@ -164,6 +164,49 @@ export function parseUKAddressFromFullString(
   return { houseNumber, street, city, postcode };
 }
 
+/**
+ * French address format: "15 Promenade des Anglais, 06000 Nice" or "15, DES ANGLAIS, 6000 NICE"
+ * Also handles Google Places: "Rue Anatole France, 10000 Troyes, France", "Troyes, 10000", etc.
+ * Extracts houseNumber, street, city, postcode (code postal: 4-5 digits).
+ */
+export function parseFRAddressFromFullString(
+  address: string
+): { houseNumber: string; street: string; city: string; postcode: string } {
+  const trimmed = address.trim().replace(/\s+/g, " ");
+  const withoutFR = trimmed.replace(/,?\s*(France|FR)\s*$/i, "").trim();
+  if (!withoutFR) return { houseNumber: "", street: "", city: "", postcode: "" };
+
+  // Primary: "10000 Troyes" or "06000 Nice" at end
+  const postcodeMatch = withoutFR.match(/\b(\d{4,5})\s+([A-Za-zÀ-ÿ\s'-]+)\s*$/);
+  let postcode = "";
+  let city = "";
+  let beforePostcode = withoutFR;
+  if (postcodeMatch) {
+    postcode = postcodeMatch[1];
+    city = postcodeMatch[2].trim();
+    beforePostcode = withoutFR.slice(0, postcodeMatch.index).trim().replace(/,\s*$/, "");
+  }
+
+  // Fallback: extract postcode from anywhere (Google "Troyes, 10000" or "10000" standalone)
+  if (!postcode) {
+    const fiveDigit = withoutFR.match(/\b(\d{5})\b/);
+    const fourDigit = withoutFR.match(/\b([1-9]\d{3})\b/);
+    if (fiveDigit) {
+      postcode = fiveDigit[1];
+    } else if (fourDigit) {
+      postcode = "0" + fourDigit[1];
+    }
+  }
+
+  const parts = beforePostcode.split(",").map((p) => p.trim()).filter(Boolean);
+  const houseMatch = (parts[0] ?? "").match(/^(\d+[A-Za-z]?)\s*(.*)$/);
+  const houseNumber = houseMatch ? houseMatch[1] : "";
+  const streetPart = houseMatch ? houseMatch[2].trim() : (parts[0] ?? "");
+  const street = streetPart || (parts.length >= 2 ? parts.slice(1).join(", ") : "");
+
+  return { houseNumber, street, city, postcode };
+}
+
 /** Remove unit/apartment suffixes from address for better property matching */
 export function stripUSAddressUnitSuffixes(address: string): string {
   return address

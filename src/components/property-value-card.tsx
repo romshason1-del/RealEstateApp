@@ -5,7 +5,7 @@ import { X, FileText, Sparkles, Building2, BadgeCheck, Bug, ChevronDown, Chevron
 import { HeartButton } from "@/components/heart-button";
 import { calculatePropertyValue } from "@/lib/property-value";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
-import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "@/lib/address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString } from "@/lib/address-parse";
 import { toCanonicalAddress } from "@/lib/address-canonical";
 import { toEnglishDisplay, sanitizeForDisplay } from "@/lib/display-utils";
 
@@ -21,6 +21,10 @@ export type PropertyValueCardProps = {
   rawInputAddress?: string;
   /** UK only: Google formatted_address from selected suggestion */
   selectedFormattedAddress?: string;
+  /** France: exact typed address when user pressed Enter (bypasses Google formatting) */
+  typedAddressForFrance?: string;
+  /** France: postcode from Google address_components (avoids "Postcode required") */
+  postcode?: string;
 };
 
 function formatSaleDate(dateStr: string | null): string {
@@ -85,12 +89,12 @@ function CollapsibleSection({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between px-2 py-0.5 sm:px-3 sm:py-1.5 text-left text-[9px] uppercase tracking-wider text-zinc-400/90 hover:bg-zinc-500/10 transition-colors"
+        className="flex w-full items-center justify-between px-2 py-0.5 sm:px-2 sm:py-1 text-left text-[8px] uppercase tracking-wider text-zinc-400/90 hover:bg-zinc-500/10 transition-colors"
       >
         <span>{title}{count != null && count > 0 ? ` (${count})` : ""}</span>
         {open ? <ChevronUp className="size-3 shrink-0" /> : <ChevronDown className="size-3 shrink-0" />}
       </button>
-      {open && <div className="border-t border-zinc-500/20 px-2 py-1 sm:px-3 sm:py-1.5">{children}</div>}
+      {open && <div className="border-t border-zinc-500/20 px-2 py-1 sm:px-2 sm:py-1">{children}</div>}
     </div>
   );
 }
@@ -352,27 +356,40 @@ export function PropertyValueCard({
   onToggleSave,
   rawInputAddress,
   selectedFormattedAddress,
+  typedAddressForFrance,
+  postcode,
 }: PropertyValueCardProps) {
   const isIsrael = countryCode === "IL";
   const isUS = countryCode === "US";
   const isUK = countryCode === "UK" || countryCode === "GB";
   const isIT = countryCode === "IT";
   const isFR = countryCode === "FR";
-  /** FR temporarily disabled: DVF source (api.cquest.org) unreliable (502). Re-enable by adding isFR to hasOfficialProvider when stable. */
-  const hasOfficialProvider = isIsrael || isUS || isUK || isIT;
+  const hasOfficialProvider = isIsrael || isUS || isUK || isIT || isFR;
   const mockData = React.useMemo(
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
   );
-  const { data: insightsData, isLoading } = usePropertyValueInsights(address, countryCode, {
+  const addressForApi = isFR && typedAddressForFrance?.trim() ? typedAddressForFrance.trim() : address;
+  const [aptNumber, setAptNumber] = React.useState("");
+  const [searchApt, setSearchApt] = React.useState<string | undefined>(undefined);
+  const [aptSearchTrigger, setAptSearchTrigger] = React.useState(0);
+  const { data: insightsData, isLoading, refetch } = usePropertyValueInsights(addressForApi, countryCode, {
     latitude: position?.lat,
     longitude: position?.lng,
     countryCode,
     rawInputAddress,
     selectedFormattedAddress,
+    aptNumber: searchApt,
+    refetchTrigger: aptSearchTrigger,
+    postcode: isFR ? postcode : undefined,
   });
 
   const [debugMode, setDebugMode] = React.useState(false);
+  const multipleUnits = insightsData && "multiple_units" in insightsData && (insightsData as { multiple_units?: boolean }).multiple_units === true;
+  const promptForApartment = insightsData && "prompt_for_apartment" in insightsData && (insightsData as { prompt_for_apartment?: boolean }).prompt_for_apartment === true;
+  const apartmentNotMatched = insightsData && "apartment_not_matched" in insightsData && (insightsData as { apartment_not_matched?: boolean }).apartment_not_matched === true;
+  const availableLots = insightsData && "available_lots" in insightsData ? (insightsData as { available_lots?: string[] }).available_lots : undefined;
+  const averageBuildingValue = insightsData && "average_building_value" in insightsData ? (insightsData as { average_building_value?: number }).average_building_value : undefined;
   const hasPropertyData = insightsData?.address != null;
   const hasUSData =
     isUS &&
@@ -406,7 +423,11 @@ export function PropertyValueCard({
   const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number; median_rent?: number; population_growth_percent?: number; income_growth_percent?: number } }).neighborhood_stats : undefined;
   const investmentMetrics = insightsData && "investment_metrics" in insightsData ? (insightsData as { investment_metrics?: { median_rent: number; gross_rent_yield_percent?: number; estimated_roi_percent?: number; median_price_per_sqft?: number } }).investment_metrics : undefined;
   const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
-  const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" }).data_source : undefined;
+  const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" | "properties_france" }).data_source : undefined;
+  const surfaceReelleBati = insightsData && "surface_reelle_bati" in insightsData ? (insightsData as { surface_reelle_bati?: number | null }).surface_reelle_bati : undefined;
+  const lotNumber = insightsData && "lot_number" in insightsData ? (insightsData as { lot_number?: string | null }).lot_number : undefined;
+  const buildingSales = insightsData && "building_sales" in insightsData ? (insightsData as { building_sales?: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number?: string | null }> }).building_sales : undefined;
+  const isFranceData = dataSource === "properties_france" || isFR;
   const dataSources = insightsData && "data_sources" in insightsData ? (insightsData as { data_sources?: ("RentCast" | "Zillow" | "Redfin")[] }).data_sources : undefined;
   const usMatchConfidence = insightsData && "us_match_confidence" in insightsData ? (insightsData as { us_match_confidence?: "high" | "medium" | "low" }).us_match_confidence : undefined;
   const isAreaLevelEstimate = insightsData && "is_area_level_estimate" in insightsData ? (insightsData as { is_area_level_estimate?: boolean }).is_area_level_estimate : undefined;
@@ -432,8 +453,6 @@ export function PropertyValueCard({
   const usMarketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { change_1y_percent: number } }).market_trend : undefined;
   const inventorySignal = insightsData && "inventory_signal" in insightsData ? (insightsData as { inventory_signal?: number | null }).inventory_signal : undefined;
   const daysOnMarket = insightsData && "days_on_market" in insightsData ? (insightsData as { days_on_market?: number | null }).days_on_market : undefined;
-  const itOmi = insightsData && "it_omi" in insightsData ? (insightsData as { it_omi?: { omi_zone_used?: string } }).it_omi : undefined;
-  const itOmiZoneUsed = itOmi?.omi_zone_used;
   const ukLandRegistryRaw = insightsData && "uk_land_registry" in insightsData ? (insightsData as { uk_land_registry?: { building_average_price: number | null; transactions_in_building: number; latest_building_transaction: { price: number; date: string; property_type?: string } | null; latest_nearby_transaction?: { price: number; date: string; property_type?: string } | null; has_building_match: boolean; average_area_price: number | null; median_area_price?: number | null; price_trend?: { change_1y_percent: number; ref_month?: string } | null; area_data_source?: "land_registry" | "HPI"; area_transaction_count: number; area_fallback_level: "postcode" | "outward_postcode" | "postcode_area" | "street" | "locality" | "none"; fallback_level_used?: "building" | "postcode" | "locality" | "area"; match_confidence?: "high" | "medium" | "low" } }).uk_land_registry : undefined;
   const ukLandRegistryFallback =
     isUK && insightsData != null && !ukLandRegistryRaw
@@ -477,6 +496,16 @@ export function PropertyValueCard({
         country: "UK",
       };
     }
+    if (countryCode === "FR") {
+      const fr = parseFRAddressFromFullString(address);
+      return {
+        city: fr.city,
+        street: fr.street,
+        houseNumber: fr.houseNumber,
+        zip: fr.postcode,
+        country: "FR",
+      };
+    }
     const g = parseAddressFromFullString(address);
     return { city: g.city, street: g.street, houseNumber: g.houseNumber };
   }, [address, countryCode]);
@@ -506,22 +535,22 @@ export function PropertyValueCard({
   return (
     <div
       className={[
-        "pointer-events-none absolute inset-x-4 bottom-4 z-20 flex justify-end transition-all duration-300 ease-out",
+        "pointer-events-none absolute right-4 bottom-6 left-auto z-20 flex flex-col justify-end transition-all duration-300 ease-out",
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
     >
-      <div className="pointer-events-auto flex max-h-[55vh] sm:max-h-[65vh] w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl sm:max-w-[380px]">
-        <div className="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-2 border-b border-amber-400/15 bg-black/90 px-2 py-1.5 sm:px-3 sm:py-2">
+      <div className="pointer-events-auto flex w-[340px] max-w-[92vw] sm:w-[360px] sm:max-w-[380px] shrink-0 min-h-0 max-h-[min(42vh,calc(100vh-6rem))] flex-col overflow-hidden rounded-xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl">
+        <div className="flex shrink-0 items-start justify-between gap-1.5 border-b border-amber-400/15 bg-black/90 px-2 py-1 sm:px-2.5 sm:py-1">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <div className="text-[9px] uppercase tracking-[0.2em] text-amber-400/90">Property Value</div>
+            <div className="flex items-center gap-1.5">
+              <div className="text-[8px] uppercase tracking-[0.15em] text-amber-400/90">Property Value</div>
               {dataSource === "mock" && (
                 <span className="rounded border border-amber-500/50 bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">
                   Mock Data Mode
                 </span>
               )}
             </div>
-            <div className="mt-0.5 truncate text-xs font-semibold text-white">{toEnglishDisplay(displayAddress)}</div>
+            <div className="mt-0.5 truncate text-[11px] font-medium text-white">{toEnglishDisplay(displayAddress)}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {hasOfficialProvider && (
@@ -542,70 +571,224 @@ export function PropertyValueCard({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl bg-amber-400/5 px-2 py-1.5 sm:px-3 sm:py-2.5">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden rounded-b-xl bg-amber-400/5 px-2 py-1 sm:px-2.5 sm:py-1 overscroll-contain">
           {isLoading && hasOfficialProvider ? (
-            <div className="py-1.5 text-xs sm:text-sm text-amber-200/70">Loading official data…</div>
+            <div className="space-y-2 animate-pulse">
+              <div className="h-4 w-32 rounded bg-zinc-600/40" />
+              <div className="h-6 w-40 rounded bg-zinc-600/50" />
+              <div className="h-3 w-full max-w-[200px] rounded bg-zinc-600/30" />
+              <div className="mt-3 h-16 rounded-lg border border-zinc-500/20 bg-zinc-500/5" />
+              <div className="h-12 rounded-lg border border-zinc-500/20 bg-zinc-500/5" />
+              <div className="h-12 rounded-lg border border-zinc-500/20 bg-zinc-500/5" />
+            </div>
           ) : !hasOfficialProvider ? (
-            <div className="space-y-1">
-              <div className="text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-amber-300/80">Estimated Value</div>
-              <div className="text-base font-bold text-amber-400 sm:text-lg">{formatCurrency(mockData.valueNumber, currencySymbol)}</div>
-              <div className="text-[11px] sm:text-xs text-zinc-400">
+            <div className="space-y-0.5">
+              <div className="text-[8px] uppercase tracking-[0.15em] text-amber-300/80">Estimated Value</div>
+              <div className="text-sm font-bold text-amber-400">{formatCurrency(mockData.valueNumber, currencySymbol)}</div>
+              <div className="text-[10px] text-zinc-400">
                 {mockData.pricePerSqm.toLocaleString()} {currencySymbol}/ sqm
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
           ) : unitRequired ? (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5 text-amber-300/90">
-                <Building2 className="size-3 shrink-0" aria-hidden />
-                <span className="text-xs font-medium">Unit number required</span>
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-1 text-amber-300/90">
+                <Building2 className="size-2.5 shrink-0" aria-hidden />
+                <span className="text-[11px] font-medium">Unit number required</span>
               </div>
-              <p className="text-[11px] text-zinc-400">
+              <p className="text-[10px] text-zinc-400">
                 This building requires a unit number to retrieve property data.
               </p>
             </div>
           ) : noDataAvailable ? (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5 text-amber-300/90">
-                <FileText className="size-3 shrink-0" aria-hidden />
-                <span className="text-xs font-medium">No Data Available</span>
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-1 text-amber-300/90">
+                <FileText className="size-2.5 shrink-0" aria-hidden />
+                <span className="text-[11px] font-medium">No Data Available</span>
               </div>
-              <p className="text-[11px] text-zinc-400">
+              <p className="text-[10px] text-zinc-400">
                 No AVM estimate or sale history could be retrieved for this address.
               </p>
             </div>
-          ) : isFR && propertyResult ? (
-            <div className="space-y-2">
-              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Estimated value for this property</div>
-                <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+          ) : isFranceData && multipleUnits ? (
+            <div className="space-y-1">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1">
+                <div className="text-[8px] uppercase tracking-wider text-amber-400/90">Apartment building</div>
+                <p className="mt-0.5 text-[10px] text-zinc-300">Enter apartment/lot number to see exact value.</p>
+                {Array.isArray(availableLots) && availableLots.length > 0 && (
+                  <p className="mt-0.5 text-[9px] text-zinc-400">Available lots: {availableLots.join(", ")}</p>
+                )}
+                <div className="mt-1 flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="Apartment / Lot"
+                    value={aptNumber}
+                    onChange={(e) => setAptNumber(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSearchApt(aptNumber.trim() || undefined);
+                        setAptSearchTrigger((t) => t + 1);
+                      }
+                    }}
+                    className="flex-1 rounded border border-zinc-600 bg-zinc-900/80 px-1.5 py-1 text-[11px] text-white placeholder:text-zinc-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSearchApt(aptNumber.trim() || undefined);
+                      setAptSearchTrigger((t) => t + 1);
+                    }}
+                    className="shrink-0 rounded border border-violet-500/50 bg-violet-500/20 px-2 py-1 text-[10px] font-medium text-violet-300 hover:bg-violet-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? "…" : "Search"}
+                  </button>
+                </div>
+              </div>
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
+                <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Average Building Value</div>
+                <div className="mt-0.5 text-sm font-semibold text-zinc-200">
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-24 animate-pulse rounded bg-zinc-600/40" aria-hidden />
+                  ) : averageBuildingValue != null && averageBuildingValue > 0 ? (
+                    formatCurrency(averageBuildingValue, currencySymbol)
+                  ) : (
+                    "—"
+                  )}
+                </div>
+                <div className="mt-0.5 text-[9px] text-zinc-500">
+                  {aptNumber.trim() ? "Enter lot and Search for exact value" : "Building-level estimate (enter lot for apartment-specific data)"}
+                </div>
+              </div>
+              {Array.isArray(buildingSales) && buildingSales.length > 0 && (
+                <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 overflow-hidden">
+                  <div className="border-b border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Recent sales ({buildingSales.length})</div>
+                  </div>
+                  <div className="max-h-[80px] overflow-y-auto overflow-x-auto">
+                    <table className="w-full text-[9px] sm:text-[10px]">
+                      <thead>
+                        <tr className="border-b border-zinc-500/20 text-left text-zinc-500">
+                          <th className="px-1.5 py-0.5 font-medium">Lot</th>
+                          <th className="px-1.5 py-0.5 font-medium">Date</th>
+                          <th className="px-1.5 py-0.5 font-medium">Type</th>
+                          <th className="px-1.5 py-0.5 font-medium text-right">Price</th>
+                          <th className="px-1.5 py-0.5 font-medium text-right">m²</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {buildingSales.slice(0, 4).map((sale, i) => (
+                          <tr key={i} className="border-b border-zinc-500/10 last:border-0">
+                            <td className="px-1.5 py-0.5 text-zinc-400">{sale.lot_number ?? "—"}</td>
+                            <td className="px-1.5 py-0.5 text-zinc-300">{sale.date ? formatSaleDate(sale.date) : "—"}</td>
+                            <td className="px-1.5 py-0.5 text-zinc-400 truncate max-w-[48px]">{sale.type}</td>
+                            <td className="px-1.5 py-0.5 text-right font-medium text-zinc-200">{formatCurrency(sale.price, currencySymbol)}</td>
+                            <td className="px-1.5 py-0.5 text-right text-zinc-400">{sale.surface != null && sale.surface > 0 ? sale.surface : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : isFranceData && propertyResult ? (
+            <div className="space-y-1">
+              {promptForApartment && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1">
+                  <div className="text-[8px] uppercase tracking-wider text-amber-400/90">
+                    {apartmentNotMatched ? "Apartment not found" : "Multiple units"}
+                  </div>
+                  <p className="mt-0.5 text-[10px] text-zinc-300">
+                    {apartmentNotMatched
+                      ? "Enter a different apartment/lot number to see exact value."
+                      : "Enter apartment/lot number to see exact value."}
+                  </p>
+                  {Array.isArray(availableLots) && availableLots.length > 0 && (
+                    <p className="mt-0.5 text-[9px] text-zinc-400">Available lots: {availableLots.join(", ")}</p>
+                  )}
+                  <div className="mt-1 flex gap-1.5">
+                    <input
+                      type="text"
+                      placeholder="Apartment / Lot"
+                      value={aptNumber}
+                      onChange={(e) => setAptNumber(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSearchApt(aptNumber.trim() || undefined);
+                          setAptSearchTrigger((t) => t + 1);
+                        }
+                      }}
+                      className="flex-1 rounded border border-zinc-600 bg-zinc-900/80 px-1.5 py-1 text-[11px] text-white placeholder:text-zinc-500"
+                    />
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSearchApt(aptNumber.trim() || undefined);
+                        setAptSearchTrigger((t) => t + 1);
+                      }}
+                      className="shrink-0 rounded border border-violet-500/50 bg-violet-500/20 px-2 py-1 text-[10px] font-medium text-violet-300 hover:bg-violet-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isLoading ? "…" : "Search"}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1">
+                <div className="text-[8px] uppercase tracking-wider text-violet-400/90">
+                  {propertyResult.value_level === "building-level" ? "Building-level estimate" : "Estimated value"}
+                </div>
+                {lotNumber && (
+                  <div className="mt-0.5 text-[9px] text-zinc-400">Lot: {lotNumber}</div>
+                )}
+                <div className="mt-0.5 text-sm font-semibold text-violet-300">
                   {propertyResult.exact_value != null && propertyResult.exact_value > 0
                     ? formatCurrency(propertyResult.exact_value, currencySymbol)
-                    : propertyResult.exact_value_message ?? "No DVF data for this area"}
+                    : (propertyResult.exact_value_message ?? "No DVF data for this area")}
                 </div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">
-                  Based on official DVF transaction data
-                </div>
+                {apartmentNotMatched && propertyResult.exact_value_message && (
+                  <div className="mt-0.5 text-[9px] text-amber-400/90">{propertyResult.exact_value_message}</div>
+                )}
+                {surfaceReelleBati != null && surfaceReelleBati > 0 && propertyResult.exact_value != null && propertyResult.exact_value > 0 && (
+                  <div className="mt-0.5 text-[9px] text-zinc-400">
+                    Estimated €/m²: {formatCurrency(Math.round(propertyResult.exact_value / surfaceReelleBati), currencySymbol)}/m²
+                  </div>
+                )}
+                <div className="mt-0.5 text-[9px] text-zinc-500">DVF government data</div>
               </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
-                <div className="mt-0.5 text-sm font-medium text-zinc-300">
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
+                <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Last transaction</div>
+                <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                   {propertyResult.last_transaction.amount > 0
-                    ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
-                    : propertyResult.last_transaction.message ?? "No recorded transaction in radius"}
+                    ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · Sold in: ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
+                    : (propertyResult.last_transaction.message ?? "No recorded transaction")}
                 </div>
+                {surfaceReelleBati != null && surfaceReelleBati > 0 && propertyResult.last_transaction.amount > 0 && (
+                  <div className="mt-0.5 text-[9px] text-zinc-400">
+                    Last transaction €/m²: {formatCurrency(Math.round(propertyResult.last_transaction.amount / surfaceReelleBati), currencySymbol)}/m²
+                  </div>
+                )}
               </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average price in this area</div>
-                <div className="mt-0.5 text-sm font-medium text-zinc-300">
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
+                <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Area average</div>
+                <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                   {propertyResult.street_average != null && propertyResult.street_average > 0
                     ? formatCurrency(propertyResult.street_average, currencySymbol)
-                    : propertyResult.street_average_message ?? "No DVF data for this area"}
+                    : (propertyResult.street_average_message ?? "No DVF data for this area")}
                 </div>
               </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Neighborhood livability rating</div>
-                <div className={`mt-0.5 text-sm font-medium ${
+              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
+                <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Livability</div>
+                <div className={`mt-0.5 text-[11px] font-medium ${
                   propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
                   propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
                   propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
@@ -615,7 +798,38 @@ export function PropertyValueCard({
                   {propertyResult.livability_rating}
                 </div>
               </div>
-              <div className="pt-0.5 text-[10px] text-zinc-500">
+              {Array.isArray(buildingSales) && buildingSales.length > 0 && (
+                <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 overflow-hidden">
+                  <div className="border-b border-zinc-500/20 bg-zinc-500/10 px-2 py-0.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Recent sales ({buildingSales.length})</div>
+                  </div>
+                  <div className="max-h-[80px] overflow-y-auto overflow-x-auto">
+                    <table className="w-full text-[9px] sm:text-[10px]">
+                      <thead>
+                        <tr className="border-b border-zinc-500/20 text-left text-zinc-500">
+                          <th className="px-1.5 py-0.5 font-medium">Lot</th>
+                          <th className="px-1.5 py-0.5 font-medium">Date</th>
+                          <th className="px-1.5 py-0.5 font-medium">Type</th>
+                          <th className="px-1.5 py-0.5 font-medium text-right">Price</th>
+                          <th className="px-1.5 py-0.5 font-medium text-right">m²</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {buildingSales.slice(0, 4).map((sale, i) => (
+                          <tr key={i} className="border-b border-zinc-500/10 last:border-0">
+                            <td className="px-1.5 py-0.5 text-zinc-400">{sale.lot_number ?? "—"}</td>
+                            <td className="px-1.5 py-0.5 text-zinc-300">{sale.date ? formatSaleDate(sale.date) : "—"}</td>
+                            <td className="px-1.5 py-0.5 text-zinc-400 truncate max-w-[48px]">{sale.type}</td>
+                            <td className="px-1.5 py-0.5 text-right font-medium text-zinc-200">{formatCurrency(sale.price, currencySymbol)}</td>
+                            <td className="px-1.5 py-0.5 text-right text-zinc-400">{sale.surface != null && sale.surface > 0 ? sale.surface : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              <div className="pt-0.5 text-[9px] text-zinc-500">
                 DVF (Demandes de Valeurs Foncières). DGFiP. Government open data.
               </div>
               {debugMode && hasOfficialProvider && (
@@ -632,34 +846,34 @@ export function PropertyValueCard({
               )}
             </div>
           ) : isIsrael && propertyResult ? (
-            <div className="space-y-2" dir="rtl">
-              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
-                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">שווי נכס כיום</div>
-                <div className="mt-1 text-base font-semibold text-white sm:text-lg">
+            <div className="space-y-1.5" dir="rtl">
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-3 py-2">
+                <div className="text-[9px] font-medium uppercase tracking-wider text-amber-400/90">שווי נכס כיום</div>
+                <div className="mt-0.5 text-sm font-semibold text-white">
                   {propertyResult.exact_value != null && propertyResult.exact_value > 0
                     ? formatCurrency(propertyResult.exact_value, currencySymbol)
                     : propertyResult.exact_value_message ?? "—"}
                 </div>
               </div>
-              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
-                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">מכירה אחרונה</div>
-                <div className="mt-1 text-sm font-medium text-zinc-200">
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-3 py-2">
+                <div className="text-[9px] font-medium uppercase tracking-wider text-amber-400/90">מכירה אחרונה</div>
+                <div className="mt-0.5 text-[11px] font-medium text-zinc-200">
                   {propertyResult.last_transaction.amount > 0
                     ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
                     : propertyResult.last_transaction.message ?? "—"}
                 </div>
               </div>
-              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
-                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">ממוצע רחוב</div>
-                <div className="mt-1 text-sm font-medium text-zinc-200">
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-3 py-2">
+                <div className="text-[9px] font-medium uppercase tracking-wider text-amber-400/90">ממוצע רחוב</div>
+                <div className="mt-0.5 text-[11px] font-medium text-zinc-200">
                   {propertyResult.street_average != null && propertyResult.street_average > 0
                     ? formatCurrency(propertyResult.street_average, currencySymbol)
                     : propertyResult.street_average_message ?? "—"}
                 </div>
               </div>
-              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-4 py-3">
-                <div className="text-[10px] font-medium uppercase tracking-wider text-amber-400/90">איכות השכונה</div>
-                <div className={`mt-1 text-sm font-medium ${
+              <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-3 py-2">
+                <div className="text-[9px] font-medium uppercase tracking-wider text-amber-400/90">איכות השכונה</div>
+                <div className={`mt-0.5 text-[11px] font-medium ${
                   propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
                   propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
                   propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
@@ -682,68 +896,9 @@ export function PropertyValueCard({
                 </CollapsibleSection>
               )}
             </div>
-          ) : (isIT || propertyResult?.last_transaction?.message === "Not yet available in Italy") ? (
-            <div className="space-y-2">
-              {propertyResult ? (
-                <>
-              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-violet-400/90">Estimated value for this property</div>
-                <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
-                  {propertyResult.exact_value != null && propertyResult.exact_value > 0
-                    ? formatCurrency(propertyResult.exact_value, currencySymbol)
-                    : propertyResult.exact_value_message ?? "No OMI data for this area"}
-                </div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">
-                  {itOmiZoneUsed ? "Based on official OMI microzone valuations" : "Based on official OMI city-area valuations"}
-                </div>
-              </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
-                <div className="mt-0.5 text-sm font-medium text-zinc-300">
-                  Not available in Italy yet
-                </div>
-              </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average price in this area</div>
-                <div className="mt-0.5 text-sm font-medium text-zinc-300">
-                  {propertyResult.street_average != null && propertyResult.street_average > 0
-                    ? formatCurrency(propertyResult.street_average, currencySymbol)
-                    : propertyResult.street_average_message ?? "No OMI data for this area"}
-                </div>
-              </div>
-              <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Neighborhood livability rating</div>
-                <div className={`mt-0.5 text-sm font-medium ${
-                  propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
-                  propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
-                  propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
-                  propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
-                  "text-zinc-400"
-                }`}>
-                  {propertyResult.livability_rating}
-                </div>
-              </div>
-              <div className="pt-0.5 text-[10px] text-zinc-500">
-                OMI (Osservatorio del Mercato Immobiliare). Agenzia delle Entrate. Government open data.
-              </div>
-              {debugMode && hasOfficialProvider && (
-                <CollapsibleSection title="Debug Info">
-                  <DebugPanel
-                    address={address}
-                    parsed={parsedLocal}
-                    canonical={canonicalLocal}
-                    insightsData={insightsData}
-                    latest={latest}
-                    currencySymbol={currencySymbol}
-                  />
-                </CollapsibleSection>
-              )}
-                </>
-              ) : (
-                <div className="text-[11px] text-zinc-500">
-                  {isLoading ? "Loading property data…" : "No OMI data for this area."}
-                </div>
-              )}
+          ) : isFranceData ? (
+            <div className="text-[11px] text-zinc-500">
+              {isLoading ? "Loading property data…" : "No DVF data for this area."}
             </div>
           ) : !hasPropertyData && !ukLandRegistry ? (
             <div className="space-y-1">
@@ -771,40 +926,40 @@ export function PropertyValueCard({
               )}
             </div>
           ) : isUS ? (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {propertyResult ? (
                 <>
-                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">{getFirstCardWording(propertyResult.value_level).label}</div>
-                    <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-violet-400/90">{getFirstCardWording(propertyResult.value_level).label}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-violet-300">
                       {propertyResult.exact_value != null && propertyResult.exact_value > 0
                         ? formatCurrency(propertyResult.exact_value, currencySymbol)
                         : propertyResult.exact_value_message ?? "No exact property-level value found"}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">{getFirstCardWording(propertyResult.value_level).supportText}</div>
+                    <div className="mt-0.5 text-[9px] text-zinc-500">{getFirstCardWording(propertyResult.value_level).supportText}</div>
                     {propertyResult.value_level && (
-                      <div className="mt-0.5 text-[10px] text-zinc-500/80">Level: {propertyResult.value_level}</div>
+                      <div className="mt-0.5 text-[9px] text-zinc-500/80">Level: {propertyResult.value_level}</div>
                     )}
                   </div>
-                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
-                    <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Last transaction</div>
+                    <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                       {propertyResult.last_transaction.amount > 0
                         ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
                         : propertyResult.last_transaction.message ?? "No recorded transaction found"}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average home price on the same street</div>
-                    <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Street average</div>
+                    <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                       {propertyResult.street_average != null && propertyResult.street_average > 0
                         ? formatCurrency(propertyResult.street_average, currencySymbol)
                         : propertyResult.street_average_message ?? "No street-level average found"}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Neighborhood livability rating</div>
-                    <div className={`mt-0.5 text-sm font-medium ${
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Livability</div>
+                    <div className={`mt-0.5 text-[11px] font-medium ${
                       propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
                       propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
                       propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
@@ -816,7 +971,7 @@ export function PropertyValueCard({
                   </div>
                 </>
               ) : (
-                <div className="text-[11px] text-zinc-500">Loading property data…</div>
+                <div className="text-[10px] text-zinc-500">Loading property data…</div>
               )}
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">
@@ -832,43 +987,43 @@ export function PropertyValueCard({
               )}
             </div>
           ) : isUK && (propertyResult || ukLandRegistry) ? (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {propertyResult ? (
                 <>
-                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-violet-400/90">{getFirstCardWording(propertyResult.value_level).label}</div>
-                    <div className="mt-0.5 text-base font-semibold text-violet-300 sm:text-lg">
+                  <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-violet-400/90">{getFirstCardWording(propertyResult.value_level).label}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-violet-300">
                       {propertyResult.exact_value != null && propertyResult.exact_value > 0
                         ? formatCurrency(propertyResult.exact_value, currencySymbol)
                         : propertyResult.exact_value_message ?? "No exact property-level value found"}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">{getFirstCardWording(propertyResult.value_level).supportText}</div>
+                    <div className="mt-0.5 text-[9px] text-zinc-500">{getFirstCardWording(propertyResult.value_level).supportText}</div>
                     {propertyResult.value_level && propertyResult.value_level !== "no_match" && (
-                      <div className="mt-0.5 text-[10px] text-zinc-500/80">Level: {propertyResult.value_level}</div>
+                      <div className="mt-0.5 text-[9px] text-zinc-500/80">Level: {propertyResult.value_level}</div>
                     )}
                     {propertyResult.value_level === "no_match" && (
-                      <div className="mt-0.5 text-[10px] text-zinc-500">Map location found; no property record</div>
+                      <div className="mt-0.5 text-[9px] text-zinc-500">Map location found; no property record</div>
                     )}
                   </div>
-                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Last recorded transaction</div>
-                    <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Last transaction</div>
+                    <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                       {propertyResult.last_transaction.amount > 0
                         ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
                         : propertyResult.last_transaction.message ?? "No recorded transaction found"}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Average home price on the same street</div>
-                    <div className="mt-0.5 text-sm font-medium text-zinc-300">
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Street average</div>
+                    <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                       {propertyResult.street_average != null && propertyResult.street_average > 0
                         ? formatCurrency(propertyResult.street_average, currencySymbol)
                         : propertyResult.street_average_message ?? "No street-level average found"}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1.5 sm:px-2.5 sm:py-2">
-                    <div className="text-[9px] uppercase tracking-wider text-zinc-400/90">Neighborhood livability rating</div>
-                    <div className={`mt-0.5 text-sm font-medium ${
+                  <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1 sm:px-2 sm:py-1.5">
+                    <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Livability</div>
+                    <div className={`mt-0.5 text-[11px] font-medium ${
                       propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
                       propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
                       propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
@@ -880,9 +1035,9 @@ export function PropertyValueCard({
                   </div>
                 </>
               ) : (
-                <div className="text-[11px] text-zinc-500">Loading property data…</div>
+                <div className="text-[10px] text-zinc-500">Loading property data…</div>
               )}
-              <div className="pt-0.5 text-[10px] text-zinc-500">
+              <div className="pt-0.5 text-[9px] text-zinc-500">
                 {ukLandRegistry?.area_data_source === "HPI"
                   ? "UK House Price Index. ONS / HM Land Registry. Government open data."
                   : "HM Land Registry Price Paid Data. Government open data."}

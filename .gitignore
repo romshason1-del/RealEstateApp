@@ -46,3 +46,12 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+.vercel
+ValeursFoncieres-2022.txt
+ValeursFoncieres-2023.txt
+ValeursFoncieres-2024.txt
+.next
+node_modules
+.vercel
+.env.local

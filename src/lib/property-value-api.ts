@@ -5,7 +5,7 @@
  * Uses ONLY official Israeli government data. Never returns street-level or nearby data.
  */
 
-import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString } from "./address-parse";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString } from "./address-parse";
 import { toCanonicalAddress } from "./address-canonical";
 
 export type PropertyValueInsightsResponse = {
@@ -83,6 +83,17 @@ export type PropertyValueInsightsResponse = {
   data_source?: "live" | "cache" | "mock";
   market_trend?: { hpi_index: number; change_1y_percent: number; latest_date?: string };
   fr_dvf?: { transaction_count: number; radius_used_m: number; price_per_sqm: number | null };
+  /** France: true when multiple units found at address; user must enter apt number */
+  multiple_units?: boolean;
+  /** France: average value across units when multiple_units */
+  average_building_value?: number;
+  /** France: built surface in m² for price/sqm calculation */
+  surface_reelle_bati?: number | null;
+  /** France: sale date (YYYY-MM-DD) for "Sold in: Oct 2023" display */
+  date_mutation?: string | null;
+  /** France: last 5 sales in this building (Date, Type, Price, Surface) */
+  building_sales?: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number?: string | null }>;
+  unit_count?: number;
   uk_land_registry?: {
     building_average_price: number | null;
     transactions_in_building: number;
@@ -138,6 +149,10 @@ export type FetchPropertyValueOptions = {
   rawInputAddress?: string;
   /** UK only: Google formatted_address from selected suggestion */
   selectedFormattedAddress?: string;
+  /** France: apartment/lot number for multi-unit buildings */
+  aptNumber?: string;
+  /** France: postcode from Google address_components (avoids "Postcode required") */
+  postcode?: string;
 };
 
 export async function fetchPropertyValueInsights(
@@ -148,12 +163,25 @@ export async function fetchPropertyValueInsights(
   const lng = options?.longitude;
   const code = (options?.countryCode ?? "").toUpperCase();
   const isUK = code === "UK" || code === "GB";
+  const isFR = code === "FR";
   const raw = (isUK && options?.rawInputAddress) ? `|raw:${options.rawInputAddress.trim()}` : "";
   const sel = (isUK && options?.selectedFormattedAddress) ? `|sel:${options.selectedFormattedAddress.trim()}` : "";
+  const apt = (options?.aptNumber ?? "").trim();
+  const frPostcode = (isFR && options?.postcode) ? `|pc:${options.postcode.trim()}` : "";
+  const normalizeFranceAddress = (a: string) =>
+    a
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/\bprom\.?\b/gi, "promenade")
+      .replace(/\bav\.\b/gi, "avenue")
+      .replace(/\bbd\.\b/gi, "boulevard")
+      .replace(/,/g, " ");
+  const addrForKey = isFR ? normalizeFranceAddress(address) : address.trim().toLowerCase();
   const key =
     Number.isFinite(lat) && Number.isFinite(lng)
-      ? `${address.trim().toLowerCase()}${raw}${sel}|${lat}|${lng}`
-      : `${address.trim().toLowerCase()}${raw}${sel}`;
+      ? `${addrForKey}${raw}${sel}${apt ? `|apt:${apt}` : ""}${frPostcode}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
+      : `${addrForKey}${raw}${sel}${apt ? `|apt:${apt}` : ""}${frPostcode}${isFR ? "|final_v1" : ""}`;
   const cached = CACHE.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.data;
@@ -178,8 +206,8 @@ export async function fetchPropertyValueInsights(
             })()
           : code === "FR"
             ? (() => {
-                const g = parseAddressFromFullString(address);
-                return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: "" };
+                const g = parseFRAddressFromFullString(address);
+                return { city: g.city, street: g.street, houseNumber: g.houseNumber, postcode: g.postcode };
               })()
             : (() => {
               const g = parseAddressFromFullString(address);
@@ -196,7 +224,6 @@ export async function fetchPropertyValueInsights(
     }
   }
   const isIT = code === "IT";
-  const isFR = code === "FR";
   if (!isIT && !isFR && (!parsed.city || !parsed.street)) {
     return {
       message: "no reliable exact match found",
@@ -220,16 +247,10 @@ export async function fetchPropertyValueInsights(
     };
   }
   if (isFR) {
-    const hasCoords = Number.isFinite(options?.latitude) && Number.isFinite(options?.longitude);
-    if (!hasCoords) {
+    const hasPostcodeOrStreet = !!(parsed.postcode?.trim() || parsed.street?.trim());
+    if (!hasPostcodeOrStreet) {
       return {
-        message: "Coordinates required for France (DVF geo lookup). Select a location on the map.",
-        debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
-      };
-    }
-    if (!parsed.city && !parsed.street) {
-      return {
-        message: "City or street required for France. Could not parse from address.",
+        message: "Postcode or street name required for France. Could not parse from address.",
         debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
       };
     }
@@ -246,8 +267,10 @@ export async function fetchPropertyValueInsights(
     }
     if (isUK && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
     if (isUK && options?.selectedFormattedAddress) params.set("selectedFormattedAddress", options.selectedFormattedAddress);
+    if (apt) params.set("apt_number", apt);
+    if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
     const res = await fetch(`/api/property-value?${params.toString()}`, {
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });
     const data: PropertyValueInsightsResponse = await res.json().catch(() => ({
       message: "Invalid response",
@@ -255,8 +278,15 @@ export async function fetchPropertyValueInsights(
     }));
 
     const isUKTimeoutFallback = isUK && (data as { debug?: { failure_reason?: string } }).debug?.failure_reason === "Land Registry timeout";
-    const isFR = code === "FR";
-    const hasValidData = data.address || data.avm_value || data.avm_rent || data.last_sale || data.property_result || data.neighborhood_stats || data.uk_land_registry || (isFR && data.fr_dvf);
+    const hasValidData =
+      data.address ||
+      data.avm_value ||
+      data.avm_rent ||
+      data.last_sale ||
+      data.property_result ||
+      data.neighborhood_stats ||
+      data.uk_land_registry ||
+      (isFR && (data.fr_dvf || data.multiple_units || (Array.isArray(data.building_sales) && data.building_sales.length > 0)));
     if (res.ok && !isUKTimeoutFallback && hasValidData) {
       CACHE.set(key, { data, ts: Date.now() });
     }

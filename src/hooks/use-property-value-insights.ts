@@ -11,10 +11,16 @@ export type UsePropertyValueInsightsOptions = {
   rawInputAddress?: string;
   /** UK only: Google formatted_address from selected suggestion */
   selectedFormattedAddress?: string;
+  /** France: apartment/lot number for multi-unit buildings */
+  aptNumber?: string;
+  /** France: postcode from Google address_components (avoids "Postcode required") */
+  postcode?: string;
+  /** Increment to force refetch (e.g. when user clicks Search for apartment) */
+  refetchTrigger?: number;
 };
 
-/** Countries that have an official property data provider. FR temporarily disabled: DVF source (api.cquest.org) returns 502. Re-enable by adding "FR" when stable. */
-const PROVIDER_COUNTRIES = ["IL", "US", "UK", "GB", "IT"];
+/** Countries that have an official property data provider. FR uses properties_france (DVF import) + optional DVF API fallback. */
+const PROVIDER_COUNTRIES = ["IL", "US", "UK", "GB", "IT", "FR"];
 
 export function usePropertyValueInsights(
   address: string,
@@ -24,31 +30,25 @@ export function usePropertyValueInsights(
   const [data, setData] = React.useState<PropertyValueInsightsResponse | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const hasProvider = PROVIDER_COUNTRIES.includes((countryCode ?? "").toUpperCase());
-
   const requestIdRef = React.useRef(0);
+  const optionsRef = React.useRef(options);
+  optionsRef.current = options;
 
-  React.useEffect(() => {
-    if (!address.trim() || !hasProvider) {
-      setData(null);
-      setIsLoading(false);
-      return;
-    }
-
+  const doFetch = React.useCallback(() => {
+    if (!address.trim() || !hasProvider) return;
+    const opts = optionsRef.current;
     const thisRequestId = ++requestIdRef.current;
     setIsLoading(true);
-
     const fetchOpts = {
       countryCode: countryCode || "IL",
-      ...(options?.latitude != null &&
-      options?.longitude != null &&
-      Number.isFinite(options.latitude) &&
-      Number.isFinite(options.longitude)
-        ? { latitude: options.latitude, longitude: options.longitude }
+      ...(opts?.latitude != null && opts?.longitude != null && Number.isFinite(opts.latitude) && Number.isFinite(opts.longitude)
+        ? { latitude: opts.latitude, longitude: opts.longitude }
         : {}),
-      ...(options?.rawInputAddress != null ? { rawInputAddress: options.rawInputAddress } : {}),
-      ...(options?.selectedFormattedAddress != null ? { selectedFormattedAddress: options.selectedFormattedAddress } : {}),
+      ...(opts?.rawInputAddress != null ? { rawInputAddress: opts.rawInputAddress } : {}),
+      ...(opts?.selectedFormattedAddress != null ? { selectedFormattedAddress: opts.selectedFormattedAddress } : {}),
+      ...((opts?.aptNumber ?? "").toString().trim() ? { aptNumber: (opts?.aptNumber ?? "").toString().trim() } : {}),
+      ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),
     };
-
     fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
         if (thisRequestId === requestIdRef.current) setData(res);
@@ -62,9 +62,20 @@ export function usePropertyValueInsights(
       .finally(() => {
         if (thisRequestId === requestIdRef.current) setIsLoading(false);
       });
+  }, [address, countryCode, hasProvider]);
 
-    return () => {};
-  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress]);
+  React.useEffect(() => {
+    if (!address.trim() || !hasProvider) {
+      setData(null);
+      setIsLoading(false);
+      return;
+    }
+    doFetch();
+  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress, options?.aptNumber, options?.postcode, options?.refetchTrigger, doFetch]);
 
-  return { data, isLoading };
+  const refetch = React.useCallback(() => {
+    doFetch();
+  }, [doFetch]);
+
+  return { data, isLoading, refetch };
 }

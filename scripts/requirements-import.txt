@@ -1,0 +1,7 @@
+# Dependencies for scripts/import_france_dvf.py
+# Run: pip install -r scripts/requirements-import.txt
+python-dotenv>=1.0.0
+supabase>=2.0.0
+
+# For scripts/upload_france_to_bigquery.py
+google-cloud-bigquery>=3.0.0

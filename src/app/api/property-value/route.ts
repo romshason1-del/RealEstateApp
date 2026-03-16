@@ -9,13 +9,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import getPropertyValueInsights from "@/lib/property-value-insights";
-import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
+import { getFrancePropertyResult, mapLivabilityToRating, normalizeLot } from "@/lib/bigquery-france-service";
+import { isBigQueryConfigured } from "@/lib/bigquery-client";
+import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
 import { fetchMarketTrend } from "@/lib/property-value-providers/us-fhfa-provider";
-import { fetchOMIByCoordinates, fetchOMIByComune } from "@/lib/property-value-providers/it-omi-provider";
-import { fetchItalyMarketListings } from "@/lib/property-value-providers/it-market-provider";
-import { fetchDVFByCoordinates } from "@/lib/property-value-providers/fr-dvf-provider";
-import { fetchITISTATStats } from "@/lib/property-value-providers/it-istat-provider";
 import { computeNeighborhoodRating } from "@/lib/neighborhood-rating";
 import { fetchUKHPIForLocality, fetchUKHPIIndicesForLocality, estimateValueFromHPI } from "@/lib/property-value-providers/uk-house-price-index-provider";
 import { fetchUKNeighborhoodStats, computeUKLivabilityRating } from "@/lib/property-value-providers/uk-ons-census-provider";
@@ -24,6 +22,8 @@ import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const FR_ERROR_CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
+const FR_ERROR_CACHE_TTL_MS = 60 * 1000;
 const MAX_ADDRESS_LENGTH = 200;
 
 function buildCacheKey(
@@ -63,16 +63,6 @@ function validateInput(
     if (pc.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "postcode too long" };
       return { valid: true };
   }
-  const isIT = code === "IT";
-  if (isIT) {
-    const hasCity = !!(city.trim());
-    const lat = opts?.latitude;
-    const lng = opts?.longitude;
-    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
-    if (!hasCity && !hasCoords) return { valid: false, error: "city or coordinates required for Italy addresses" };
-    if (city.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "city too long" };
-    return { valid: true };
-  }
   const isIL = code === "IL";
   if (isIL) {
     const hasAddress = !!(city.trim() || street.trim() || (postcode ?? "").trim());
@@ -82,10 +72,6 @@ function validateInput(
   }
   const isFR = code === "FR";
   if (isFR) {
-    const lat = opts?.latitude;
-    const lng = opts?.longitude;
-    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
-    if (!hasCoords) return { valid: false, error: "coordinates required for France addresses (DVF geo lookup)" };
     const hasCityOrStreet = !!(city.trim() || street.trim());
     if (!hasCityOrStreet) return { valid: false, error: "city or street required for France addresses" };
     if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
@@ -105,6 +91,7 @@ function validateInput(
 
 const ROUTE_TIMEOUT_MS = 6000;
 const ROUTE_TIMEOUT_MS_UK = 20000;
+const ROUTE_TIMEOUT_MS_FR = 15000;
 const LAND_REGISTRY_TIMEOUT_MS = 18000;
 const PROVIDER_TIMEOUT_MS = 2500;
 
@@ -147,6 +134,7 @@ export async function GET(request: NextRequest) {
   const addressParam = searchParams.get("address") ?? "";
   const rawInputAddress = searchParams.get("rawInputAddress") ?? "";
   const selectedFormattedAddress = searchParams.get("selectedFormattedAddress") ?? "";
+  const aptNumber = searchParams.get("apt_number") ?? searchParams.get("aptNumber") ?? "";
   const countryCode = searchParams.get("countryCode") ?? searchParams.get("country") ?? "IL";
   const latParam = searchParams.get("latitude");
   const lngParam = searchParams.get("longitude");
@@ -192,10 +180,11 @@ export async function GET(request: NextRequest) {
       if (parsed.street) street = street || parsed.street;
       if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
     } else if (code === "FR") {
-      const parsed = parseAddressFromFullString(addressParam);
+      const parsed = parseFRAddressFromFullString(addressParam);
       if (parsed.city) city = city || parsed.city;
       if (parsed.street) street = street || parsed.street;
       if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
+      if (parsed.postcode) postcode = postcode || parsed.postcode;
     } else {
       if (!city || !street) {
         const parsed = parseAddressFromFullString(addressParam);
@@ -206,7 +195,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const validation = validateInput(city.trim(), street.trim(), countryCode, postcode.trim() || zip.trim(), { latitude, longitude });
+  const validation = validateInput(city.trim(), street.trim(), countryCode, ((postcode ?? "").trim() || (zip ?? "").trim()), { latitude, longitude });
   if (!validation.valid) {
     return NextResponse.json(
       { message: validation.error, error: "INVALID_INPUT" },
@@ -223,55 +212,55 @@ export async function GET(request: NextRequest) {
   // UK: cache key includes raw+selected so same address always yields same cached response (including level)
   const cacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip, ukPostcode) + raw + sel;
   const isUS = (countryCode ?? "").toUpperCase() === "US";
-  const isIT = (countryCode ?? "").toUpperCase() === "IT";
   const isFR = (countryCode ?? "").toUpperCase() === "FR";
   const isIL = (countryCode ?? "").toUpperCase() === "IL";
   const usMockMode = isUS && isUSMockEnabled();
 
-  // Israel: check Supabase properties_israel first (real data from odata.org.il import)
   if (isIL) {
-    const fullAddress = addressParam.trim() || [street.trim(), houseNumber.trim(), city.trim()].filter(Boolean).join(", ").trim();
-    if (fullAddress) {
-      try {
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-        if (supabaseUrl && supabaseKey) {
-          const supabase = createClient(supabaseUrl, supabaseKey, {
-            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-          });
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (supabaseUrl && supabaseKey) {
+        const supabase = createClient(supabaseUrl, supabaseKey, {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        });
+        let fullAddress = addressParam.trim();
+        if (!fullAddress) {
+          fullAddress = [street.trim(), houseNumber.trim(), city.trim()].filter(Boolean).join(", ").trim();
+        }
+        if (fullAddress) {
           const norm = fullAddress.trim().toLowerCase().replace(/\s+/g, " ");
           const { data: rows } = await supabase
             .from("properties_israel")
             .select("address, current_value, last_sale_info, street_avg_price, neighborhood_quality")
-            .ilike("address", `%${norm}%`)
+            .ilike("address", "%" + norm + "%")
             .limit(5);
-
-          const match = (rows ?? [])[0];
-
+          const arr = rows != null ? rows : [];
+          const match = arr[0];
           if (match) {
             const currentValue = match.current_value != null ? Number(match.current_value) : null;
             const streetAvg = match.street_avg_price != null ? Number(match.street_avg_price) : null;
-            const lastSaleParts = (match.last_sale_info ?? "").split(" · ");
-            const lastAmount = lastSaleParts[0] ? parseFloat(String(lastSaleParts[0]).replace(/[^\d.-]/g, "")) : 0;
-            const lastDate = lastSaleParts[1]?.trim() ?? null;
-            const nq = (match.neighborhood_quality ?? "").toLowerCase().trim();
-            const livabilityMap: Record<string, "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT"> = {
-              poor: "POOR", fair: "FAIR", good: "GOOD", "very good": "VERY GOOD", excellent: "EXCELLENT",
-            };
-            const livability = livabilityMap[nq] ?? "FAIR";
-
+            let lastAmount = 0;
+            let lastDate: string | null = null;
+            if (match.last_sale_info) {
+              const parts = String(match.last_sale_info).split(" · ");
+              if (parts[0]) lastAmount = parseFloat(String(parts[0]).replace(/[^\d.-]/g, "")) || 0;
+              if (parts[1]) lastDate = parts[1].trim();
+            }
+            let livability = "FAIR";
+            if (match.neighborhood_quality) {
+              const nq = String(match.neighborhood_quality).toLowerCase().trim();
+              const map: Record<string, string> = { poor: "POOR", fair: "FAIR", good: "GOOD", "very good": "VERY GOOD", excellent: "EXCELLENT" };
+              if (map[nq]) livability = map[nq];
+            }
             return NextResponse.json({
               address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
-              data_source: "properties_israel" as const,
+              data_source: "properties_israel",
               property_result: {
                 exact_value: currentValue,
                 exact_value_message: currentValue == null ? "No data for this address" : null,
-                value_level: "property-level" as const,
-                last_transaction: {
-                  amount: Number.isFinite(lastAmount) ? lastAmount : 0,
-                  date: lastDate,
-                  message: lastAmount > 0 ? undefined : "No recorded transaction",
-                },
+                value_level: "property-level",
+                last_transaction: { amount: lastAmount, date: lastDate, message: lastAmount > 0 ? undefined : "No recorded transaction" },
                 street_average: streetAvg,
                 street_average_message: streetAvg == null ? "No street average" : null,
                 livability_rating: livability,
@@ -279,164 +268,220 @@ export async function GET(request: NextRequest) {
             });
           }
         }
-      } catch {
-        // Fall through to provider
       }
+    } catch {
+      // Fall through
     }
   }
 
-  // FR branch kept for future reactivation. Currently gated in UI (PROVIDER_COUNTRIES, hasOfficialProvider) - DVF source unreliable (502).
   if (isFR) {
-    const frCacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip) + "|FR";
-    const frCached = CACHE.get(frCacheKey);
-    if (frCached && Date.now() - frCached.ts < CACHE_TTL_MS) {
-      return NextResponse.json({ ...frCached.data, data_source: "cache" as const });
+    const frErrorCacheKey = `fr_err:${cacheKey}${aptNumber ? `|apt:${aptNumber}` : ""}`;
+    const frCached = FR_ERROR_CACHE.get(frErrorCacheKey);
+    if (frCached && Date.now() - frCached.ts < FR_ERROR_CACHE_TTL_MS) {
+      return NextResponse.json(frCached.data);
     }
 
-    const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
-    if (!hasCoords) {
-      return NextResponse.json(
-        { message: "Coordinates required for France addresses (DVF geo lookup)", error: "INVALID_INPUT" },
-        { status: 400 }
-      );
-    }
-
-    let dvfResult: Awaited<ReturnType<typeof fetchDVFByCoordinates>>;
-    try {
-      dvfResult = await withTimeout(
-        fetchDVFByCoordinates(latitude!, longitude!, `${street.trim()}, ${city.trim()}`.trim()),
-        PROVIDER_TIMEOUT_MS + 4000,
-        "FR_DVF"
-      );
-    } catch {
-      dvfResult = {
-        latest_transaction: { amount: 0, date: null },
-        price_per_sqm: null,
-        street_average: null,
-        estimated_value: null,
-        transaction_count: 0,
-        radius_used_m: 0,
-      };
-    }
-
-    const estimatedValue = dvfResult.estimated_value;
-    const streetAverage = dvfResult.street_average;
-    const latestTx = dvfResult.latest_transaction;
-
-    let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
-    if (streetAverage != null && streetAverage > 0) {
-      livabilityRating = computeNeighborhoodRating({ livability_proxy_from_area_price: streetAverage });
-    } else if (estimatedValue != null && estimatedValue > 0) {
-      livabilityRating = computeNeighborhoodRating({ livability_proxy_from_area_price: estimatedValue });
-    }
-
-    const valueLevel = dvfResult.transaction_count >= 3 ? "street-level" : dvfResult.transaction_count > 0 ? "area-level" : "no_match";
-
-    const frResponse = {
+    const frEmptyResponse = (): Record<string, unknown> => ({
+      message: "No government data for this address",
+      data_source: "properties_france",
       address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
-      data_source: "live" as const,
       property_result: {
-        exact_value: estimatedValue,
-        exact_value_message: estimatedValue == null ? "No DVF data for this area" : null,
-        value_level: valueLevel as "property-level" | "building-level" | "street-level" | "area-level" | "no_match",
-        last_transaction: {
-          amount: latestTx.amount ?? 0,
-          date: latestTx.date,
-          message: latestTx.amount != null && latestTx.amount > 0 ? undefined : ("No recorded transaction in radius" as const),
-        },
-        street_average: streetAverage,
-        street_average_message: streetAverage == null ? "No DVF data for this area" : null,
-        livability_rating: livabilityRating,
+        exact_value: null,
+        exact_value_message: "No government data for this address",
+        value_level: "no_match",
+        last_transaction: { amount: 0, date: null, message: "No DVF data" },
+        street_average: null,
+        street_average_message: "No data for this address",
+        livability_rating: "FAIR",
       },
-      fr_dvf: {
-        transaction_count: dvfResult.transaction_count,
-        radius_used_m: dvfResult.radius_used_m,
-        price_per_sqm: dvfResult.price_per_sqm,
-      },
+    });
+    const cacheAndReturn = (data: Record<string, unknown>) => {
+      FR_ERROR_CACHE.set(frErrorCacheKey, { data, ts: Date.now() });
+      return NextResponse.json(data);
     };
 
-    CACHE.set(frCacheKey, { data: frResponse, ts: Date.now() });
-    return NextResponse.json(frResponse);
+    try {
+      if (!isBigQueryConfigured()) {
+        console.log("BIGQUERY_FETCH_FAILED: [France] Missing BigQuery credentials");
+        return NextResponse.json({
+          message: "No government data for this address",
+          data_source: "properties_france",
+          address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+          property_result: {
+            exact_value: null,
+            exact_value_message: "No government data for this address",
+            value_level: "no_match",
+            last_transaction: { amount: 0, date: null, message: "No DVF data" },
+            street_average: null,
+            street_average_message: "No data for this address",
+            livability_rating: "FAIR",
+          },
+        });
+      }
+
+      const fullAddress = (addressParam && addressParam.trim()) || [houseNumber, street, city].filter(Boolean).join(", ");
+      const parsedFR = parseFRAddressFromFullString(fullAddress);
+      let houseNumTrim = (parsedFR.houseNumber || houseNumber || "").trim();
+      if (!houseNumTrim) {
+        const numMatch = fullAddress.match(/\b(\d{1,3})(?!\d)\b/);
+        if (numMatch) houseNumTrim = numMatch[1];
+      }
+      const aptTrimmed = normalizeLot(aptNumber);
+
+      let codePostal = (parsedFR.postcode || postcode || zip || "").trim();
+      if (!codePostal) {
+        const fiveDigit = fullAddress.match(/\b(\d{5})\b/);
+        const fourDigit = fullAddress.match(/\b(\d{4})\b/);
+        if (fiveDigit) codePostal = fiveDigit[1];
+        else if (fourDigit) codePostal = "0" + fourDigit[1];
+      }
+      if (!codePostal && /anglais|promenade|prom\s/i.test((parsedFR.street || street || ""))) {
+        codePostal = "06000";
+      }
+      codePostal = codePostal.trim();
+      if (codePostal.length === 4 && !codePostal.startsWith("0")) {
+        codePostal = "0" + codePostal;
+      }
+
+      if (!codePostal) {
+        return NextResponse.json({
+          message: "Postcode required for France search (e.g. Anatole France, 10000 Troyes).",
+          data_source: "properties_france",
+          address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+          property_result: {
+            exact_value: null,
+            exact_value_message: "Postcode required",
+            value_level: "no_match",
+            last_transaction: { amount: 0, date: null, message: "No DVF data" },
+            street_average: null,
+            street_average_message: "Include postcode (e.g. 10000)",
+            livability_rating: "FAIR",
+          },
+        });
+      }
+
+      const voie = (parsedFR.street || street || "").trim() || null;
+      const commune = (parsedFR.city || city || "").trim() || null;
+
+      const result = await getFrancePropertyResult(
+        codePostal,
+        houseNumTrim || null,
+        voie,
+        commune,
+        aptTrimmed || null,
+        null
+      );
+
+      const livabilityRating = mapLivabilityToRating(result.livabilityStandard);
+
+      if (result.multipleUnits) {
+        return NextResponse.json({
+          address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+          data_source: "properties_france",
+          multiple_units: true,
+          prompt_for_apartment: true,
+          average_building_value: result.averageBuildingValue ?? 0,
+          unit_count: result.unitCount ?? 0,
+          building_sales: result.buildingSales,
+          available_lots: result.availableLots ?? [],
+          property_result: {
+            exact_value: null,
+            exact_value_message: "Multiple units found. Please enter apartment number to see exact value.",
+            value_level: "building-level",
+            last_transaction: { amount: 0, date: null, message: "No DVF data" },
+            street_average: result.averageBuildingValue ?? null,
+            street_average_message: result.unitCount != null ? (result.unitCount === 1 ? "1 unit in this building" : `Average of ${result.unitCount} units in this building`) : null,
+            livability_rating: livabilityRating,
+          },
+        });
+      }
+
+      if (result.apartmentNotMatched) {
+        const buildingVal = result.averageBuildingValue ?? result.currentValue ?? 0;
+        return NextResponse.json({
+          address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+          data_source: "properties_france",
+          multiple_units: false,
+          prompt_for_apartment: true,
+          apartment_not_matched: true,
+          average_building_value: buildingVal,
+          building_sales: result.buildingSales,
+          available_lots: result.availableLots ?? [],
+          match_stage: result.matchStage,
+          result_level: result.resultLevel,
+          rows_at_stage: result.rowsAtStage,
+          property_result: {
+            exact_value: buildingVal,
+            exact_value_message: `Apartment/lot ${aptTrimmed} was not found in DVF data. Showing building-level estimate.`,
+            value_level: "building-level",
+            last_transaction: { amount: 0, date: null, message: "No recorded transaction for this apartment" },
+            street_average: result.areaAverageValue,
+            street_average_message: null,
+            livability_rating: livabilityRating,
+          },
+        });
+      }
+
+      const lastTx = result.lastTransaction;
+      const exactValue = result.currentValue ?? (lastTx?.value ?? null);
+      const streetAvgDisplay = result.areaAverageValue;
+      const isBuildingLevel = result.resultLevel === "building";
+      const isAreaFallback = result.resultLevel === "commune_fallback" && (streetAvgDisplay != null && streetAvgDisplay > 0);
+      const valueLevel = isBuildingLevel
+        ? "building-level"
+        : exactValue != null && exactValue > 0
+          ? "property-level"
+          : isAreaFallback
+            ? "area-level"
+            : "no_match";
+      const exactValueMessage = exactValue == null
+        ? (isAreaFallback ? "No exact match for this address. Showing postcode/area-level data." : "No DVF data for this address")
+        : null;
+
+      return NextResponse.json({
+        address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
+        data_source: "properties_france",
+        multiple_units: false,
+        lot_number: result.lotNumber,
+        surface_reelle_bati: result.surfaceReelleBati,
+        date_mutation: lastTx?.date ?? null,
+        building_sales: result.buildingSales,
+        match_stage: result.matchStage,
+        result_level: result.resultLevel,
+        rows_at_stage: result.rowsAtStage,
+        property_result: {
+          exact_value: exactValue,
+          exact_value_message: exactValueMessage,
+          value_level: valueLevel,
+          last_transaction: {
+            amount: lastTx?.value ?? 0,
+            date: lastTx?.date ?? null,
+            message: lastTx?.value ? undefined : "No recorded transaction",
+          },
+          street_average: streetAvgDisplay,
+          street_average_message: streetAvgDisplay == null ? "No DVF data for this area" : (isAreaFallback ? "Postcode/area average" : null),
+          livability_rating: livabilityRating,
+        },
+      });
+    } catch (err) {
+      const searchTerm = [houseNumber, street, city].filter(Boolean).join(", ");
+      const e = err as Error & { code?: number; errors?: unknown[]; response?: { data?: unknown }; stack?: string };
+      console.error("[BigQuery ERROR] France fetch failed:", searchTerm, {
+        message: e?.message,
+        code: e?.code,
+        errors: e?.errors,
+        responseData: e?.response?.data,
+        stack: e?.stack,
+      });
+      return cacheAndReturn(frEmptyResponse());
+    }
   }
 
-  if (isIT) {
-    const itCacheKey = buildCacheKey(city, street, houseNumber, latitude, longitude, state, zip) + "|IT";
-    const itCached = CACHE.get(itCacheKey);
-    if (itCached && Date.now() - itCached.ts < CACHE_TTL_MS) {
-      return NextResponse.json({ ...itCached.data, data_source: "cache" as const });
-    }
-
-    const itCity = city.trim() || street.trim() || "Roma";
-    const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude);
-    let omiResult: Awaited<ReturnType<typeof fetchOMIByCoordinates>> = null;
-    try {
-      omiResult = hasCoords
-        ? await withTimeout(fetchOMIByCoordinates(latitude!, longitude!, itCity), PROVIDER_TIMEOUT_MS + 4000, "IT_OMI")
-        : await withTimeout(fetchOMIByComune(itCity), PROVIDER_TIMEOUT_MS, "IT_OMI");
-    } catch {
-      // OMI failure
-    }
-
-    let listingResult: Awaited<ReturnType<typeof fetchItalyMarketListings>> = null;
-    try {
-      listingResult = hasCoords
-        ? await withTimeout(fetchItalyMarketListings(latitude!, longitude!, itCity, street.trim() || undefined), PROVIDER_TIMEOUT_MS, "IT_MARKET")
-        : null;
-    } catch {
-      // Listing failure
-    }
-
-    const omiMidpoint = omiResult?.estimated_value ?? null;
-    const listingPerSqm = listingResult?.listing_price_per_sqm;
-    const sqmDefault = 100;
-    const listingValue = listingPerSqm != null && listingPerSqm > 0 ? Math.round(listingPerSqm * sqmDefault) : null;
-
-    // Listing weighting disabled when no real listing source exists (it-market-provider returns null).
-    // When paid listing integration is added, use blended weights: 50% OMI + 35% listing + 15% blend.
-    const hasRealListingData = listingValue != null;
-    const estimatedValue = hasRealListingData && omiMidpoint != null
-      ? Math.round(0.5 * omiMidpoint + 0.35 * listingValue! + 0.15 * (omiMidpoint + listingValue!) / 2)
-      : omiMidpoint;
-    const areaAverage =
-      omiResult?.estimated_value ??
-      (omiResult?.area_price_min != null && omiResult?.area_price_max != null
-        ? Math.round((omiResult.area_price_min + omiResult.area_price_max) / 2)
-        : null);
-
-    let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
-    try {
-      const itStats = await withTimeout(
-        fetchITISTATStats(itCity, areaAverage ?? estimatedValue ?? undefined),
-        PROVIDER_TIMEOUT_MS,
-        "IT_ISTAT"
-      );
-      livabilityRating = computeNeighborhoodRating(itStats);
-    } catch {
-      if (areaAverage != null && areaAverage > 0) {
-        livabilityRating = computeNeighborhoodRating({ livability_proxy_from_area_price: areaAverage });
-      }
-    }
-
-    const itStreet = street.trim();
-    const itResponse = {
-      address: { city: itCity, street: itStreet, house_number: houseNumber.trim() },
-      data_source: "live" as const,
-      property_result: {
-        exact_value: estimatedValue,
-        exact_value_message: estimatedValue == null ? "No OMI data for this area" : null,
-        value_level: "area-level" as const,
-        last_transaction: { amount: 0, date: null, message: "Not yet available in Italy" as const },
-        street_average: areaAverage,
-        street_average_message: areaAverage == null ? "No OMI data for this area" : null,
-        livability_rating: livabilityRating,
-      },
-      it_omi: omiResult ? { estimated_value: omiResult.estimated_value, area_price_min: omiResult.area_price_min, area_price_max: omiResult.area_price_max, price_source: omiResult.price_source, omi_zone_used: omiResult.omi_zone_used } : undefined,
-      it_listing: listingResult ? { listing_price_per_sqm: listingResult.listing_price_per_sqm, listing_source: listingResult.listing_source, listing_confidence: listingResult.listing_confidence } : undefined,
-      it_has_listing_data: hasRealListingData,
-    };
-
-    CACHE.set(itCacheKey, { data: itResponse, ts: Date.now() });
-    return NextResponse.json(itResponse);
+  if (!isIL && !isFR) {
+    return NextResponse.json(
+      { message: "Country not supported. Only Israel (IL) and France (FR) are supported.", error: "UNSUPPORTED_COUNTRY" },
+      { status: 400 }
+    );
   }
 
   const cached = CACHE.get(cacheKey);
@@ -588,7 +633,7 @@ export async function GET(request: NextRequest) {
         let ukLivability: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
         try {
           const ukStats = await withTimeout(
-            fetchUKNeighborhoodStats(postcode.trim() || "", ukLandRegistry.average_area_price ?? undefined),
+            fetchUKNeighborhoodStats(postcode.trim() || "", (ukLandRegistry.average_area_price) ?? undefined),
             PROVIDER_TIMEOUT_MS,
             "UK_neighborhood"
           );
@@ -1106,7 +1151,7 @@ export async function GET(request: NextRequest) {
       let livabilityRating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" = "POOR";
       try {
         const ukStats = await withTimeout(
-          fetchUKNeighborhoodStats(postcode.trim() || "", areaPrice ?? undefined),
+          fetchUKNeighborhoodStats(postcode.trim() || "", (areaPrice) ?? undefined),
           PROVIDER_TIMEOUT_MS,
           "UK_neighborhood"
         );
@@ -1151,7 +1196,7 @@ export async function GET(request: NextRequest) {
   }
   };
 
-  const routeTimeoutMs = isUK ? ROUTE_TIMEOUT_MS_UK : ROUTE_TIMEOUT_MS;
+  const routeTimeoutMs = isUK ? ROUTE_TIMEOUT_MS_UK : isFR ? ROUTE_TIMEOUT_MS_FR : ROUTE_TIMEOUT_MS;
   const timeoutResponse = new Promise<Response>((resolve) => {
     setTimeout(() => {
       if (process.env.NODE_ENV === "development") console.debug("[property-value] Route timeout, returning minimal response");
