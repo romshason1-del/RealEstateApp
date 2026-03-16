@@ -375,11 +375,12 @@ export async function GET(request: NextRequest) {
       const livabilityRating = mapLivabilityToRating(result.livabilityStandard);
 
       if (result.multipleUnits) {
-        return NextResponse.json({
+        const payload = {
           address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
           data_source: "properties_france",
           multiple_units: true,
           prompt_for_apartment: true,
+          result_level: "building",
           average_building_value: result.averageBuildingValue ?? 0,
           unit_count: result.unitCount ?? 0,
           building_sales: result.buildingSales,
@@ -393,7 +394,11 @@ export async function GET(request: NextRequest) {
             street_average_message: result.unitCount != null ? (result.unitCount === 1 ? "1 unit in this building" : `Average of ${result.unitCount} units in this building`) : null,
             livability_rating: livabilityRating,
           },
-        });
+        };
+        if (process.env.NODE_ENV === "development") {
+          console.log("[property-value] France response (multiple_units):", JSON.stringify({ ...payload, building_sales_count: payload.building_sales?.length ?? 0 }));
+        }
+        return NextResponse.json(payload);
       }
 
       if (result.apartmentNotMatched) {
@@ -438,7 +443,7 @@ export async function GET(request: NextRequest) {
         ? (isAreaFallback ? "No exact match for this address. Showing postcode/area-level data." : "No DVF data for this address")
         : null;
 
-      return NextResponse.json({
+      const payload = {
         address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
         data_source: "properties_france",
         multiple_units: false,
@@ -462,7 +467,11 @@ export async function GET(request: NextRequest) {
           street_average_message: streetAvgDisplay == null ? "No DVF data for this area" : (isAreaFallback ? "Postcode/area average" : null),
           livability_rating: livabilityRating,
         },
-      });
+      };
+      if (process.env.NODE_ENV === "development") {
+        console.log("[property-value] France response (single/building/area):", JSON.stringify(payload));
+      }
+      return NextResponse.json(payload);
     } catch (err) {
       const searchTerm = [houseNumber, street, city].filter(Boolean).join(", ");
       const e = err as Error & { code?: number; errors?: unknown[]; response?: { data?: unknown }; stack?: string };

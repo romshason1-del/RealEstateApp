@@ -8,12 +8,18 @@
  *
  * FAST_QUERY_PATH=DISABLED: Avoid jobs.query endpoint which adds formatOptions.timestampOutputFormat
  * by default, causing "timestamp_output_format is not supported yet" on EU. Use createQueryJob instead.
+ *
+ * Credentials (in order of precedence):
+ * 1. GOOGLE_ACCESS_TOKEN — OAuth2 access token (e.g. from Vercel / serverless); no key file required.
+ * 2. GOOGLE_APPLICATION_CREDENTIALS — path to service account JSON (optional, local/dev).
+ * 3. Application Default Credentials (ADC) — when neither of the above is set.
  */
 if (typeof process !== "undefined") {
   process.env.FAST_QUERY_PATH = "DISABLED";
 }
 
 import { BigQuery } from "@google-cloud/bigquery";
+import { OAuth2Client } from "google-auth-library";
 
 let clientInstance: BigQuery | null = null;
 
@@ -27,6 +33,7 @@ function logEnvVars(): void {
     "BIGQUERY_EMULATOR_HOST",
     "GOOGLE_CLOUD_REGION",
     "CLOUDSDK_COMPUTE_REGION",
+    "GOOGLE_ACCESS_TOKEN",
     "GOOGLE_APPLICATION_CREDENTIALS",
   ];
   const values: Record<string, string> = {};
@@ -38,17 +45,21 @@ function logEnvVars(): void {
 }
 
 function logCredentialSource(): void {
+  const accessToken = process.env.GOOGLE_ACCESS_TOKEN?.trim();
   const keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
   const emulator = process.env.BIGQUERY_EMULATOR_HOST;
   let source: string;
   if (emulator) {
     source = "emulator";
+  } else if (accessToken) {
+    source = "GOOGLE_ACCESS_TOKEN";
   } else if (keyFile) {
     source = "keyFilename";
   } else {
     source = "ADC (Application Default Credentials)";
   }
   console.log("[BigQuery] Credential source:", source);
+  if (accessToken) console.log("[BigQuery] Using GOOGLE_ACCESS_TOKEN");
   if (keyFile) console.log("[BigQuery] keyFilename path:", keyFile);
   if (emulator) console.log("[BigQuery] Emulator host:", emulator);
 }
@@ -94,16 +105,35 @@ export function getBigQueryClient(): BigQuery {
     logCredentialSource();
 
     const { projectId, location } = getBigQueryConfig();
+
+    const accessToken = process.env.GOOGLE_ACCESS_TOKEN?.trim();
     const keyFilename = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() || undefined;
 
-    // Explicit projectId required: "Not found: Project X" when ADC project differs from target.
-    const clientOptions: { projectId: string; keyFilename?: string; location: string } = {
+    type ClientOptions = {
+      projectId: string;
+      location: string;
+      keyFilename?: string;
+      authClient?: OAuth2Client;
+    };
+
+    const clientOptions: ClientOptions = {
       projectId,
-      ...(keyFilename ? { keyFilename } : {}),
       location,
     };
 
-    console.log("[BigQuery] Constructor options (before new BigQuery):", JSON.stringify(clientOptions, null, 2));
+    if (accessToken) {
+      const authClient = new OAuth2Client({
+        credentials: { access_token: accessToken },
+      });
+      clientOptions.authClient = authClient;
+    } else if (keyFilename) {
+      clientOptions.keyFilename = keyFilename;
+    }
+    // else: no keyFilename, no authClient → ADC (Application Default Credentials)
+
+    const safeLogOptions = { ...clientOptions };
+    if (safeLogOptions.authClient) (safeLogOptions as Record<string, unknown>).authClient = "[OAuth2Client]";
+    console.log("[BigQuery] Constructor options (before new BigQuery):", JSON.stringify(safeLogOptions, null, 2));
     clientInstance = new BigQuery(clientOptions);
     console.log("[BigQuery] Client created. this.projectId =", (clientInstance as { projectId?: string }).projectId);
     console.log("[BigQuery] Client created. this.location =", (clientInstance as { location?: string }).location);

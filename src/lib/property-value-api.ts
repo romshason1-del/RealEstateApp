@@ -278,15 +278,24 @@ export async function fetchPropertyValueInsights(
     }));
 
     const isUKTimeoutFallback = isUK && (data as { debug?: { failure_reason?: string } }).debug?.failure_reason === "Land Registry timeout";
+    const frHasRealData =
+      isFR &&
+      (data.multiple_units === true ||
+        (Array.isArray(data.building_sales) && data.building_sales.length > 0) ||
+        ((data.average_building_value ?? 0) > 0) ||
+        (data.property_result &&
+          data.property_result.value_level !== "no_match" &&
+          ((data.property_result.street_average ?? 0) > 0 || (data.property_result.exact_value ?? 0) > 0)));
     const hasValidData =
-      data.address ||
-      data.avm_value ||
-      data.avm_rent ||
-      data.last_sale ||
-      data.property_result ||
-      data.neighborhood_stats ||
-      data.uk_land_registry ||
-      (isFR && (data.fr_dvf || data.multiple_units || (Array.isArray(data.building_sales) && data.building_sales.length > 0)));
+      frHasRealData ||
+      (!isFR &&
+        (data.address ||
+          data.avm_value ||
+          data.avm_rent ||
+          data.last_sale ||
+          data.property_result ||
+          data.neighborhood_stats ||
+          data.uk_land_registry));
     if (res.ok && !isUKTimeoutFallback && hasValidData) {
       CACHE.set(key, { data, ts: Date.now() });
     }

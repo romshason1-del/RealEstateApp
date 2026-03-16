@@ -427,11 +427,8 @@ export function PropertyValueCard({
   const surfaceReelleBati = insightsData && "surface_reelle_bati" in insightsData ? (insightsData as { surface_reelle_bati?: number | null }).surface_reelle_bati : undefined;
   const lotNumber = insightsData && "lot_number" in insightsData ? (insightsData as { lot_number?: string | null }).lot_number : undefined;
   const buildingSales = insightsData && "building_sales" in insightsData ? (insightsData as { building_sales?: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number?: string | null }> }).building_sales : undefined;
+  const resultLevel = insightsData && "result_level" in insightsData ? (insightsData as { result_level?: "exact_property" | "building" | "commune_fallback" }).result_level : undefined;
   const isFranceData = dataSource === "properties_france" || isFR;
-  const dataSources = insightsData && "data_sources" in insightsData ? (insightsData as { data_sources?: ("RentCast" | "Zillow" | "Redfin")[] }).data_sources : undefined;
-  const usMatchConfidence = insightsData && "us_match_confidence" in insightsData ? (insightsData as { us_match_confidence?: "high" | "medium" | "low" }).us_match_confidence : undefined;
-  const isAreaLevelEstimate = insightsData && "is_area_level_estimate" in insightsData ? (insightsData as { is_area_level_estimate?: boolean }).is_area_level_estimate : undefined;
-  const valueRange = insightsData && "value_range" in insightsData ? (insightsData as { value_range?: { low_estimate: number; estimated_value: number; high_estimate: number } }).value_range : undefined;
   const propertyResult = insightsData && "property_result" in insightsData ? (insightsData as {
     property_result?: {
       exact_value: number | null;
@@ -443,6 +440,30 @@ export function PropertyValueCard({
       livability_rating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT";
     };
   }).property_result : undefined;
+  const hasFranceBuildingOrAreaData =
+    isFranceData &&
+    (
+      multipleUnits ||
+      resultLevel === "building" ||
+      resultLevel === "commune_fallback" ||
+      (
+        propertyResult &&
+        (
+          propertyResult.value_level === "building-level" ||
+          propertyResult.value_level === "area-level"
+        ) &&
+        (
+          (propertyResult.street_average ?? 0) > 0 ||
+          (propertyResult.exact_value ?? 0) > 0 ||
+          (averageBuildingValue ?? 0) > 0 ||
+          (Array.isArray(buildingSales) && buildingSales.length > 0)
+        )
+      )
+    );
+  const dataSources = insightsData && "data_sources" in insightsData ? (insightsData as { data_sources?: ("RentCast" | "Zillow" | "Redfin")[] }).data_sources : undefined;
+  const usMatchConfidence = insightsData && "us_match_confidence" in insightsData ? (insightsData as { us_match_confidence?: "high" | "medium" | "low" }).us_match_confidence : undefined;
+  const isAreaLevelEstimate = insightsData && "is_area_level_estimate" in insightsData ? (insightsData as { is_area_level_estimate?: boolean }).is_area_level_estimate : undefined;
+  const valueRange = insightsData && "value_range" in insightsData ? (insightsData as { value_range?: { low_estimate: number; estimated_value: number; high_estimate: number } }).value_range : undefined;
   const sourceSummary = insightsData && "source_summary" in insightsData ? (insightsData as { source_summary?: string }).source_summary : undefined;
   const lastMarketUpdate = insightsData && "last_market_update" in insightsData ? (insightsData as { last_market_update?: string }).last_market_update : undefined;
   const nearbySales = insightsData && "nearby_sales" in insightsData ? (insightsData as { nearby_sales?: Array<{ address: string; price: number; date: string; distance_m?: number; price_per_sqft?: number; is_same_property?: boolean }> }).nearby_sales : undefined;
@@ -696,7 +717,7 @@ export function PropertyValueCard({
                 </div>
               )}
             </div>
-          ) : isFranceData && propertyResult ? (
+          ) : isFranceData && propertyResult && hasFranceBuildingOrAreaData ? (
             <div className="space-y-1">
               {promptForApartment && (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1">
@@ -745,7 +766,7 @@ export function PropertyValueCard({
               )}
               <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1">
                 <div className="text-[8px] uppercase tracking-wider text-violet-400/90">
-                  {propertyResult.value_level === "building-level" ? "Building-level estimate" : "Estimated value"}
+                  {propertyResult.value_level === "building-level" ? "Building-level estimate" : propertyResult.value_level === "area-level" ? "Area-level estimate" : "Estimated value"}
                 </div>
                 {lotNumber && (
                   <div className="mt-0.5 text-[9px] text-zinc-400">Lot: {lotNumber}</div>
@@ -753,6 +774,9 @@ export function PropertyValueCard({
                 <div className="mt-0.5 text-sm font-semibold text-violet-300">
                   {propertyResult.exact_value != null && propertyResult.exact_value > 0
                     ? formatCurrency(propertyResult.exact_value, currencySymbol)
+                    : (propertyResult.value_level === "building-level" || propertyResult.value_level === "area-level") &&
+                      (propertyResult.street_average != null && propertyResult.street_average > 0)
+                    ? formatCurrency(propertyResult.street_average, currencySymbol)
                     : (propertyResult.exact_value_message ?? "No DVF data for this area")}
                 </div>
                 {apartmentNotMatched && propertyResult.exact_value_message && (
@@ -896,7 +920,7 @@ export function PropertyValueCard({
                 </CollapsibleSection>
               )}
             </div>
-          ) : isFranceData ? (
+          ) : isFranceData && !hasFranceBuildingOrAreaData ? (
             <div className="text-[11px] text-zinc-500">
               {isLoading ? "Loading property data…" : "No DVF data for this area."}
             </div>
