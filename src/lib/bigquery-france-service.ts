@@ -676,7 +676,7 @@ export async function getFrancePropertyResult(
   console.log("[BigQuery] Match result:", { matchStage: matchedStage, rowsAtStage: lastTxRows.length, resultLevel, hasExactLotMatch });
 
   const apartmentNotMatched = !!(normalizedLot && matchedStage >= 2 && !lotMatchedFromBuildingRows);
-  const multipleUnits = isBuildingMatch && !normalizedLot;
+  const multipleUnits = lastTxRows.length > 0 && matchedStage >= 2 && !normalizedLot;
 
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
@@ -721,7 +721,7 @@ export async function getFrancePropertyResult(
     };
   }
 
-  if (matchedStage === 5) {
+  if (matchedStage === 5 && lastTxRows.length === 0) {
     return {
       currentValue: null,
       lastTransaction: null,
@@ -733,7 +733,7 @@ export async function getFrancePropertyResult(
       lotNumber: null,
       matchStage: 5,
       resultLevel: "commune_fallback",
-      rowsAtStage: lastTxRows.length,
+      rowsAtStage: 0,
     };
   }
 

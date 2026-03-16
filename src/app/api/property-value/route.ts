@@ -381,6 +381,8 @@ export async function GET(request: NextRequest) {
           multiple_units: true,
           prompt_for_apartment: true,
           result_level: "building",
+          match_stage: result.matchStage,
+          rows_at_stage: result.rowsAtStage,
           average_building_value: result.averageBuildingValue ?? 0,
           unit_count: result.unitCount ?? 0,
           building_sales: result.buildingSales,
@@ -395,15 +397,13 @@ export async function GET(request: NextRequest) {
             livability_rating: livabilityRating,
           },
         };
-        if (process.env.NODE_ENV === "development") {
-          console.log("[property-value] France response (multiple_units):", JSON.stringify({ ...payload, building_sales_count: payload.building_sales?.length ?? 0 }));
-        }
+        console.log("[property-value] France final payload (multiple_units):", JSON.stringify({ result_level: payload.result_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, average_building_value: payload.average_building_value, building_sales_count: payload.building_sales?.length ?? 0 }));
         return NextResponse.json(payload);
       }
 
       if (result.apartmentNotMatched) {
         const buildingVal = result.averageBuildingValue ?? result.currentValue ?? 0;
-        return NextResponse.json({
+        const payload = {
           address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
           data_source: "properties_france",
           multiple_units: false,
@@ -413,7 +413,7 @@ export async function GET(request: NextRequest) {
           building_sales: result.buildingSales,
           available_lots: result.availableLots ?? [],
           match_stage: result.matchStage,
-          result_level: result.resultLevel,
+          result_level: "building",
           rows_at_stage: result.rowsAtStage,
           property_result: {
             exact_value: buildingVal,
@@ -424,7 +424,9 @@ export async function GET(request: NextRequest) {
             street_average_message: null,
             livability_rating: livabilityRating,
           },
-        });
+        };
+        console.log("[property-value] France final payload (apartment_not_matched):", JSON.stringify({ result_level: payload.result_level, value_level: payload.property_result.value_level, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, building_sales_count: payload.building_sales?.length ?? 0 }));
+        return NextResponse.json(payload);
       }
 
       const lastTx = result.lastTransaction;
@@ -432,13 +434,19 @@ export async function GET(request: NextRequest) {
       const streetAvgDisplay = result.areaAverageValue;
       const isBuildingLevel = result.resultLevel === "building";
       const isAreaFallback = result.resultLevel === "commune_fallback" && (streetAvgDisplay != null && streetAvgDisplay > 0);
-      const valueLevel = isBuildingLevel
+      const hasRows = (result.rowsAtStage ?? 0) > 0;
+      const matchStageHighEnough = (result.matchStage ?? 0) >= 3;
+      const isExactProperty = result.resultLevel === "exact_property";
+      const coerceToBuilding = hasRows && matchStageHighEnough && !isExactProperty;
+      const valueLevel = coerceToBuilding
         ? "building-level"
-        : exactValue != null && exactValue > 0
-          ? "property-level"
-          : isAreaFallback
-            ? "area-level"
-            : "no_match";
+        : isBuildingLevel
+          ? "building-level"
+          : exactValue != null && exactValue > 0
+            ? "property-level"
+            : isAreaFallback
+              ? "area-level"
+              : "no_match";
       const exactValueMessage = exactValue == null
         ? (isAreaFallback ? "No exact match for this address. Showing postcode/area-level data." : "No DVF data for this address")
         : null;
@@ -446,13 +454,14 @@ export async function GET(request: NextRequest) {
       const payload = {
         address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
         data_source: "properties_france",
-        multiple_units: false,
+        multiple_units: coerceToBuilding,
+        result_level: coerceToBuilding ? "building" : result.resultLevel,
+        ...(coerceToBuilding ? { average_building_value: result.averageBuildingValue ?? result.currentValue ?? streetAvgDisplay ?? 0 } : {}),
         lot_number: result.lotNumber,
         surface_reelle_bati: result.surfaceReelleBati,
         date_mutation: lastTx?.date ?? null,
-        building_sales: result.buildingSales,
+        building_sales: result.buildingSales ?? [],
         match_stage: result.matchStage,
-        result_level: result.resultLevel,
         rows_at_stage: result.rowsAtStage,
         property_result: {
           exact_value: exactValue,
@@ -468,9 +477,7 @@ export async function GET(request: NextRequest) {
           livability_rating: livabilityRating,
         },
       };
-      if (process.env.NODE_ENV === "development") {
-        console.log("[property-value] France response (single/building/area):", JSON.stringify(payload));
-      }
+      console.log("[property-value] France final payload (single/building/area):", JSON.stringify({ result_level: payload.result_level, value_level: payload.property_result.value_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, building_sales_count: payload.building_sales?.length ?? 0 }));
       return NextResponse.json(payload);
     } catch (err) {
       const searchTerm = [houseNumber, street, city].filter(Boolean).join(", ");
