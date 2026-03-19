@@ -185,6 +185,17 @@ export function FranceApartmentSheet({
   // If the payload looks like a small inventory (low counts), treat as house-like for copy only.
   const isHouseLikeOverride = buildingSales.length <= 5 && availableLots.length < 20;
   const isHouseLikeUI = isHouseDetected || isHouseLikeOverride;
+  React.useEffect(() => {
+    if (!isDev) return;
+    console.log("[FR_UI] apartment_vs_house_decision", {
+      isHouseDetected,
+      isHouseLikeUI,
+      isApartmentLikely,
+      multipleUnits: parsed?.multiple_units === true,
+      availableLots: availableLots.length,
+      hasAppartementType,
+    });
+  }, [isDev, isHouseDetected, isHouseLikeUI, isApartmentLikely, parsed?.multiple_units, availableLots.length, hasAppartementType]);
 
   const displayConfidence = React.useMemo(() => {
     const c = normalized?.confidence;

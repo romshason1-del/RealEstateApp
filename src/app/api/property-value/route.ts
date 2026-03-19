@@ -296,6 +296,8 @@ export async function GET(request: NextRequest) {
     // Minimal France gold-table path (exact -> area fallback -> no data).
     try {
       const frStartTs = Date.now();
+      const requestedLotNorm = normalizeLot(aptNumber) || null;
+      const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
       console.log("[FR_GOLD] request_start", {
         city: city.trim(),
         street: street.trim(),
@@ -368,7 +370,11 @@ export async function GET(request: NextRequest) {
         );
         console.log("[FR_GOLD] after_unit_probe_query", { rows: (unitProbeRows as any[])?.length ?? 0 });
         const unitCount = Number((unitProbeRows as Array<{ unit_count?: number }>)[0]?.unit_count ?? 0);
-        if (unitCount > 1) {
+        const centralUrbanMultiUnitHeuristic = /^75\d{3}$/.test(postcodeNorm);
+        const apartmentLike = unitCount > 1 || centralUrbanMultiUnitHeuristic;
+        console.log("[FR_GOLD] apartment_vs_house_decision", { unitCount, centralUrbanMultiUnitHeuristic, apartmentLike });
+        if (apartmentLike) {
+          console.log("[FR_GOLD] lot_prompt_triggered");
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -384,6 +390,17 @@ export async function GET(request: NextRequest) {
                 street_average_message: "Lot-first precision recommended",
                 livability_rating: "FAIR",
               },
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "building_level",
+                confidence: "medium",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: null,
+                buildingStats: { transactionCount: unitCount, avgPricePerSqm: null, avgTransactionValue: null },
+                comparables: [],
+                matchExplanation: "Apartment-like building detected. Enter lot/apartment for precise valuation.",
+              }),
             },
             "prompt_lot_first"
           );
@@ -430,6 +447,27 @@ export async function GET(request: NextRequest) {
             street_average_message: "Exact property",
             livability_rating: "FAIR",
           },
+          fr: emptyFranceResponse({
+            success: true,
+            resultType: "exact_apartment",
+            confidence: "high",
+            requestedLot: requestedLotNorm,
+            normalizedLot: normalizedRequestedLot,
+            property: {
+              transactionDate: exact.last_sale_date ?? null,
+              transactionValue: Number(exact.last_sale_price ?? 0) || null,
+              pricePerSqm: Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null,
+              surfaceArea: Number.isFinite(surface) && surface > 0 ? surface : null,
+              rooms: null,
+              propertyType: null,
+              building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+              postalCode: postcodeNorm || null,
+              commune: cityNorm || null,
+            },
+            buildingStats: null,
+            comparables: [],
+            matchExplanation: "Exact property",
+          }),
         }, "exact_match");
       }
 
@@ -543,6 +581,29 @@ export async function GET(request: NextRequest) {
             street_average_message: fallbackSource,
             livability_rating: "FAIR",
           },
+          fr: emptyFranceResponse({
+            success: estimated != null,
+            resultType: estimated != null ? "nearby_comparable" : "no_result",
+            confidence: estimated != null ? "low_medium" : "low",
+            requestedLot: requestedLotNorm,
+            normalizedLot: normalizedRequestedLot,
+            property: estimated != null
+              ? {
+                  transactionDate: fallback.newest_sale_date ?? null,
+                  transactionValue: estimated,
+                  pricePerSqm: Number.isFinite(avgPrice) && avgPrice > 0 ? avgPrice : null,
+                  surfaceArea: validInputSurfaceM2,
+                  rooms: null,
+                  propertyType: propertyType,
+                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                  postalCode: postcodeNorm || null,
+                  commune: cityNorm || null,
+                }
+              : null,
+            buildingStats: null,
+            comparables: [],
+            matchExplanation: fallbackSource,
+          }),
         }, "fallback_match");
       }
 
@@ -558,12 +619,37 @@ export async function GET(request: NextRequest) {
           street_average_message: "No reliable data found",
           livability_rating: "FAIR",
         },
+        fr: emptyFranceResponse({
+          success: false,
+          resultType: "no_result",
+          confidence: "low",
+          requestedLot: requestedLotNorm,
+          normalizedLot: normalizedRequestedLot,
+          property: null,
+          buildingStats: null,
+          comparables: [],
+          matchExplanation: "No reliable data found",
+        }),
       }, "no_data");
     } catch (err) {
       console.log("[FR_GOLD] catch_error", { message: err instanceof Error ? err.message : "Unknown error" });
       const payload = {
         message: "Failed to fetch France property value",
         error: err instanceof Error ? err.message : "Unknown error",
+        fr: emptyFranceResponse({
+          success: false,
+          resultType: "no_result",
+          confidence: "low",
+          requestedLot: normalizeLot(aptNumber) || null,
+          normalizedLot: (() => {
+            const l = normalizeLot(aptNumber) || null;
+            return l ? (l.replace(/^0+/, "") || l) : null;
+          })(),
+          property: null,
+          buildingStats: null,
+          comparables: [],
+          matchExplanation: "No reliable data found",
+        }),
       };
       console.log("[FR_GOLD] return", { tag: "error", status: 500 });
       return NextResponse.json(payload, { status: 500 });
