@@ -180,22 +180,19 @@ export function FranceApartmentSheet({
     isHouseInferredByHeuristic;
   const isApartmentLikely = parsed?.multiple_units === true || availableLots.length > 0 || hasAppartementType;
   const isPropertyTypeUnknown = !isHouseDetected && !isApartmentLikely;
-  const postcodeStr = String(parsed?.address?.postcode ?? postcode ?? "").trim();
-  const isDenseUrbanAddress =
-    /^75\d{3}$/.test(postcodeStr) ||
-    /\b(paris|lyon|marseille|bordeaux|lille|nice|nantes)\b/i.test(address);
   const propertyTypeHint = String((normalized?.property?.propertyType ?? pr?.property_type ?? "")).toLowerCase();
   const isApartmentTypeHint = propertyTypeHint.includes("appart");
+  const backendMultiUnitFlag = parsed?.multiple_units === true || parsed?.prompt_for_apartment === true;
+  const hasMultiUnitEvidence =
+    availableLots.length > 0 ||
+    hasAppartementType ||
+    backendMultiUnitFlag ||
+    isApartmentTypeHint;
 
   // UI-only override: some "house-like" addresses can be classified as multi-unit due to sparse DVF type info.
   // If the payload looks like a small inventory (low counts), treat as house-like for copy only.
-  const isHouseLikeOverride = buildingSales.length <= 5 && availableLots.length < 20 && !isDenseUrbanAddress;
-  const isApartmentLikeForLotFirst =
-    availableLots.length > 0 ||
-    hasAppartementType ||
-    parsed?.multiple_units === true ||
-    isDenseUrbanAddress ||
-    isApartmentTypeHint;
+  const isHouseLikeOverride = buildingSales.length <= 5 && availableLots.length < 20 && !hasMultiUnitEvidence;
+  const isApartmentLikeForLotFirst = hasMultiUnitEvidence;
   const isHouseLikeUI = isHouseDetected || (isHouseLikeOverride && !isApartmentLikeForLotFirst);
   const shouldForceLotFirstFlow = isApartmentLikeForLotFirst && !isHouseLikeUI;
   React.useEffect(() => {
@@ -206,13 +203,14 @@ export function FranceApartmentSheet({
       shouldForceLotFirstFlow,
       isApartmentLikely,
       isApartmentLikeForLotFirst,
+      hasMultiUnitEvidence,
+      backendMultiUnitFlag,
       multipleUnits: parsed?.multiple_units === true,
       availableLots: availableLots.length,
       hasAppartementType,
-      isDenseUrbanAddress,
       isApartmentTypeHint,
     });
-  }, [isDev, isHouseDetected, isHouseLikeUI, shouldForceLotFirstFlow, isApartmentLikely, isApartmentLikeForLotFirst, parsed?.multiple_units, availableLots.length, hasAppartementType, isDenseUrbanAddress, isApartmentTypeHint]);
+  }, [isDev, isHouseDetected, isHouseLikeUI, shouldForceLotFirstFlow, isApartmentLikely, isApartmentLikeForLotFirst, hasMultiUnitEvidence, backendMultiUnitFlag, parsed?.multiple_units, availableLots.length, hasAppartementType, isApartmentTypeHint]);
 
   const displayConfidence = React.useMemo(() => {
     const c = normalized?.confidence;
@@ -392,7 +390,14 @@ export function FranceApartmentSheet({
       fr,
       legacy: { averageBuildingValue, livabilityRating: legacyLivability },
     });
-  }, [isResultCardOpen, hasSubmittedLotSearch, isLoading, normalized, requestedLot, averageBuildingValue, legacyLivability]);
+    if (isDev) {
+      console.log("[FR_UI] final_response_type", {
+        resultType: fr.resultType,
+        success: fr.success,
+        confidence: fr.confidence,
+      });
+    }
+  }, [isResultCardOpen, hasSubmittedLotSearch, isLoading, normalized, requestedLot, averageBuildingValue, legacyLivability, isDev]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -575,7 +580,9 @@ export function FranceApartmentSheet({
     const dateText = isLoadingNow ? "—" : formatDisplayDate(fr?.property?.transactionDate ?? null);
     const sourceText = isLoadingNow
       ? "—"
-      : (sourceLabel || (typeof pr?.street_average_message === "string" && pr.street_average_message.trim() ? pr.street_average_message.trim() : "—"));
+      : (sourceLabel ||
+          (typeof pr?.street_average_message === "string" && pr.street_average_message.trim() ? pr.street_average_message.trim() : null) ||
+          (fr?.success === false ? "No reliable data found" : "Area fallback"));
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
     // Reuse the exact gold token used by the Search button and active Explore icon.
