@@ -494,10 +494,10 @@ export async function GET(request: NextRequest) {
 
       let codePostal = (parsedFR.postcode || postcode || zip || "").trim();
       if (!codePostal) {
-        const fiveDigit = fullAddress.match(/\b(\d{5})\b/);
-        const fourDigit = fullAddress.match(/\b(\d{4})\b/);
-        if (fiveDigit) codePostal = fiveDigit[1];
-        else if (fourDigit) codePostal = "0" + fourDigit[1];
+        const fiveDigit = fullAddress.match(/\b(\d{5})\b/)?.[1] ?? "";
+        const fourDigit = fullAddress.match(/\b(\d{4})\b/)?.[1] ?? "";
+        if (fiveDigit) codePostal = fiveDigit;
+        else if (fourDigit) codePostal = "0" + fourDigit;
       }
       if (!codePostal && /anglais|promenade|prom\s/i.test((parsedFR.street || street || ""))) {
         codePostal = "06000";
@@ -523,7 +523,7 @@ export async function GET(request: NextRequest) {
           },
         };
         const requestedLot = aptNumber ? normalizeLot(aptNumber) || null : null;
-        const normalizedLot = requestedLot ? (requestedLot.replace(/^0+/, "") || requestedLot) : null;
+        const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
         const fr: FrancePropertyResponse = emptyFranceResponse({
           success: false,
           resultType: "no_result",
@@ -594,7 +594,7 @@ export async function GET(request: NextRequest) {
         };
         console.log("[property-value] France final payload (multiple_units):", JSON.stringify({ result_level: payload.result_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, average_building_value: payload.average_building_value, building_sales_count: payload.building_sales?.length ?? 0 }));
         const requestedLot = aptTrimmed || null;
-        const normalizedLot = requestedLot ? (requestedLot.replace(/^0+/, "") || requestedLot) : null;
+        const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
         const fr: FrancePropertyResponse = emptyFranceResponse({
           success: true,
           resultType: "building_level",
@@ -671,7 +671,7 @@ export async function GET(request: NextRequest) {
           result_level: payload.result_level,
           value_level: payload.property_result.value_level,
         }));
-        const normalizedLot = requestedLot ? (requestedLot.replace(/^0+/, "") || requestedLot) : null;
+        const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
         const fr: FrancePropertyResponse = emptyFranceResponse({
           success: true,
           resultType: "exact_apartment",
@@ -685,7 +685,7 @@ export async function GET(request: NextRequest) {
             transactionValue: payload.property_result?.last_transaction?.amount ?? null,
             pricePerSqm:
               payload.surface_reelle_bati && payload.property_result?.last_transaction?.amount
-                ? Math.round((payload.property_result.last_transaction.amount / payload.surface_reelle_bati) * 100) / 100
+                ? Math.round((payload.property_result.last_transaction.amount / (payload.surface_reelle_bati ?? 1)) * 100) / 100
                 : null,
             surfaceArea: payload.surface_reelle_bati ?? null,
             rooms: null,
@@ -759,7 +759,7 @@ export async function GET(request: NextRequest) {
             available_lots_count: payload.available_lots?.length ?? 0,
           },
         }));
-        const normalizedLot = requestedLot ? (requestedLot.replace(/^0+/, "") || requestedLot) : null;
+        const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
         const hasBuilding = (payload.building_sales?.length ?? 0) > 0 || (payload.average_building_value ?? 0) > 0;
         const sim = result.similarApartment ?? null;
         const nearby = result.nearbyComparable ?? null;
@@ -783,13 +783,12 @@ export async function GET(request: NextRequest) {
         const buildingRejectedAsWeak = hasBuilding && !buildingStrong;
 
         const nearbyStrong =
-          !!nearby &&
-          typeof nearby.value === "number" &&
-          nearby.value > 0 &&
-          typeof nearby.date === "string" &&
-          nearby.date.trim().length > 0 &&
-          typeof nearby.surface === "number" &&
-          nearby.surface > 0;
+          typeof nearby?.value === "number" &&
+          (nearby?.value ?? 0) > 0 &&
+          typeof nearby?.date === "string" &&
+          (nearby?.date ?? "").trim().length > 0 &&
+          typeof nearby?.surface === "number" &&
+          (nearby?.surface ?? 0) > 0;
 
         const hasReliableComps = reliableSameBuildingCount >= 2 || reliableNearbyCount >= 2;
         const hasAnyTxData = !!sim || nearbyStrong || hasBuilding;
@@ -825,24 +824,24 @@ export async function GET(request: NextRequest) {
         const frProperty =
           resultType === "similar_apartment_same_building" && sim
             ? {
-                transactionDate: sim.date ?? null,
-                transactionValue: sim.value ?? null,
-                pricePerSqm: sim.surface && sim.value ? Math.round((sim.value / sim.surface) * 100) / 100 : null,
-                surfaceArea: sim.surface ?? null,
+                transactionDate: sim?.date ?? null,
+                transactionValue: sim?.value ?? null,
+                pricePerSqm: sim?.surface && sim?.value ? Math.round(((sim?.value ?? 0) / (sim?.surface ?? 1)) * 100) / 100 : null,
+                surfaceArea: sim?.surface ?? null,
                 rooms: null,
-                propertyType: sim.typeLocal ?? null,
+                propertyType: sim?.typeLocal ?? null,
                 building: `${houseNumTrim || ""} ${(voie ?? "").trim()}`.trim() || null,
                 postalCode: codePostal ?? null,
                 commune: commune ?? null,
               }
             : resultType === "nearby_comparable" && nearby
               ? {
-                  transactionDate: nearby.date ?? null,
-                  transactionValue: nearby.value ?? null,
-                  pricePerSqm: nearby.surface && nearby.value ? Math.round((nearby.value / nearby.surface) * 100) / 100 : null,
-                  surfaceArea: nearby.surface ?? null,
+                  transactionDate: nearby?.date ?? null,
+                  transactionValue: nearby?.value ?? null,
+                  pricePerSqm: nearby?.surface && nearby?.value ? Math.round(((nearby?.value ?? 0) / (nearby?.surface ?? 1)) * 100) / 100 : null,
+                  surfaceArea: nearby?.surface ?? null,
                   rooms: null,
-                  propertyType: nearby.typeLocal ?? null,
+                  propertyType: nearby?.typeLocal ?? null,
                   building: null,
                   postalCode: codePostal ?? null,
                   commune: commune ?? null,
@@ -867,8 +866,7 @@ export async function GET(request: NextRequest) {
         // Sanity check: extremely high price/m² is suspicious (e.g. bad valeur_fonciere/surface pairing).
         let finalResultType: FrancePropertyResponse["resultType"] = resultType;
         let finalConfidence: FrancePropertyResponse["confidence"] = confidence;
-        const suspiciousPricePerSqm =
-          typeof frProperty?.pricePerSqm === "number" && frProperty.pricePerSqm > 50000;
+        const suspiciousPricePerSqm = (frProperty?.pricePerSqm ?? 0) > 50000;
         // Policy:
         // - exact_apartment: strict suppression to no_result when suspicious
         // - similar_apartment_same_building / nearby_comparable: warning mode (do NOT suppress)
@@ -986,7 +984,7 @@ export async function GET(request: NextRequest) {
             ...(typeof reliableSameBuildingCount === "number" ? { reliableCandidateCountSameBuilding: reliableSameBuildingCount } : {}),
             ...(typeof reliableNearbyCount === "number" ? { reliableCandidateCountNearby: reliableNearbyCount } : {}),
             buildingRejectedAsWeak,
-            ...(result.debug?.nearbyFilterStats ? { nearbyFilterStats: result.debug.nearbyFilterStats as any } : {}),
+            ...(result.debug?.nearbyFilterStats ? { nearbyFilterStats: result.debug?.nearbyFilterStats as any } : {}),
             exactLotRowCount,
             buildingRowCount: Array.isArray(payload.building_sales) ? payload.building_sales.length : 0,
             comparableRowCount: resultType === "nearby_comparable" ? 1 : 0,
@@ -1020,17 +1018,19 @@ export async function GET(request: NextRequest) {
       const lastTx = result.lastTransaction;
       const exactValue = result.currentValue ?? (lastTx?.value ?? null);
       const streetAvgDisplay = result.areaAverageValue;
+      const streetAvgDisplayValue = streetAvgDisplay ?? 0;
       const isBuildingLevel = result.resultLevel === "building";
-      const isAreaFallback = result.resultLevel === "commune_fallback" && (streetAvgDisplay != null && streetAvgDisplay > 0);
+      const isAreaFallback = result.resultLevel === "commune_fallback" && streetAvgDisplayValue > 0;
       const hasRows = (result.rowsAtStage ?? 0) > 0;
       const matchStageHighEnough = (result.matchStage ?? 0) >= 3;
       const isExactProperty = result.resultLevel === "exact_property";
       const coerceToBuilding = hasRows && matchStageHighEnough && !isExactProperty;
+      const hasExactValue = typeof exactValue === "number" && (exactValue ?? 0) > 0;
       const valueLevel = coerceToBuilding
         ? "building-level"
         : isBuildingLevel
           ? "building-level"
-          : exactValue != null && exactValue > 0
+          : hasExactValue
             ? "property-level"
             : isAreaFallback
               ? "area-level"
@@ -1066,7 +1066,7 @@ export async function GET(request: NextRequest) {
         },
       };
       console.log("[property-value] France final payload (single/building/area):", JSON.stringify({ result_level: payload.result_level, value_level: payload.property_result.value_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, building_sales_count: payload.building_sales?.length ?? 0 }));
-      const normalizedLot = requestedLot ? (requestedLot.replace(/^0+/, "") || requestedLot) : null;
+      const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
       const fr: FrancePropertyResponse = emptyFranceResponse({
         success: valueLevel !== "no_match" || coerceToBuilding,
         resultType: payload.result_level === "exact_property" ? "exact_apartment" : payload.result_level === "building" ? "building_level" : "no_result",
@@ -1081,8 +1081,8 @@ export async function GET(request: NextRequest) {
                 transactionDate: payload.date_mutation ?? null,
                 transactionValue: payload.property_result?.last_transaction?.amount ?? null,
                 pricePerSqm:
-                  payload.surface_reelle_bati && payload.property_result?.last_transaction?.amount
-                    ? Math.round((payload.property_result.last_transaction.amount / payload.surface_reelle_bati) * 100) / 100
+                  (payload.surface_reelle_bati ?? 0) > 0 && payload.property_result?.last_transaction?.amount
+                    ? Math.round((payload.property_result.last_transaction.amount / (payload.surface_reelle_bati ?? 1)) * 100) / 100
                     : null,
                 surfaceArea: payload.surface_reelle_bati ?? null,
                 rooms: null,
@@ -1145,10 +1145,10 @@ export async function GET(request: NextRequest) {
           const commune = (parsedFR.city || city || "").trim() || null;
           let codePostal = (parsedFR.postcode || postcode || zip || "").trim();
           if (!codePostal) {
-            const fiveDigit = fullAddress.match(/\b(\d{5})\b/);
-            const fourDigit = fullAddress.match(/\b(\d{4})\b/);
-            if (fiveDigit) codePostal = fiveDigit[1];
-            else if (fourDigit) codePostal = "0" + fourDigit[1];
+            const fiveDigit = fullAddress.match(/\b(\d{5})\b/)?.[1] ?? "";
+            const fourDigit = fullAddress.match(/\b(\d{4})\b/)?.[1] ?? "";
+            if (fiveDigit) codePostal = fiveDigit;
+            else if (fourDigit) codePostal = "0" + fourDigit;
           }
           codePostal = codePostal.trim();
           if (codePostal.length === 4 && !codePostal.startsWith("0")) codePostal = "0" + codePostal;
@@ -1200,7 +1200,7 @@ export async function GET(request: NextRequest) {
                 },
               }));
               const requestedLot = aptTrimmed || null;
-              const normalizedLot = requestedLot ? (requestedLot.replace(/^0+/, "") || requestedLot) : null;
+              const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
               const fr: FrancePropertyResponse = emptyFranceResponse({
                 success: true,
                 resultType: "building_level",
@@ -1241,7 +1241,9 @@ export async function GET(request: NextRequest) {
           }
         }
       } catch (retryErr) {
-        console.error("[property-value] France retry without lot failed:", retryErr instanceof Error ? retryErr.message : String(retryErr));
+        const retryErrAny = retryErr as { message?: string } | undefined;
+        const retryErrMessage = retryErrAny?.message ?? "Unknown error";
+        console.error("[property-value] France retry without lot failed:", retryErrMessage);
       }
 
       return cacheAndReturn(frEmptyResponse());
