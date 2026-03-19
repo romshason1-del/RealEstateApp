@@ -436,8 +436,11 @@ export async function GET(request: NextRequest) {
     const frRequestStartedAt = Date.now();
     const frErrorCacheKey = `fr_err:${cacheKey}${aptNumber ? `|apt:${aptNumber}` : ""}`;
     const frCached = FR_ERROR_CACHE.get(frErrorCacheKey);
-    if (frCached && Date.now() - frCached.ts < FR_ERROR_CACHE_TTL_MS) {
-      return NextResponse.json(frCached.data);
+    const frCachedData = frCached?.data;
+    const frCachedTs = frCached?.ts;
+    const frCachedAge = frCachedTs == null ? Number.POSITIVE_INFINITY : Date.now() - frCachedTs!;
+    if (frCachedData && frCachedAge < FR_ERROR_CACHE_TTL_MS) {
+      return NextResponse.json(frCachedData);
     }
 
     const frEmptyResponse = (): Record<string, unknown> => ({
