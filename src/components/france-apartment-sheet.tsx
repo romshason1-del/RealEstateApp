@@ -197,6 +197,7 @@ export function FranceApartmentSheet({
   const isApartmentLikeForLotFirst = hasMultiUnitEvidence;
   const isHouseLikeUI = isHouseDetected || (isHouseLikeOverride && !isApartmentLikeForLotFirst);
   const shouldForceLotFirstFlow = isApartmentLikeForLotFirst && !isHouseLikeUI;
+  const shouldShowApartmentInput = !isHouseLikeUI && hasMultiUnitEvidence;
   React.useEffect(() => {
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
@@ -213,6 +214,19 @@ export function FranceApartmentSheet({
       isApartmentTypeHint,
     });
   }, [isDev, isHouseDetected, isHouseLikeUI, shouldForceLotFirstFlow, isApartmentLikely, isApartmentLikeForLotFirst, hasMultiUnitEvidence, backendMultiUnitFlag, parsed?.multiple_units, availableLots.length, hasAppartementType, isApartmentTypeHint]);
+
+  const uiState = isResultCardOpen
+    ? "result-visible"
+    : shouldShowApartmentInput
+      ? "apartment-input"
+      : isHouseLikeUI
+        ? "house-direct"
+        : "house-direct";
+
+  React.useEffect(() => {
+    if (!isDev) return;
+    console.log("[FR_UI_STATE]", { uiState });
+  }, [isDev, uiState]);
 
   const displayConfidence = React.useMemo(() => {
     const c = normalized?.confidence;
@@ -285,13 +299,15 @@ export function FranceApartmentSheet({
   // Houses/single-unit properties should not require apartment/lot input.
   // As soon as we have enough data to infer "house", open the results directly from the address.
   React.useEffect(() => {
-    if (!isHouseLikeUI) return;
+    // Fallback: if apartment input is not shown, ensure the user always gets a usable next step
+    // by opening the results (house-direct/implicit resolved state) rather than leaving the sheet inactive.
+    if (shouldShowApartmentInput) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;
     if (isDev) console.log("[FR_UI] direct_house_flow_chosen");
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [isHouseLikeUI, hasSubmittedLotSearch, isLoading, isDev]);
+  }, [shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, isDev]);
 
   React.useEffect(() => {
     if (!isDev) return;
