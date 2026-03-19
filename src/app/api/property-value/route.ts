@@ -485,8 +485,10 @@ export async function GET(request: NextRequest) {
       const parsedFR = parseFRAddressFromFullString(fullAddress);
       let houseNumTrim = (parsedFR.houseNumber || houseNumber || "").trim();
       if (!houseNumTrim) {
-        const numMatch = fullAddress.match(/\b(\d{1,3})(?!\d)\b/);
-        if (numMatch) houseNumTrim = numMatch[1];
+        const matchedHouseNum = fullAddress.match(/\b(\d{1,3})(?!\d)\b/)?.[1] ?? "";
+        if (matchedHouseNum !== "") {
+          houseNumTrim = matchedHouseNum;
+        }
       }
       const aptTrimmed = normalizeLot(aptNumber);
 
