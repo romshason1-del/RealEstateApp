@@ -328,6 +328,8 @@ export async function GET(request: NextRequest) {
         return NextResponse.json(payload, status ? { status } : undefined);
       };
       const normalizeStreetForDetection = (s: string): string => {
+        // Keep this intentionally strict: only strip voie-type prefixes the UI might include.
+        // Example: "Rue Adolphe Pajeaud" -> "ADOLPHE PAJEAUD"
         const unified = s
           .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
           .replace(/[’‘]/g, "'")
@@ -340,35 +342,9 @@ export async function GET(request: NextRequest) {
           .replace(/\s+/g, " ")
           .trim();
 
-        // Remove common French voie-type prefixes (RUE, AVENUE, BD, ...).
-        // This makes UI variations like "Rue X" vs "X" match the same key.
-        const prefixes = [
-          "RUE",
-          "AVENUE",
-          "AV",
-          "BD",
-          "BOULEVARD",
-          "BOUL",
-          "CHEMIN",
-          "IMPASSE",
-          "ALLEE",
-          "ALLE",
-          "PLACE",
-          "SQUARE",
-          "QUAI",
-          "ROUTE",
-          "TRAVERSE",
-          "AUTOROUTE",
-          "ROND POINT",
-          "ROND-POINT",
-        ];
-
-        const prefixRegex = new RegExp(`^(?:${prefixes.join("|")})\\s+`, "i");
-        let cleaned = unified.replace(prefixRegex, "").trim();
-
-        const anyPrefixRegex = new RegExp(`\\b(?:${prefixes.join("|")})\\b\\.?`, "gi");
-        cleaned = cleaned.replace(anyPrefixRegex, "").replace(/\s+/g, " ").trim();
-
+        const prefixes = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "ROUTE", "IMPASSE"];
+        const prefixRegex = new RegExp(`^(?:${prefixes.join("|")})\\.?\\s+`, "i");
+        const cleaned = unified.replace(prefixRegex, "").replace(/\s+/g, " ").trim();
         return cleaned;
       };
 
