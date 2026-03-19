@@ -301,6 +301,9 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     // Fallback: if apartment input is not shown, ensure the user always gets a usable next step
     // by opening the results (house-direct/implicit resolved state) rather than leaving the sheet inactive.
+    // If backend indicates a multi-unit building (apartment/lot-first), never auto-open results.
+    // This guarantees we don't show a final result/no-data card before the user submits a lot.
+    if (parsed?.multiple_units === true || parsed?.prompt_for_apartment === true) return;
     if (shouldShowApartmentInput) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;

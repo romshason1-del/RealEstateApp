@@ -588,45 +588,48 @@ export async function GET(request: NextRequest) {
           ? Math.round(surface * pricePerM2)
           : null;
         const hasEstimated = estimated != null;
-        return frReturn({
-          address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
-          data_source: "properties_france",
-          fr_detect: detectClass,
-          property_result: {
-            exact_value: estimated,
-            exact_value_message: estimated == null ? "No reliable data found" : null,
-            value_level: "property-level",
-            last_transaction: {
-              amount: Number(exact.last_sale_price ?? 0) || 0,
-              date: exact.last_sale_date ?? null,
-              message: Number(exact.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+        if (hasEstimated) {
+          return frReturn({
+            address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+            data_source: "properties_france",
+            fr_detect: detectClass,
+            property_result: {
+              exact_value: estimated,
+              exact_value_message: null,
+              value_level: "property-level",
+              last_transaction: {
+                amount: Number(exact.last_sale_price ?? 0) || 0,
+                date: exact.last_sale_date ?? null,
+                message: Number(exact.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+              },
+              street_average: null,
+              street_average_message: detectClass === "apartment" ? "Exact apartment" : "Exact property",
+              livability_rating: "FAIR",
             },
-            street_average: null,
-            street_average_message: hasEstimated ? (detectClass === "apartment" ? "Exact apartment" : "Exact property") : "No reliable data found",
-            livability_rating: "FAIR",
-          },
-          fr: emptyFranceResponse({
-            success: hasEstimated,
-            resultType: hasEstimated ? "exact_apartment" : "no_reliable_data",
-            confidence: hasEstimated ? "high" : "low",
-            requestedLot: requestedLotNorm,
-            normalizedLot: normalizedRequestedLot,
-            property: {
-              transactionDate: exact.last_sale_date ?? null,
-              transactionValue: Number(exact.last_sale_price ?? 0) || null,
-              pricePerSqm: Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null,
-              surfaceArea: Number.isFinite(surface) && surface > 0 ? surface : null,
-              rooms: null,
-              propertyType: null,
-              building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
-              postalCode: postcodeNorm || null,
-              commune: cityNorm || null,
-            },
-            buildingStats: null,
-            comparables: [],
-            matchExplanation: hasEstimated ? "Exact property" : "No reliable data found",
-          }),
-        }, "exact_match");
+            fr: emptyFranceResponse({
+              success: true,
+              resultType: "exact_apartment",
+              confidence: "high",
+              requestedLot: requestedLotNorm,
+              normalizedLot: normalizedRequestedLot,
+              property: {
+                transactionDate: exact.last_sale_date ?? null,
+                transactionValue: Number(exact.last_sale_price ?? 0) || null,
+                pricePerSqm: Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null,
+                surfaceArea: Number.isFinite(surface) && surface > 0 ? surface : null,
+                rooms: null,
+                propertyType: null,
+                building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                postalCode: postcodeNorm || null,
+                commune: cityNorm || null,
+              },
+              buildingStats: null,
+              comparables: [],
+              matchExplanation: "Exact property",
+            }),
+          }, "exact_match");
+        }
+        // If the row exists but we couldn't compute an estimated value, continue the ladder.
       }
 
       // Same building fallback (when unit/lot was provided but exact unit match is missing):
@@ -671,38 +674,41 @@ export async function GET(request: NextRequest) {
             ? Math.round(surface * pricePerM2)
             : null;
           const hasEstimated = estimated != null;
-          return frReturn(
-            {
-              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
-              data_source: "properties_france",
-              fr_detect: detectClass,
-              property_result: {
-                exact_value: estimated,
-                exact_value_message: estimated == null ? "No reliable data found" : null,
-                value_level: "building-level",
-                last_transaction: {
-                  amount: Number(buildingRow.last_sale_price ?? 0) || 0,
-                  date: buildingRow.last_sale_date ?? null,
-                  message: Number(buildingRow.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+          if (hasEstimated) {
+            return frReturn(
+              {
+                address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+                data_source: "properties_france",
+                fr_detect: detectClass,
+                property_result: {
+                  exact_value: estimated,
+                  exact_value_message: null,
+                  value_level: "building-level",
+                  last_transaction: {
+                    amount: Number(buildingRow.last_sale_price ?? 0) || 0,
+                    date: buildingRow.last_sale_date ?? null,
+                    message: Number(buildingRow.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+                  },
+                  street_average: null,
+                  street_average_message: "Building-level estimate",
+                  livability_rating: "FAIR",
                 },
-                street_average: null,
-                street_average_message: hasEstimated ? "Building-level estimate" : "No reliable data found",
-                livability_rating: "FAIR",
+                fr: emptyFranceResponse({
+                  success: true,
+                  resultType: "building_level",
+                  confidence: "medium",
+                  requestedLot: requestedLotNorm,
+                  normalizedLot: normalizedRequestedLot,
+                  property: null,
+                  buildingStats: { transactionCount: 1, avgPricePerSqm: null, avgTransactionValue: null },
+                  comparables: [],
+                  matchExplanation: "Building-level estimate (no exact unit match found).",
+                }),
               },
-              fr: emptyFranceResponse({
-                success: hasEstimated,
-                resultType: hasEstimated ? "building_level" : "no_reliable_data",
-                confidence: hasEstimated ? "medium" : "low",
-                requestedLot: requestedLotNorm,
-                normalizedLot: normalizedRequestedLot,
-                property: null,
-                buildingStats: { transactionCount: 1, avgPricePerSqm: null, avgTransactionValue: null },
-                comparables: [],
-                matchExplanation: hasEstimated ? "Building-level estimate (no exact unit match found)." : "No reliable data found",
-              }),
-            },
-            "building_same_address_match"
-          );
+              "building_same_address_match"
+            );
+          }
+          // If the row exists but we couldn't compute an estimated value, continue the ladder.
         }
       }
 
@@ -774,8 +780,13 @@ export async function GET(request: NextRequest) {
 
       if (fallback) {
         const avgPrice = Number(fallback.avg_price_per_m2 ?? 0);
-        const estimated = validInputSurfaceM2 != null && Number.isFinite(avgPrice) && avgPrice > 0
-          ? Math.round(validInputSurfaceM2 * avgPrice)
+        const usableAvg = Number.isFinite(avgPrice) && avgPrice > 0;
+        // Frontend doesn't send surface_m2 for FR lot search; if it's missing, still show an estimated value
+        // using avg_price_per_m2 directly (so we don't incorrectly return no-data).
+        const estimated = usableAvg
+          ? validInputSurfaceM2 != null
+            ? Math.round(validInputSurfaceM2 * avgPrice)
+            : Math.round(avgPrice)
           : null;
         const hasEstimated = estimated != null;
         const resolvedSourceLabel = hasEstimated ? fallbackSource : "No reliable data found";
