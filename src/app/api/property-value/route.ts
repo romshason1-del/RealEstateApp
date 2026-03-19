@@ -126,10 +126,10 @@ function buildUKMinimalResponse(): Record<string, unknown> {
 }
 
 function getGoldBigQueryClient(): BigQuery {
-  const projectId = (process.env.GOOGLE_CLOUD_PROJECT_ID ?? "").trim();
-  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}") as { client_email?: string; private_key?: string };
-  if (credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
-  return new BigQuery({ projectId, credentials });
+  const key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}") as { project_id?: string; client_email?: string; private_key?: string };
+  if (key.private_key) key.private_key = key.private_key.replace(/\\n/g, "\n");
+  if (!key.project_id) throw new Error("project_id missing from GOOGLE_SERVICE_ACCOUNT_KEY JSON");
+  return new BigQuery({ projectId: key.project_id, credentials: key });
 }
 
 export async function GET(request: NextRequest) {
@@ -292,7 +292,6 @@ export async function GET(request: NextRequest) {
     try {
       const frStartTs = Date.now();
         console.log("[ENV_CHECK]", {
-          projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
           hasKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
         });
       const requestedLotNorm = normalizeLot(aptNumber) || null;
@@ -307,9 +306,11 @@ export async function GET(request: NextRequest) {
       console.log("[FR_INIT] creating BigQuery client");
       let bq: BigQuery;
       try {
+        const key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}");
+        console.log("[FR_INIT] projectId from key:", (key as any)?.project_id);
         bq = new BigQuery({
-          projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
-          credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}"),
+          projectId: (key as any)?.project_id,
+          credentials: key,
         });
         console.log("[FR_INIT] BigQuery client created");
       } catch (err) {
