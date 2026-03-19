@@ -33,11 +33,14 @@ export function usePropertyValueInsights(
   const requestIdRef = React.useRef(0);
   const optionsRef = React.useRef(options);
   optionsRef.current = options;
+  const abortRef = React.useRef<AbortController | null>(null);
 
   const doFetch = React.useCallback(() => {
     if (!address.trim() || !hasProvider) return;
     const opts = optionsRef.current;
     const thisRequestId = ++requestIdRef.current;
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
     setIsLoading(true);
     const fetchOpts = {
       countryCode: countryCode || "IL",
@@ -48,6 +51,7 @@ export function usePropertyValueInsights(
       ...(opts?.selectedFormattedAddress != null ? { selectedFormattedAddress: opts.selectedFormattedAddress } : {}),
       ...((opts?.aptNumber ?? "").toString().trim() ? { aptNumber: (opts?.aptNumber ?? "").toString().trim() } : {}),
       ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),
+      signal: abortRef.current.signal,
     };
     fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
@@ -55,7 +59,7 @@ export function usePropertyValueInsights(
       })
       .catch((err) => {
         if (thisRequestId === requestIdRef.current) {
-          console.error("[usePropertyValueInsights]", err);
+          if ((err as any)?.name !== "AbortError") console.error("[usePropertyValueInsights]", err);
           setData({ message: "Failed to fetch", error: String(err) });
         }
       })
@@ -66,12 +70,21 @@ export function usePropertyValueInsights(
 
   React.useEffect(() => {
     if (!address.trim() || !hasProvider) {
+      abortRef.current?.abort();
+      abortRef.current = null;
       setData(null);
       setIsLoading(false);
       return;
     }
     doFetch();
   }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress, options?.aptNumber, options?.postcode, options?.refetchTrigger, doFetch]);
+
+  React.useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
 
   const refetch = React.useCallback(() => {
     doFetch();

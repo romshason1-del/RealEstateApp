@@ -71,6 +71,10 @@ export type FrancePropertyResult = {
   buildingSales: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number: string | null }>;
   surfaceReelleBati: number | null;
   lotNumber: string | null;
+  /** Normalized requested lot/apartment number (if provided). */
+  requestedLot?: string | null;
+  /** Number of DVF rows matched for the requested lot (0 when none). */
+  exactLotRowCount?: number;
   matchStage?: MatchStage;
   resultLevel?: ResultLevel;
   rowsAtStage?: number;
@@ -78,10 +82,71 @@ export type FrancePropertyResult = {
   apartmentNotMatched?: boolean;
   /** Available lot numbers in this building (for prompt) */
   availableLots?: string[];
+  /** Step 2: best similar apartment (same building) when lot not matched */
+  similarApartment?: { lotNumber: string | null; date: string | null; value: number; surface: number | null; typeLocal: string | null } | null;
+  /** Step 4: nearby comparable when building fallback is weak/unavailable */
+  nearbyComparable?: {
+    address: string;
+    lotNumber: string | null;
+    date: string | null;
+    value: number;
+    surface: number | null;
+    typeLocal: string | null;
+    scope: "same_street" | "same_postcode_commune" | "same_commune";
+    selectedNearbyStrategy: "street_postcode" | "postcode_commune" | "commune";
+  } | null;
+  debug?: {
+    candidateCountSameBuilding?: number;
+    candidateCountNearby?: number;
+    reliableCandidateCountSameBuilding?: number;
+    reliableCandidateCountNearby?: number;
+    similarityScore?: number | null;
+    nearbyStageCounts?: { same_street: number; same_postcode_commune: number; same_commune: number };
+    selectedNearbyStrategy?: "street_postcode" | "postcode_commune" | "commune" | null;
+    nearbyFilterStats?: { raw: number; missingSurface: number; missingDate: number; tooOld: number; trustworthy: number };
+    validationNotes?: string[];
+  };
 };
 
 const EXCLUDED_TYPES = ["dépendance", "local industriel", "parking"];
 const PRIMARY_TYPES = ["appartement", "maison", ""];
+
+const PRICE_PER_SQM_MIN = 1000;
+const PRICE_PER_SQM_MAX = 20000;
+const OUTLIER_MAX_DEVIATION_FROM_MEDIAN = 0.4;
+
+function computePricePerSqm(value: number, surface: number | null): number | null {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (surface == null || !Number.isFinite(surface) || surface <= 0) return null;
+  return value / surface;
+}
+
+function median(values: number[]): number | null {
+  const arr = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (arr.length === 0) return null;
+  const mid = Math.floor(arr.length / 2);
+  if (arr.length % 2 === 1) return arr[mid] ?? null;
+  const a = arr[mid - 1];
+  const b = arr[mid];
+  if (a == null || b == null) return null;
+  return (a + b) / 2;
+}
+
+function filterCompsByPricePerSqmValidation<T extends { value: number; surface: number | null }>(items: T[]) {
+  const withP = items
+    .map((c) => ({ c, p: computePricePerSqm(c.value, c.surface) }))
+    .filter((x) => x.p != null) as Array<{ c: T; p: number }>;
+
+  const inRange = withP.filter((x) => x.p >= PRICE_PER_SQM_MIN && x.p <= PRICE_PER_SQM_MAX);
+  const med = median(inRange.map((x) => x.p));
+  if (med == null || med <= 0) {
+    return { kept: [] as T[], medianPricePerSqm: null as number | null };
+  }
+  const kept = inRange
+    .filter((x) => Math.abs(x.p - med) / med <= OUTLIER_MAX_DEVIATION_FROM_MEDIAN)
+    .map((x) => x.c);
+  return { kept, medianPricePerSqm: med };
+}
 
 function parseFrenchNumber(s: string | null | undefined): number {
   if (!s || !String(s).trim()) return NaN;
@@ -99,11 +164,38 @@ function valueFonciereToEuros(raw: number): number {
   return raw;
 }
 
-function parseFrenchDate(s: string | null | undefined): string | null {
-  if (!s || !String(s).trim()) return null;
-  const m = String(s).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return null;
-  return `${m[3]}-${m[2]}-${m[1]}`;
+function valueFonciereToEurosSafe(raw: number, surface: number | null): number {
+  if (!Number.isFinite(raw)) return 0;
+  const base = valueFonciereToEuros(raw);
+  if (surface != null && surface > 0) {
+    const p = base / surface;
+    if (p > 50000) {
+      // Heuristic: some datasets store valeurs in cents even for <1e7 values.
+      // If dividing by 100 yields a plausible €/m², prefer that to avoid multi-lot / scaling anomalies.
+      const v2 = raw / 100;
+      if (Number.isFinite(v2) && v2 > 0 && v2 / surface <= 50000) return v2;
+    }
+  }
+  return base;
+}
+
+function parseFrenchDate(s: any): string | null {
+  if (s == null) return null;
+  if (s instanceof Date && !Number.isNaN(s.getTime())) return s.toISOString().slice(0, 10);
+  // BigQuery can return DATE/TIMESTAMP-like objects (e.g. { value: '2023-05-18' }).
+  if (typeof s === "object" && typeof (s as any).value === "string") {
+    const v = String((s as any).value).trim();
+    if (v) s = v;
+  }
+  if (!String(s).trim()) return null;
+  const raw = String(s).trim();
+  // Common DVF export format: DD/MM/YYYY
+  const fr = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (fr) return `${fr[3]}-${fr[2]}-${fr[1]}`;
+  // Sometimes already normalized: YYYY-MM-DD (or YYYY/MM/DD)
+  const iso = raw.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  return null;
 }
 
 function isExcludedType(typeLocal: string | null | undefined): boolean {
@@ -116,32 +208,84 @@ function isPrimaryUnit(typeLocal: string | null | undefined): boolean {
   return PRIMARY_TYPES.includes(t) || t === "appartement" || t === "maison";
 }
 
-/** Normalize lot/apartment number for matching and display: string, trimmed, comparable ("9" vs 9). */
+/**
+ * Normalize a user-provided lot/apartment value into a stable display string.
+ * Keeps it human-readable; matching uses `canonicalizeLotCandidates`.
+ */
 export function normalizeLot(val: string | number | null | undefined): string {
   if (val === null || val === undefined) return "";
-  return String(val).trim();
+  const raw = String(val).trim();
+  if (!raw) return "";
+  // Normalize common prefixes / separators but keep original meaning.
+  return raw.replace(/\s+/g, " ").trim();
+}
+
+function canonicalizeLotSegment(seg: string): string {
+  const s = seg
+    .toLowerCase()
+    .trim()
+    .replace(/^lot[\s.:#-]*/i, "")
+    .replace(/[()]/g, "")
+    .trim();
+  if (!s) return "";
+  // Keep alphanumerics only, collapse.
+  const cleaned = s.replace(/[^0-9a-z]/gi, "");
+  if (!cleaned) return "";
+  // If purely numeric, strip leading zeros ("0009" -> "9").
+  if (/^\d+$/.test(cleaned)) return cleaned.replace(/^0+/, "") || "0";
+  // If mixed, still strip leading zeros from numeric prefix (e.g. "0009A" -> "9A").
+  const m = cleaned.match(/^0+(\d.*)$/);
+  return m ? m[1] : cleaned;
+}
+
+function canonicalizeLotCandidates(value: string): string[] {
+  const raw = normalizeLot(value);
+  if (!raw) return [];
+  // Support "09/0009" or "09-0009" by splitting into segments.
+  const parts = raw.split(/[\/\\-]/g).map((p) => canonicalizeLotSegment(p)).filter(Boolean);
+  // Also add the fully-collapsed canonical form as a candidate.
+  const collapsed = canonicalizeLotSegment(raw);
+  const all = [...parts, ...(collapsed ? [collapsed] : [])];
+  // Unique preserving order.
+  return all.filter((v, i) => all.indexOf(v) === i);
 }
 
 /** Canonical form for lot comparison: "9" and "09" match. */
 function lotMatches(lotInRow: string, requestedLot: string): boolean {
   if (!requestedLot) return false;
-  const a = normalizeLot(lotInRow);
-  const b = normalizeLot(requestedLot);
-  if (a === b) return true;
-  const canonical = (s: string) => (s.replace(/^0+/, "") || s);
-  return canonical(a) === canonical(b);
+  const rowCandidates = canonicalizeLotCandidates(lotInRow);
+  const reqCandidates = canonicalizeLotCandidates(requestedLot);
+  if (rowCandidates.length === 0 || reqCandidates.length === 0) return false;
+  for (const r of rowCandidates) {
+    for (const q of reqCandidates) {
+      if (r === q) return true;
+    }
+  }
+  return false;
 }
 
 /** Normalize string for address matching: uppercase, trim, collapse spaces, basic accent fold. */
 function normalizeForMatch(s: string | null | undefined): string {
   if (!s || typeof s !== "string") return "";
-  return s
-    .trim()
-    .toUpperCase()
+  const unified = s
+    // normalize smart apostrophes to ASCII apostrophe
+    .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
+    .replace(/[’‘]/g, "'")
     .replace(/\s+/g, " ")
+    .trim();
+  return unified
+    .toUpperCase()
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Loose street key for matching: remove punctuation/spaces after normalizeForMatch. */
+function normalizeStreetLoose(s: string | null | undefined): string {
+  const strict = normalizeForMatch(s);
+  if (!strict) return "";
+  return strict.replace(/[^A-Z0-9]+/g, "").trim();
 }
 
 /** Build full street from Type de voie + Voie for matching. */
@@ -152,6 +296,187 @@ function buildFullStreet(typeDeVoie: string | null, voie: string | null): string
   if (!t) return v;
   if (!v) return t;
   return `${t} ${v}`;
+}
+
+function medianNumber(values: number[]): number | null {
+  if (!values || values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid] ?? null;
+  const a = sorted[mid - 1];
+  const b = sorted[mid];
+  if (typeof a !== "number" || typeof b !== "number") return null;
+  return (a + b) / 2;
+}
+
+type NearbyScope = "same_street" | "same_postcode_commune" | "same_commune";
+type NearbyStrategy = "street_postcode" | "postcode_commune" | "commune";
+
+function makeNearbyAddress(r: FranceTransactionRow, codePostalFallback: string, communeFallback: string): string {
+  const cp = normalizeCodePostal(String(r.code_postal ?? codePostalFallback ?? "").trim());
+  const com = String(r.commune ?? communeFallback ?? "").trim();
+  const street = buildFullStreet(String((r as any).type_de_voie ?? ""), String(r.voie ?? ""));
+  const no = normalizeLot(r.no_voie);
+  return `${`${no} ${street}`.trim()}, ${cp}, ${com}`.trim();
+}
+
+function rankNearbyCandidate(args: {
+  candidateType: string | null;
+  candidateSurface: number | null;
+  candidateDate: string | null;
+  scope: NearbyScope;
+  preferredType: string | null;
+  targetSurface: number | null;
+}): number {
+  // Higher is better.
+  const { candidateType, candidateSurface, candidateDate, scope, preferredType, targetSurface } = args;
+  let score = 0;
+
+  // Scope preference (street > postcode+commune > commune).
+  if (scope === "same_street") score += 1200;
+  else if (scope === "same_postcode_commune") score += 800;
+  else score += 400;
+
+  // Property type match when we have a preference.
+  if (preferredType && candidateType) {
+    if (candidateType.toLowerCase() === preferredType.toLowerCase()) score += 600;
+    else score -= 120;
+  }
+
+  // Surface proximity when we have a target.
+  if (targetSurface && candidateSurface && targetSurface > 0 && candidateSurface > 0) {
+    const diff = Math.abs(candidateSurface - targetSurface);
+    // Keep bounded; closer surface gets higher score.
+    score += Math.max(0, 450 - diff * 6);
+  }
+
+  // Recency: use lexicographic YYYY-MM-DD (higher is newer).
+  // We don't convert to timestamps (cheaper / safer for partial data).
+  if (candidateDate) score += 200;
+
+  return score;
+}
+
+async function queryNearbyComparableOnStreet(
+  codePostal: string,
+  normalizedStreet: string,
+  excludeNoVoie: string | null
+): Promise<FranceTransactionRow[]> {
+  if (!codePostal?.trim() || !normalizedStreet?.trim()) return [];
+  const client = getBigQueryClient();
+  const { projectId, dataset, table, location } = getBigQueryConfig();
+  const fullTable = `\`${projectId}.${dataset}.${table}\``;
+  const pc = normalizeCodePostal(codePostal);
+  const pcAlt = pc.startsWith("0") ? pc.slice(1) : pc;
+  const streetNormSql = sqlFullStreetNormalized();
+  const where = `
+    LOWER(TRIM(CAST(${COLS.nature_mutation} AS STRING))) = 'vente'
+    AND (TRIM(CAST(${COLS.code_postal} AS STRING)) = @pc OR TRIM(CAST(${COLS.code_postal} AS STRING)) = @pcAlt)
+    AND ${streetNormSql} = @streetNormValue
+    AND LOWER(TRIM(CAST(${COLS.type_local} AS STRING))) IN ('appartement','maison')
+    ${excludeNoVoie ? `AND TRIM(CAST(${COLS.no_voie} AS STRING)) != @excludeNoVoie` : ""}
+  `;
+  const query = `
+    SELECT ${COLS.date_mutation} AS date_mutation, ${COLS.valeur_fonciere} AS valeur_fonciere, ${COLS.no_voie} AS no_voie,
+           ${COLS.type_de_voie} AS type_de_voie, ${COLS.voie} AS voie, ${COLS.code_postal} AS code_postal, ${COLS.commune} AS commune,
+           ${COLS.type_local} AS type_local, ${COLS.surface_reelle_bati} AS surface_reelle_bati, ${COLS.lot_1er} AS lot_1er
+    FROM ${fullTable}
+    WHERE ${where}
+    ORDER BY SAFE.PARSE_DATE('%d/%m/%Y', CAST(${COLS.date_mutation} AS STRING)) DESC NULLS LAST
+    LIMIT 50
+  `;
+  const params: Record<string, string> = {
+    pc,
+    pcAlt: pcAlt || "0",
+    streetNormValue: normalizedStreet,
+    ...(excludeNoVoie ? { excludeNoVoie: excludeNoVoie.trim() } : {}),
+  };
+  const [rows] = await client.query({ query, params, location });
+  return (rows as FranceTransactionRow[]) || [];
+}
+
+async function queryNearbyComparableInPostcode(
+  codePostal: string
+): Promise<FranceTransactionRow[]> {
+  if (!codePostal?.trim()) return [];
+  const client = getBigQueryClient();
+  const { projectId, dataset, table, location } = getBigQueryConfig();
+  const fullTable = `\`${projectId}.${dataset}.${table}\``;
+  const pc = normalizeCodePostal(codePostal);
+  const pcAlt = pc.startsWith("0") ? pc.slice(1) : pc;
+  const where = `
+    LOWER(TRIM(CAST(${COLS.nature_mutation} AS STRING))) = 'vente'
+    AND (TRIM(CAST(${COLS.code_postal} AS STRING)) = @pc OR TRIM(CAST(${COLS.code_postal} AS STRING)) = @pcAlt)
+    AND LOWER(TRIM(CAST(${COLS.type_local} AS STRING))) IN ('appartement','maison')
+  `;
+  const query = `
+    SELECT ${COLS.date_mutation} AS date_mutation, ${COLS.valeur_fonciere} AS valeur_fonciere, ${COLS.no_voie} AS no_voie,
+           ${COLS.type_de_voie} AS type_de_voie, ${COLS.voie} AS voie, ${COLS.code_postal} AS code_postal, ${COLS.commune} AS commune,
+           ${COLS.type_local} AS type_local, ${COLS.surface_reelle_bati} AS surface_reelle_bati, ${COLS.lot_1er} AS lot_1er
+    FROM ${fullTable}
+    WHERE ${where}
+    ORDER BY SAFE.PARSE_DATE('%d/%m/%Y', CAST(${COLS.date_mutation} AS STRING)) DESC NULLS LAST
+    LIMIT 80
+  `;
+  const params: Record<string, string> = { pc, pcAlt: pcAlt || "0" };
+  const [rows] = await client.query({ query, params, location });
+  return (rows as FranceTransactionRow[]) || [];
+}
+
+async function queryNearbyComparableInPostcodeAndCommune(
+  codePostal: string,
+  commune: string | null
+): Promise<FranceTransactionRow[]> {
+  if (!codePostal?.trim() || !commune?.trim()) return [];
+  const client = getBigQueryClient();
+  const { projectId, dataset, table, location } = getBigQueryConfig();
+  const fullTable = `\`${projectId}.${dataset}.${table}\``;
+  const pc = normalizeCodePostal(codePostal);
+  const pcAlt = pc.startsWith("0") ? pc.slice(1) : pc;
+  const where = `
+    LOWER(TRIM(CAST(${COLS.nature_mutation} AS STRING))) = 'vente'
+    AND (TRIM(CAST(${COLS.code_postal} AS STRING)) = @pc OR TRIM(CAST(${COLS.code_postal} AS STRING)) = @pcAlt)
+    AND LOWER(TRIM(CAST(${COLS.commune} AS STRING))) = LOWER(TRIM(@commune))
+    AND LOWER(TRIM(CAST(${COLS.type_local} AS STRING))) IN ('appartement','maison')
+  `;
+  const query = `
+    SELECT ${COLS.date_mutation} AS date_mutation, ${COLS.valeur_fonciere} AS valeur_fonciere, ${COLS.no_voie} AS no_voie,
+           ${COLS.type_de_voie} AS type_de_voie, ${COLS.voie} AS voie, ${COLS.code_postal} AS code_postal, ${COLS.commune} AS commune,
+           ${COLS.type_local} AS type_local, ${COLS.surface_reelle_bati} AS surface_reelle_bati, ${COLS.lot_1er} AS lot_1er
+    FROM ${fullTable}
+    WHERE ${where}
+    ORDER BY SAFE.PARSE_DATE('%d/%m/%Y', CAST(${COLS.date_mutation} AS STRING)) DESC NULLS LAST
+    LIMIT 100
+  `;
+  const params: Record<string, string> = { pc, pcAlt: pcAlt || "0", commune: commune.trim() };
+  const [rows] = await client.query({ query, params, location });
+  return (rows as FranceTransactionRow[]) || [];
+}
+
+async function queryNearbyComparableInCommune(
+  commune: string | null
+): Promise<FranceTransactionRow[]> {
+  if (!commune?.trim()) return [];
+  const client = getBigQueryClient();
+  const { projectId, dataset, table, location } = getBigQueryConfig();
+  const fullTable = `\`${projectId}.${dataset}.${table}\``;
+  const where = `
+    LOWER(TRIM(CAST(${COLS.nature_mutation} AS STRING))) = 'vente'
+    AND LOWER(TRIM(CAST(${COLS.commune} AS STRING))) = LOWER(TRIM(@commune))
+    AND LOWER(TRIM(CAST(${COLS.type_local} AS STRING))) IN ('appartement','maison')
+  `;
+  const query = `
+    SELECT ${COLS.date_mutation} AS date_mutation, ${COLS.valeur_fonciere} AS valeur_fonciere, ${COLS.no_voie} AS no_voie,
+           ${COLS.type_de_voie} AS type_de_voie, ${COLS.voie} AS voie, ${COLS.code_postal} AS code_postal, ${COLS.commune} AS commune,
+           ${COLS.type_local} AS type_local, ${COLS.surface_reelle_bati} AS surface_reelle_bati, ${COLS.lot_1er} AS lot_1er
+    FROM ${fullTable}
+    WHERE ${where}
+    ORDER BY SAFE.PARSE_DATE('%d/%m/%Y', CAST(${COLS.date_mutation} AS STRING)) DESC NULLS LAST
+    LIMIT 120
+  `;
+  const params: Record<string, string> = { commune: commune.trim() };
+  const [rows] = await client.query({ query, params, location });
+  return (rows as FranceTransactionRow[]) || [];
 }
 
 /** Log 10 sample rows for a commune to inspect address format. */
@@ -298,7 +623,10 @@ export async function runCount06000Test(): Promise<{ n: number; error?: string }
  */
 function sqlFullStreetNormalized(): string {
   const concat = `TRIM(CONCAT(COALESCE(TRIM(CAST(${COLS.type_de_voie} AS STRING)), ''), ' ', COALESCE(TRIM(CAST(${COLS.voie} AS STRING)), '')))`;
-  return `UPPER(${concat})`;
+  const upper = `UPPER(${concat})`;
+  // Unify apostrophe-like chars (Google input may use ’, dataset may use ')
+  // NOTE: keep regex ASCII-only so TS parsing stays stable on Windows tooling.
+  return `REGEXP_REPLACE(${upper}, r"[\\x60\\xB4\\x27]", "'")`;
 }
 
 /**
@@ -324,21 +652,43 @@ async function queryLastTransactionByStage(
   const pc = normalizeCodePostal(codePostal);
   const pcAlt = pc.startsWith("0") ? pc.slice(1) : pc;
   const streetNorm = sqlFullStreetNormalized();
+  const streetNormLoose = `REGEXP_REPLACE(${streetNorm}, r"[^A-Z0-9]+", "")`;
 
   const baseConditions: string[] = [`LOWER(TRIM(CAST(${COLS.nature_mutation} AS STRING))) = 'vente'`];
-  const params: Record<string, string> = { pc, pcAlt: pcAlt || "0", streetNormValue: normalizedStreet };
+  const params: Record<string, string> = {
+    pc,
+    pcAlt: pcAlt || "0",
+    streetNormValue: normalizedStreet,
+    streetNormLooseValue: normalizeStreetLoose(normalizedStreet) || normalizedStreet,
+  };
 
   if (stage <= 4 && normalizedStreet) {
-    baseConditions.push(`${streetNorm} = @streetNormValue`);
+    baseConditions.push(`(${streetNorm} = @streetNormValue OR ${streetNormLoose} = @streetNormLooseValue)`);
   }
   if (stage <= 3 && noVoie && noVoie.trim()) {
     baseConditions.push(`(TRIM(CAST(${COLS.no_voie} AS STRING)) = @noVoie OR TRIM(CAST(${COLS.no_voie} AS STRING)) = CONCAT('0', @noVoie))`);
     params.noVoie = noVoie.trim();
   }
   if (stage === 1 && lotNumber && lotNumber.trim()) {
-    const lotNorm = String(lotNumber).trim();
-    baseConditions.push(`(TRIM(CAST(${COLS.lot_1er} AS STRING)) = @lotNumber OR TRIM(CAST(${COLS.lot_1er} AS STRING)) = CONCAT('0', @lotNumber))`);
+    const lotNorm = normalizeLot(lotNumber);
+    const lotCanonical = lotNorm.replace(/^0+/, "") || lotNorm;
+    const lotClean = canonicalizeLotSegment(lotNorm);
+    const lotCleanCanonical = lotClean.replace(/^0+/, "") || lotClean;
     params.lotNumber = lotNorm;
+    params.lotCanonical = lotCanonical;
+    params.lotClean = lotClean;
+    params.lotCleanCanonical = lotCleanCanonical;
+    // Robust matching:
+    // - Exact match (trimmed)
+    // - Leading-zero variants (strip leading zeros on BOTH sides)
+    // - "Lot 9" style prefixes and separators (cleaned)
+    // - Case-insensitive (handles e.g. 9A)
+    baseConditions.push(`(
+      LOWER(TRIM(CAST(${COLS.lot_1er} AS STRING))) = LOWER(@lotNumber)
+      OR LOWER(REGEXP_REPLACE(TRIM(CAST(${COLS.lot_1er} AS STRING)), r'^0+', '')) = LOWER(@lotCanonical)
+      OR LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(CAST(${COLS.lot_1er} AS STRING)), r'(?i)^lot\\s*', ''), r'[^0-9a-z]+', '')) = LOWER(@lotClean)
+      OR LOWER(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(CAST(${COLS.lot_1er} AS STRING)), r'(?i)^lot\\s*', ''), r'[^0-9a-z]+', ''), r'^0+', '')) = LOWER(@lotCleanCanonical)
+    )`);
   }
 
   if (stage <= 2) {
@@ -357,7 +707,21 @@ async function queryLastTransactionByStage(
     LIMIT 50
   `;
 
+  if (stage === 1 && params.lotNumber) {
+    console.log("[BigQuery] Stage 1 lot query debug:", {
+      lotInput: params.lotNumber,
+      lotCanonical: params.lotCanonical,
+      lotClean: (params as any).lotClean,
+      lotCleanCanonical: (params as any).lotCleanCanonical,
+      whereClause,
+    });
+  }
+
   const [rows] = await client.query({ query, params, location });
+  if (stage === 1 && params.lotNumber) {
+    const lots = (rows as FranceTransactionRow[]).map((r) => normalizeLot(r.lot_1er)).filter(Boolean);
+    console.log("[BigQuery] Stage 1 lot query result:", { rows: (rows as FranceTransactionRow[]).length, lots: [...new Set(lots)].slice(0, 20) });
+  }
   return (rows as FranceTransactionRow[]) || [];
 }
 
@@ -563,23 +927,26 @@ export async function getFrancePropertyResult(
   console.log("[BigQuery] Schema columns used:", Object.keys(COLS).slice(0, 5).map((k) => `${k} -> ${COLS[k as keyof typeof COLS]}`).join(", ") + ", ...");
   console.log("[BigQuery] getFrancePropertyResult:", { codePostal, noVoie, voie, commune: effectiveCommune, lotNumber: lotNumber ?? "(empty)", normalizedLot: normalizedLot || "(empty)" });
 
-  const select1Result = await runSelect1Test();
-  if (!select1Result.ok) {
-    console.error("[BigQuery] SELECT 1 failed, aborting:", select1Result.error);
-    throw new Error(`BigQuery SELECT 1 test failed: ${select1Result.error}`);
-  }
+  const fastValidate = process.env.FR_FAST_VALIDATE === "1";
+  if (!fastValidate) {
+    const select1Result = await runSelect1Test();
+    if (!select1Result.ok) {
+      console.error("[BigQuery] SELECT 1 failed, aborting:", select1Result.error);
+      throw new Error(`BigQuery SELECT 1 test failed: ${select1Result.error}`);
+    }
 
-  const countResult = await runCount06000Test();
-  if (countResult.error) {
-    console.error("[BigQuery] COUNT 06000 failed:", countResult.error);
-    throw new Error(`BigQuery COUNT 06000 test failed: ${countResult.error}`);
-  }
-  console.log("[BigQuery] COUNT 06000 OK, n =", countResult.n);
+    const countResult = await runCount06000Test();
+    if (countResult.error) {
+      console.error("[BigQuery] COUNT 06000 failed:", countResult.error);
+      throw new Error(`BigQuery COUNT 06000 test failed: ${countResult.error}`);
+    }
+    console.log("[BigQuery] COUNT 06000 OK, n =", countResult.n);
 
-  await logSchemaColumns();
+    await logSchemaColumns();
 
-  if (effectiveCommune) {
-    await logSampleRows(effectiveCommune);
+    if (effectiveCommune) {
+      await logSampleRows(effectiveCommune);
+    }
   }
 
   const normalizedStreet = voie ? normalizeForMatch(voie) : "";
@@ -645,6 +1012,10 @@ export async function getFrancePropertyResult(
   const lotsAfterExactLotFilter = lotFilteredRows.length > 0 ? [...new Set(lotFilteredRows.map((r) => normalizeLot(r.lot_1er)).filter(Boolean))] : [];
 
   const lotMatchedFromBuildingRows = lotFilteredRows.length > 0;
+  const exactLotRows = normalizedLot
+    ? (matchedStage === 1 ? lastTxRows : lotFilteredRows)
+    : [];
+  const exactLotRowCount = exactLotRows.length;
   const hasExactLotMatch = !!(normalizedLot && (matchedStage === 1 || lotMatchedFromBuildingRows));
   const isBuildingMatch = lastTxRows.length > 0 && matchedStage <= 4;
   const resultLevel: ResultLevel = hasExactLotMatch
@@ -675,7 +1046,7 @@ export async function getFrancePropertyResult(
 
   console.log("[BigQuery] Match result:", { matchStage: matchedStage, rowsAtStage: lastTxRows.length, resultLevel, hasExactLotMatch });
 
-  const apartmentNotMatched = !!(normalizedLot && matchedStage >= 2 && !lotMatchedFromBuildingRows);
+  const apartmentNotMatched = !!(normalizedLot && matchedStage >= 2 && exactLotRowCount === 0);
   const multipleUnits = lastTxRows.length > 0 && matchedStage >= 2 && !normalizedLot;
 
   const twoYearsAgo = new Date();
@@ -683,7 +1054,10 @@ export async function getFrancePropertyResult(
   const twoYearsAgoStr = twoYearsAgo.toISOString().slice(0, 10);
 
   const buildBuildingSales = (rows: FranceTransactionRow[], onlyPrimary = false, onlyLast2Y = false) => {
-    let filtered = rows.filter((r) => valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere)) > 0);
+    let filtered = rows.filter((r) => {
+      const surface = parseFrenchNumber(r.surface_reelle_bati) || null;
+      return valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), surface) > 0;
+    });
     if (onlyPrimary) filtered = filtered.filter((r) => isPrimaryUnit(r.type_local));
     if (onlyLast2Y) filtered = filtered.filter((r) => (parseFrenchDate(r.date_mutation) ?? "") >= twoYearsAgoStr);
     return filtered
@@ -692,17 +1066,83 @@ export async function getFrancePropertyResult(
       .map((r) => ({
         date: parseFrenchDate(r.date_mutation),
         type: String(r.type_local ?? "—").trim() || "—",
-        price: Math.round(valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere))),
+        price: Math.round(valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), parseFrenchNumber(r.surface_reelle_bati) || null)),
         surface: parseFrenchNumber(r.surface_reelle_bati) || null,
         lot_number: normalizeLot(r.lot_1er) || null,
       }));
   };
 
+  const pickSimilarApartmentInBuilding = (
+    rows: FranceTransactionRow[],
+    requestedLotRaw: string,
+    preferredType: "appartement" | "maison" | null
+  ): { picked: FrancePropertyResult["similarApartment"]; candidateCount: number; similarityScore: number | null } => {
+    const requested = normalizeLot(requestedLotRaw);
+    const candidates = rows
+      .filter((r) => isPrimaryUnit(r.type_local))
+      .map((r) => {
+        const surface = parseFrenchNumber(r.surface_reelle_bati) || null;
+        const value = valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), surface);
+        const date = parseFrenchDate(r.date_mutation);
+        const lot = normalizeLot(r.lot_1er) || null;
+        const typeLocal = (r.type_local ?? null) as string | null;
+        return { value, surface, date, lot, typeLocal };
+      })
+      .filter((c) => c.value > 0)
+      .filter((c) => !requested || !c.lot || !lotMatches(c.lot, requested));
+
+    if (candidates.length === 0) return { picked: null, candidateCount: 0, similarityScore: null };
+
+    const canonicalType = (t: string | null) => (t ?? "").trim().toLowerCase();
+    const sameTypeCandidates =
+      preferredType != null
+        ? candidates.filter((c) => canonicalType(c.typeLocal) === preferredType)
+        : candidates;
+
+    if (preferredType && sameTypeCandidates.length === 0) {
+      // Building context says appartement/maison, but we have no same-type candidates.
+      // Be conservative: don't fabricate a cross-type 'similar apartment' result.
+      return { picked: null, candidateCount: candidates.length, similarityScore: null };
+    }
+
+    const pool = sameTypeCandidates
+      .filter((c) => c.surface != null && c.surface > 0)
+      .filter((c) => !!c.date);
+
+    // Strict validation: range gate + outlier rejection vs median, require min sample size.
+    const validated = filterCompsByPricePerSqmValidation(pool as any);
+    const validPool = validated.kept as typeof pool;
+    if (validPool.length < 2) {
+      return { picked: null, candidateCount: validPool.length, similarityScore: null };
+    }
+
+    // Prefer recency among the validated pool.
+    const scored = validPool.map((c) => {
+      const recency = c.date ? Date.parse(c.date) : 0;
+      const score = Math.min(999999999, recency);
+      return { c, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0]!;
+
+    return {
+      picked: {
+        lotNumber: best.c.lot,
+        date: best.c.date,
+        value: Math.round(best.c.value),
+        surface: best.c.surface,
+        typeLocal: best.c.typeLocal,
+      },
+      candidateCount: validPool.length,
+      similarityScore: null,
+    };
+  };
+
   if (multipleUnits) {
     const avgRows = primaryRows.filter((r) => (parseFrenchDate(r.date_mutation) ?? "") >= twoYearsAgoStr);
     const avgValue = avgRows.length > 0
-      ? avgRows.reduce((s, r) => s + valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere)), 0) / avgRows.length
-      : primaryRows.reduce((s, r) => s + valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere)), 0) / Math.max(primaryRows.length, 1);
+      ? avgRows.reduce((s, r) => s + valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), parseFrenchNumber(r.surface_reelle_bati) || null), 0) / avgRows.length
+      : primaryRows.reduce((s, r) => s + valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), parseFrenchNumber(r.surface_reelle_bati) || null), 0) / Math.max(primaryRows.length, 1);
     return {
       currentValue: null,
       lastTransaction: null,
@@ -714,6 +1154,8 @@ export async function getFrancePropertyResult(
       buildingSales: buildBuildingSales(primaryRows, true, true),
       surfaceReelleBati: null,
       lotNumber: null,
+      requestedLot: null,
+      exactLotRowCount: 0,
       matchStage: matchedStage,
       resultLevel: "building",
       rowsAtStage: lastTxRows.length,
@@ -722,6 +1164,94 @@ export async function getFrancePropertyResult(
   }
 
   if (matchedStage === 5 && lastTxRows.length === 0) {
+    // Fail-safe: even when we can't match the building, try street+postcode comparables if we have a street.
+    let nearbyPicked: FrancePropertyResult["nearbyComparable"] = null;
+    let candidateCountNearby = 0;
+    const nearbyStageCounts = { same_street: 0, same_postcode_commune: 0, same_commune: 0 };
+    let selectedNearbyStrategy: NearbyStrategy | null = null;
+    let selectedScope: NearbyScope | null = null;
+    if (normalizedStreet && codePostal?.trim()) {
+      try {
+        let nearbyRows: FranceTransactionRow[] = [];
+        // Stage A
+        nearbyRows = await queryNearbyComparableOnStreet(codePostal, normalizedStreet, noVoie);
+        nearbyStageCounts.same_street = nearbyRows.length;
+        if (nearbyRows.length > 0) {
+          selectedNearbyStrategy = "street_postcode";
+          selectedScope = "same_street";
+        }
+        // Stage B
+        if (nearbyRows.length === 0 && effectiveCommune?.trim()) {
+          nearbyRows = await queryNearbyComparableInPostcodeAndCommune(codePostal, String(effectiveCommune));
+          nearbyStageCounts.same_postcode_commune = nearbyRows.length;
+          if (nearbyRows.length > 0) {
+            selectedNearbyStrategy = "postcode_commune";
+            selectedScope = "same_postcode_commune";
+          }
+        }
+        // Stage C
+        if (nearbyRows.length === 0 && effectiveCommune?.trim()) {
+          nearbyRows = await queryNearbyComparableInCommune(String(effectiveCommune));
+          nearbyStageCounts.same_commune = nearbyRows.length;
+          if (nearbyRows.length > 0) {
+            selectedNearbyStrategy = "commune";
+            selectedScope = "same_commune";
+          }
+        }
+        const candidates = nearbyRows
+          .map((r) => {
+            const surface = parseFrenchNumber(r.surface_reelle_bati) || null;
+            const value = valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), surface);
+            const date = parseFrenchDate(r.date_mutation);
+            const typeLocal = (r.type_local ?? null) as string | null;
+            return { value, surface, date, typeLocal, row: r };
+          })
+          .filter((c) => c.value > 0)
+          .filter((c) => c.surface != null && c.surface > 0)
+          .filter((c) => !!c.date);
+        candidateCountNearby = candidates.length;
+        const validated = filterCompsByPricePerSqmValidation(candidates);
+        const validCandidates = validated.kept;
+        if (validCandidates.length >= 2) {
+          const scopeForRanking: NearbyScope = selectedScope ?? "same_commune";
+          validCandidates.sort((a, b) => {
+            const as = rankNearbyCandidate({
+              candidateType: a.typeLocal,
+              candidateSurface: a.surface,
+              candidateDate: a.date,
+              scope: scopeForRanking,
+              preferredType: null,
+              targetSurface: null,
+            });
+            const bs = rankNearbyCandidate({
+              candidateType: b.typeLocal,
+              candidateSurface: b.surface,
+              candidateDate: b.date,
+              scope: scopeForRanking,
+              preferredType: null,
+              targetSurface: null,
+            });
+            if (bs !== as) return bs - as;
+            return (b.date ?? "").localeCompare(a.date ?? "");
+          });
+          const best = validCandidates[0];
+          if (best) {
+            nearbyPicked = {
+              address: makeNearbyAddress(best.row, String(codePostal ?? ""), String(effectiveCommune ?? "")),
+              lotNumber: null,
+              date: best.date ?? null,
+              value: Math.round(best.value),
+              surface: best.surface,
+              typeLocal: best.typeLocal,
+              scope: scopeForRanking,
+              selectedNearbyStrategy: selectedNearbyStrategy ?? "commune",
+            };
+          }
+        }
+      } catch (e) {
+        console.log("[BigQuery] Nearby comparable fallback failed:", (e as Error)?.message);
+      }
+    }
     return {
       currentValue: null,
       lastTransaction: null,
@@ -731,17 +1261,165 @@ export async function getFrancePropertyResult(
       buildingSales: [],
       surfaceReelleBati: null,
       lotNumber: null,
+      requestedLot: normalizedLot || null,
+      exactLotRowCount: 0,
       matchStage: 5,
       resultLevel: "commune_fallback",
       rowsAtStage: 0,
+      nearbyComparable: nearbyPicked,
+      debug: {
+        candidateCountNearby,
+        reliableCandidateCountNearby: nearbyPicked ? 2 : 0,
+        nearbyStageCounts,
+        selectedNearbyStrategy,
+      },
     };
   }
 
   if (apartmentNotMatched) {
     const avgRows = primaryRows.filter((r) => (parseFrenchDate(r.date_mutation) ?? "") >= twoYearsAgoStr);
     const avgValue = avgRows.length > 0
-      ? avgRows.reduce((s, r) => s + valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere)), 0) / avgRows.length
-      : primaryRows.reduce((s, r) => s + valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere)), 0) / Math.max(primaryRows.length, 1);
+      ? avgRows.reduce((s, r) => s + valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), parseFrenchNumber(r.surface_reelle_bati) || null), 0) / avgRows.length
+      : primaryRows.reduce((s, r) => s + valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), parseFrenchNumber(r.surface_reelle_bati) || null), 0) / Math.max(primaryRows.length, 1);
+    const preferredTypeForBuilding = (() => {
+      const types = primaryRows
+        .map((r) => String(r.type_local ?? "").trim().toLowerCase())
+        .filter((t) => t === "appartement" || t === "maison");
+      if (types.length === 0) return null;
+      const unique = Array.from(new Set(types));
+      if (unique.length === 1) return unique[0] as "appartement" | "maison";
+      // Mixed building: type context is ambiguous, do not assume.
+      return null;
+    })();
+    const sim = pickSimilarApartmentInBuilding(primaryRows, normalizedLot, preferredTypeForBuilding);
+
+    // Nearby staged search (only when similar-in-building is not trustworthy).
+    const shouldTryNearby = sim.picked == null;
+    const nearbyStageCounts = { same_street: 0, same_postcode_commune: 0, same_commune: 0 };
+    let selectedNearbyStrategy: NearbyStrategy | null = null;
+    let selectedScope: NearbyScope | null = null;
+    let nearbyRows: FranceTransactionRow[] = [];
+    if (shouldTryNearby) {
+      // Stage A: same street + same postcode
+      if (normalizedStreet?.trim() && codePostal?.trim()) {
+        nearbyRows = await queryNearbyComparableOnStreet(codePostal, normalizedStreet, noVoie);
+        nearbyStageCounts.same_street = nearbyRows.length;
+        if (nearbyRows.length > 0) {
+          selectedNearbyStrategy = "street_postcode";
+          selectedScope = "same_street";
+        }
+      }
+      // Stage B: same postcode + same commune
+      if (nearbyRows.length === 0 && codePostal?.trim() && effectiveCommune?.trim()) {
+        nearbyRows = await queryNearbyComparableInPostcodeAndCommune(codePostal, String(effectiveCommune));
+        nearbyStageCounts.same_postcode_commune = nearbyRows.length;
+        if (nearbyRows.length > 0) {
+          selectedNearbyStrategy = "postcode_commune";
+          selectedScope = "same_postcode_commune";
+        }
+      }
+      // Stage C: same commune (broadest)
+      if (nearbyRows.length === 0 && effectiveCommune?.trim()) {
+        nearbyRows = await queryNearbyComparableInCommune(String(effectiveCommune));
+        nearbyStageCounts.same_commune = nearbyRows.length;
+        if (nearbyRows.length > 0) {
+          selectedNearbyStrategy = "commune";
+          selectedScope = "same_commune";
+        }
+      }
+    }
+    const tenYearsAgo = new Date();
+    tenYearsAgo.setFullYear(tenYearsAgo.getFullYear() - 10);
+    const tenYearsAgoStr = tenYearsAgo.toISOString().slice(0, 10);
+    const preferredType = (() => {
+      const types = primaryRows
+        .map((r) => String(r.type_local ?? "").trim().toLowerCase())
+        .filter((t) => t === "appartement" || t === "maison");
+      if (types.length === 0) return null;
+      const apt = types.filter((t) => t === "appartement").length;
+      const house = types.filter((t) => t === "maison").length;
+      return apt >= house ? "appartement" : "maison";
+    })();
+    const targetSurface = medianNumber(
+      primaryRows
+        .map((r) => parseFrenchNumber(r.surface_reelle_bati))
+        .filter((n): n is number => typeof n === "number" && n > 0)
+    );
+
+    const nearbyCandidates = nearbyRows
+      .map((r) => {
+        const surface = parseFrenchNumber(r.surface_reelle_bati) || null;
+        const value = valueFonciereToEurosSafe(parseFrenchNumber(r.valeur_fonciere), surface);
+        const date = parseFrenchDate(r.date_mutation);
+        const lot = normalizeLot(r.lot_1er) || null;
+        const typeLocal = (r.type_local ?? null) as string | null;
+        return { value, surface, date, lot, typeLocal, row: r };
+      })
+      .filter((c) => c.value > 0);
+    // Guardrails: require surface + a parsable date, and avoid stale comps.
+    const nearbyFilterStats = {
+      raw: nearbyCandidates.length,
+      missingSurface: 0,
+      missingDate: 0,
+      tooOld: 0,
+      trustworthy: 0,
+    };
+    for (const c of nearbyCandidates) {
+      if (!(c.surface != null && c.surface > 0)) nearbyFilterStats.missingSurface += 1;
+      if (!c.date) nearbyFilterStats.missingDate += 1;
+      if (c.date && c.date < tenYearsAgoStr) nearbyFilterStats.tooOld += 1;
+    }
+    let nearbyFiltered = nearbyCandidates
+      .filter((c) => c.surface != null && c.surface > 0)
+      .filter((c) => !!c.date && (c.date ?? "") >= tenYearsAgoStr);
+    nearbyFilterStats.trustworthy = nearbyFiltered.length;
+    const scopeForRanking: NearbyScope = selectedScope ?? "same_commune";
+    // For nearby: if we have a clear preferredType, require same-type comps when they exist.
+    if (preferredType && nearbyFiltered.length > 0) {
+      const sameType = nearbyFiltered.filter(
+        (c) => String(c.typeLocal ?? "").trim().toLowerCase() === preferredType
+      );
+      if (sameType.length > 0) {
+        nearbyFiltered = sameType;
+      } else {
+        // No trustworthy same-type nearby comps: be conservative and skip nearby comparable.
+        nearbyFiltered = [];
+      }
+    }
+    nearbyFiltered.sort((a, b) => {
+      const as = rankNearbyCandidate({
+        candidateType: a.typeLocal,
+        candidateSurface: a.surface,
+        candidateDate: a.date,
+        scope: scopeForRanking,
+        preferredType,
+        targetSurface,
+      });
+      const bs = rankNearbyCandidate({
+        candidateType: b.typeLocal,
+        candidateSurface: b.surface,
+        candidateDate: b.date,
+        scope: scopeForRanking,
+        preferredType,
+        targetSurface,
+      });
+      if (bs !== as) return bs - as;
+      return (b.date ?? "").localeCompare(a.date ?? "");
+    });
+    const validatedNearby = filterCompsByPricePerSqmValidation(nearbyFiltered as any);
+    nearbyFiltered = (validatedNearby.kept as any) ?? [];
+    const nearbyPicked = nearbyFiltered.length >= 2
+      ? {
+          address: makeNearbyAddress(nearbyFiltered[0].row, String(codePostal ?? ""), String(effectiveCommune ?? "")),
+          lotNumber: nearbyFiltered[0].lot,
+          date: nearbyFiltered[0].date,
+          value: Math.round(nearbyFiltered[0].value),
+          surface: nearbyFiltered[0].surface,
+          typeLocal: nearbyFiltered[0].typeLocal,
+          scope: scopeForRanking,
+          selectedNearbyStrategy: selectedNearbyStrategy ?? "commune",
+        }
+      : null;
     return {
       currentValue: Math.round(avgValue),
       lastTransaction: null,
@@ -752,16 +1430,30 @@ export async function getFrancePropertyResult(
       buildingSales: buildBuildingSales(primaryRows, true, false),
       surfaceReelleBati: null,
       lotNumber: null,
+      requestedLot: normalizedLot || null,
+      exactLotRowCount: 0,
       matchStage: matchedStage,
       resultLevel: "building",
       rowsAtStage: lastTxRows.length,
       apartmentNotMatched: true,
       availableLots,
+      similarApartment: sim.picked,
+      nearbyComparable: nearbyPicked,
+      debug: {
+        candidateCountSameBuilding: sim.candidateCount,
+        candidateCountNearby: nearbyCandidates.length,
+        reliableCandidateCountSameBuilding: sim.candidateCount,
+        reliableCandidateCountNearby: nearbyFiltered.length,
+        similarityScore: sim.similarityScore,
+        nearbyStageCounts,
+        selectedNearbyStrategy,
+        nearbyFilterStats,
+      },
     };
   }
 
   const match = displayRows[0] ?? lastTxRows[0];
-  const lastTxValue = match ? valueFonciereToEuros(parseFrenchNumber(match.valeur_fonciere)) : 0;
+  const lastTxValue = match ? valueFonciereToEurosSafe(parseFrenchNumber(match.valeur_fonciere), parseFrenchNumber(match.surface_reelle_bati) || null) : 0;
   const lastTxDate = match ? parseFrenchDate(match.date_mutation) : null;
   const surface = surfaceM2 ?? (match ? parseFrenchNumber(match.surface_reelle_bati) || null : null);
 
@@ -781,6 +1473,8 @@ export async function getFrancePropertyResult(
     buildingSales: buildBuildingSales(primaryRows.length > 0 ? primaryRows : displayRows),
     surfaceReelleBati: surface,
     lotNumber: match ? (normalizeLot(match.lot_1er) || null) : null,
+    requestedLot: normalizedLot || null,
+    exactLotRowCount: normalizedLot ? exactLotRowCount : 0,
     matchStage: matchedStage,
     resultLevel,
     rowsAtStage: lastTxRows.length,

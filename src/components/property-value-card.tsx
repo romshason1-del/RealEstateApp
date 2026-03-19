@@ -359,6 +359,7 @@ export function PropertyValueCard({
   typedAddressForFrance,
   postcode,
 }: PropertyValueCardProps) {
+  const isDev = process.env.NODE_ENV !== "production";
   const isIsrael = countryCode === "IL";
   const isUS = countryCode === "US";
   const isUK = countryCode === "UK" || countryCode === "GB";
@@ -384,33 +385,184 @@ export function PropertyValueCard({
     postcode: isFR ? postcode : undefined,
   });
 
+  // Prevent France UI from flickering to an empty/no-data state while switching lots.
+  // Keep rendering the last known "building/area" payload during loading.
+  const lastGoodFrancePayloadRef = React.useRef<unknown>(null);
+  const lastGoodFranceBuildingPayloadRef = React.useRef<unknown>(null);
+  const franceAddressKey = React.useMemo(() => {
+    if (!isFR) return "";
+    const a = (addressForApi || "").trim().toLowerCase();
+    const pc = (postcode || "").trim().toLowerCase();
+    return `${a}|pc:${pc}`;
+  }, [isFR, addressForApi, postcode]);
+
+  React.useEffect(() => {
+    // Reset sticky France payload when the address changes (not when the lot changes).
+    lastGoodFrancePayloadRef.current = null;
+    lastGoodFranceBuildingPayloadRef.current = null;
+  }, [franceAddressKey]);
+
+  const isGoodFrancePayload = React.useCallback((d: unknown): boolean => {
+    if (!d || typeof d !== "object") return false;
+    const r = d as {
+      data_source?: string;
+      multiple_units?: boolean;
+      result_level?: "exact_property" | "building" | "commune_fallback";
+      building_sales?: unknown[];
+      average_building_value?: number;
+      property_result?: { value_level?: string; exact_value?: number | null; street_average?: number | null };
+    };
+    const isFRData = r.data_source === "properties_france";
+    if (!isFRData) return false;
+    if (r.multiple_units === true) return true;
+    if (r.result_level === "building" || r.result_level === "commune_fallback") return true;
+    if (Array.isArray(r.building_sales) && r.building_sales.length > 0) return true;
+    if ((r.average_building_value ?? 0) > 0) return true;
+    const pr = r.property_result;
+    if (!pr) return false;
+    if (pr.value_level === "building-level" || pr.value_level === "area-level") {
+      if ((pr.street_average ?? 0) > 0) return true;
+      if ((pr.exact_value ?? 0) > 0) return true;
+    }
+    return false;
+  }, []);
+
+  const isGoodFranceBuildingPayload = React.useCallback((d: unknown): boolean => {
+    if (!d || typeof d !== "object") return false;
+    const r = d as {
+      data_source?: string;
+      multiple_units?: boolean;
+      result_level?: "exact_property" | "building" | "commune_fallback";
+      building_sales?: unknown[];
+      available_lots?: unknown[];
+      average_building_value?: number;
+      property_result?: { value_level?: string; street_average?: number | null };
+    };
+    if (r.data_source !== "properties_france") return false;
+    if (r.multiple_units === true) return true;
+    if (r.result_level === "building") return true;
+    if (Array.isArray(r.available_lots) && r.available_lots.length > 0) return true;
+    if (Array.isArray(r.building_sales) && r.building_sales.length > 0) return true;
+    if ((r.average_building_value ?? 0) > 0) return true;
+    if (r.property_result?.value_level === "building-level" && ((r.property_result.street_average ?? 0) > 0)) return true;
+    return false;
+  }, []);
+
+  React.useEffect(() => {
+    if (isFR && !isLoading && isGoodFrancePayload(insightsData)) {
+      lastGoodFrancePayloadRef.current = insightsData;
+    }
+    if (isFR && !isLoading && isGoodFranceBuildingPayload(insightsData)) {
+      lastGoodFranceBuildingPayloadRef.current = insightsData;
+    }
+  }, [isFR, isLoading, insightsData, isGoodFrancePayload, isGoodFranceBuildingPayload]);
+
+  const hasStickyFranceBuilding = isFR && !!lastGoodFranceBuildingPayloadRef.current;
+
+  const isExactApartmentPayload = React.useCallback((d: unknown): boolean => {
+    if (!d || typeof d !== "object") return false;
+    const r = d as { data_source?: string; result_level?: string; property_result?: { value_level?: string } };
+    return r.data_source === "properties_france" && r.result_level === "exact_property" && r.property_result?.value_level === "property-level";
+  }, []);
+
+  const activeInsightsData =
+    // If an exact apartment payload arrived, render it immediately (never override with sticky building data).
+    isExactApartmentPayload(insightsData)
+      ? insightsData
+      : isFR && hasStickyFranceBuilding && (isLoading || !isGoodFranceBuildingPayload(insightsData))
+      ? (lastGoodFranceBuildingPayloadRef.current as typeof insightsData)
+      : isFR && lastGoodFrancePayloadRef.current && (isLoading || !isGoodFrancePayload(insightsData))
+        ? (lastGoodFrancePayloadRef.current as typeof insightsData)
+        : insightsData;
+
+  const isMobileViewport = React.useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia?.("(max-width: 640px)")?.matches ?? window.innerWidth <= 640;
+  }, []);
+
+  // Mobile keyboard support: keep the card above the keyboard while the lot input is focused.
+  const [isLotInputFocused, setIsLotInputFocused] = React.useState(false);
+  const [keyboardInsetPx, setKeyboardInsetPx] = React.useState(0);
+  const lotSubmitInFlightRef = React.useRef(false);
+  const lastSubmittedLotRef = React.useRef<string>("");
+
+  const submitLotSearch = React.useCallback((source: "enter" | "button") => {
+    const requested = (aptNumber ?? "").trim();
+    if (isDev) console.log("[France lot] submit triggered", { source, requestedLot: requested || "(empty)" });
+    if (lotSubmitInFlightRef.current) {
+      if (isDev) console.log("[France lot] submit skipped (in flight)");
+      return;
+    }
+    // Avoid rapid double-submit of the same value.
+    if (requested && requested === lastSubmittedLotRef.current && isLoading) {
+      if (isDev) console.log("[France lot] submit skipped (same lot still loading)");
+      return;
+    }
+    lotSubmitInFlightRef.current = true;
+    lastSubmittedLotRef.current = requested;
+    if (isDev) console.log("[France lot] request started", { requestedLot: requested || "(empty)" });
+    setSearchApt(requested || undefined);
+    setAptSearchTrigger((t) => t + 1);
+    // Release the in-flight guard shortly after state updates; the hook has its own request id guard.
+    window.setTimeout(() => {
+      lotSubmitInFlightRef.current = false;
+    }, 300);
+  }, [aptNumber, isLoading, isDev]);
+  React.useEffect(() => {
+    if (!isFR) return;
+    if (!isLotInputFocused) {
+      setKeyboardInsetPx(0);
+      return;
+    }
+    const vv = window.visualViewport;
+    const update = () => {
+      if (vv) {
+        const inset = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        setKeyboardInsetPx(inset);
+      } else {
+        // Fallback for browsers where visualViewport is unavailable/unreliable.
+        // We keep a conservative inset so the card lifts above the keyboard area.
+        setKeyboardInsetPx(280);
+      }
+    };
+    update();
+    vv?.addEventListener("resize", update);
+    vv?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      vv?.removeEventListener("resize", update);
+      vv?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [isFR, isLotInputFocused]);
+
   const [debugMode, setDebugMode] = React.useState(false);
-  const multipleUnits = insightsData && "multiple_units" in insightsData && (insightsData as { multiple_units?: boolean }).multiple_units === true;
-  const promptForApartment = insightsData && "prompt_for_apartment" in insightsData && (insightsData as { prompt_for_apartment?: boolean }).prompt_for_apartment === true;
-  const apartmentNotMatched = insightsData && "apartment_not_matched" in insightsData && (insightsData as { apartment_not_matched?: boolean }).apartment_not_matched === true;
-  const availableLots = insightsData && "available_lots" in insightsData ? (insightsData as { available_lots?: string[] }).available_lots : undefined;
-  const averageBuildingValue = insightsData && "average_building_value" in insightsData ? (insightsData as { average_building_value?: number }).average_building_value : undefined;
-  const hasPropertyData = insightsData?.address != null;
+  const multipleUnits = activeInsightsData && "multiple_units" in activeInsightsData && (activeInsightsData as { multiple_units?: boolean }).multiple_units === true;
+  const promptForApartment = activeInsightsData && "prompt_for_apartment" in activeInsightsData && (activeInsightsData as { prompt_for_apartment?: boolean }).prompt_for_apartment === true;
+  const apartmentNotMatched = activeInsightsData && "apartment_not_matched" in activeInsightsData && (activeInsightsData as { apartment_not_matched?: boolean }).apartment_not_matched === true;
+  const availableLots = activeInsightsData && "available_lots" in activeInsightsData ? (activeInsightsData as { available_lots?: string[] }).available_lots : undefined;
+  const averageBuildingValue = activeInsightsData && "average_building_value" in activeInsightsData ? (activeInsightsData as { average_building_value?: number }).average_building_value : undefined;
+  const hasPropertyData = activeInsightsData?.address != null;
   const hasUSData =
     isUS &&
-    (insightsData?.avm_value != null ||
-      insightsData?.avm_rent != null ||
-      (insightsData?.last_sale != null && insightsData.last_sale.price > 0) ||
-      (insightsData?.sales_history != null && insightsData.sales_history.length > 0));
-  const unitRequired = isUS && (insightsData?.error === "UNIT_REQUIRED" || insightsData?.debug?.unit_required === true);
-  const noDataAvailable = isUS && insightsData?.message === "No Data Available" && !hasPropertyData && !unitRequired;
-  const hasMatch = hasPropertyData && (insightsData?.match_quality === "exact_building" || insightsData?.match_quality === "nearby_building");
-  const isNearbyBuilding = insightsData?.match_quality === "nearby_building";
-  const latest = insightsData?.latest_transaction;
-  const estimate = insightsData?.current_estimated_value;
-  const building = insightsData?.building_summary_last_3_years;
+    (activeInsightsData?.avm_value != null ||
+      activeInsightsData?.avm_rent != null ||
+      (activeInsightsData?.last_sale != null && activeInsightsData.last_sale.price > 0) ||
+      (activeInsightsData?.sales_history != null && activeInsightsData.sales_history.length > 0));
+  const unitRequired = isUS && (activeInsightsData?.error === "UNIT_REQUIRED" || activeInsightsData?.debug?.unit_required === true);
+  const noDataAvailable = isUS && activeInsightsData?.message === "No Data Available" && !hasPropertyData && !unitRequired;
+  const hasMatch = hasPropertyData && (activeInsightsData?.match_quality === "exact_building" || activeInsightsData?.match_quality === "nearby_building");
+  const isNearbyBuilding = activeInsightsData?.match_quality === "nearby_building";
+  const latest = activeInsightsData?.latest_transaction;
+  const estimate = activeInsightsData?.current_estimated_value;
+  const building = activeInsightsData?.building_summary_last_3_years;
   const transactions5y = building?.transactions_count_last_5_years ?? building?.transactions_count_last_3_years ?? 0;
   const latestBuildingAmount = building?.latest_building_transaction_price ?? latest?.transaction_price ?? 0;
 
-  const avmValue = insightsData && "avm_value" in insightsData ? (insightsData as { avm_value?: number }).avm_value : undefined;
-  const avmRent = insightsData && "avm_rent" in insightsData ? (insightsData as { avm_rent?: number }).avm_rent : undefined;
-  const lastSaleFromProvider = insightsData && "last_sale" in insightsData ? (insightsData as { last_sale?: { price: number; date: string } }).last_sale : undefined;
-  const salesHistory = insightsData && "sales_history" in insightsData ? (insightsData as { sales_history?: Array<{ date: string; price: number }> }).sales_history : undefined;
+  const avmValue = activeInsightsData && "avm_value" in activeInsightsData ? (activeInsightsData as { avm_value?: number }).avm_value : undefined;
+  const avmRent = activeInsightsData && "avm_rent" in activeInsightsData ? (activeInsightsData as { avm_rent?: number }).avm_rent : undefined;
+  const lastSaleFromProvider = activeInsightsData && "last_sale" in activeInsightsData ? (activeInsightsData as { last_sale?: { price: number; date: string } }).last_sale : undefined;
+  const salesHistory = activeInsightsData && "sales_history" in activeInsightsData ? (activeInsightsData as { sales_history?: Array<{ date: string; price: number }> }).sales_history : undefined;
   const lastSale = React.useMemo(() => {
     if (salesHistory != null && salesHistory.length > 0) {
       const sorted = [...salesHistory].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -418,18 +570,18 @@ export function PropertyValueCard({
     }
     return lastSaleFromProvider;
   }, [salesHistory, lastSaleFromProvider]);
-  const nearbyComps = insightsData && "nearby_comps" in insightsData ? (insightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
-  const propertyDetails = insightsData && "property_details" in insightsData ? (insightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
-  const neighborhoodStats = insightsData && "neighborhood_stats" in insightsData ? (insightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number; median_rent?: number; population_growth_percent?: number; income_growth_percent?: number } }).neighborhood_stats : undefined;
-  const investmentMetrics = insightsData && "investment_metrics" in insightsData ? (insightsData as { investment_metrics?: { median_rent: number; gross_rent_yield_percent?: number; estimated_roi_percent?: number; median_price_per_sqft?: number } }).investment_metrics : undefined;
-  const marketTrend = insightsData && "market_trend" in insightsData ? (insightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
-  const dataSource = insightsData && "data_source" in insightsData ? (insightsData as { data_source?: "live" | "cache" | "mock" | "properties_france" }).data_source : undefined;
-  const surfaceReelleBati = insightsData && "surface_reelle_bati" in insightsData ? (insightsData as { surface_reelle_bati?: number | null }).surface_reelle_bati : undefined;
-  const lotNumber = insightsData && "lot_number" in insightsData ? (insightsData as { lot_number?: string | null }).lot_number : undefined;
-  const buildingSales = insightsData && "building_sales" in insightsData ? (insightsData as { building_sales?: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number?: string | null }> }).building_sales : undefined;
-  const resultLevel = insightsData && "result_level" in insightsData ? (insightsData as { result_level?: "exact_property" | "building" | "commune_fallback" }).result_level : undefined;
+  const nearbyComps = activeInsightsData && "nearby_comps" in activeInsightsData ? (activeInsightsData as { nearby_comps?: { avg_price: number; avg_price_per_sqft: number; count: number } }).nearby_comps : undefined;
+  const propertyDetails = activeInsightsData && "property_details" in activeInsightsData ? (activeInsightsData as { property_details?: { beds?: number; baths?: number; sqft?: number; year_built?: number; property_type?: string } }).property_details : undefined;
+  const neighborhoodStats = activeInsightsData && "neighborhood_stats" in activeInsightsData ? (activeInsightsData as { neighborhood_stats?: { median_home_value: number; median_household_income: number; population: number; median_rent?: number; population_growth_percent?: number; income_growth_percent?: number } }).neighborhood_stats : undefined;
+  const investmentMetrics = activeInsightsData && "investment_metrics" in activeInsightsData ? (activeInsightsData as { investment_metrics?: { median_rent: number; gross_rent_yield_percent?: number; estimated_roi_percent?: number; median_price_per_sqft?: number } }).investment_metrics : undefined;
+  const marketTrend = activeInsightsData && "market_trend" in activeInsightsData ? (activeInsightsData as { market_trend?: { hpi_index: number; change_1y_percent: number } }).market_trend : undefined;
+  const dataSource = activeInsightsData && "data_source" in activeInsightsData ? (activeInsightsData as { data_source?: "live" | "cache" | "mock" | "properties_france" }).data_source : undefined;
+  const surfaceReelleBati = activeInsightsData && "surface_reelle_bati" in activeInsightsData ? (activeInsightsData as { surface_reelle_bati?: number | null }).surface_reelle_bati : undefined;
+  const lotNumber = activeInsightsData && "lot_number" in activeInsightsData ? (activeInsightsData as { lot_number?: string | null }).lot_number : undefined;
+  const buildingSales = activeInsightsData && "building_sales" in activeInsightsData ? (activeInsightsData as { building_sales?: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number?: string | null }> }).building_sales : undefined;
+  const resultLevel = activeInsightsData && "result_level" in activeInsightsData ? (activeInsightsData as { result_level?: "exact_property" | "building" | "commune_fallback" }).result_level : undefined;
   const isFranceData = dataSource === "properties_france" || isFR;
-  const propertyResult = insightsData && "property_result" in insightsData ? (insightsData as {
+  const propertyResult = activeInsightsData && "property_result" in activeInsightsData ? (activeInsightsData as {
     property_result?: {
       exact_value: number | null;
       exact_value_message: string | null;
@@ -440,6 +592,19 @@ export function PropertyValueCard({
       livability_rating: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT";
     };
   }).property_result : undefined;
+
+  React.useEffect(() => {
+    if (!isFR) return;
+    if (!activeInsightsData || typeof activeInsightsData !== "object") return;
+    const d = activeInsightsData as { data_source?: string; result_level?: string; property_result?: { value_level?: string } };
+    if (d.data_source === "properties_france") {
+      console.log("[France lot] response received", {
+        result_level: d.result_level,
+        value_level: d.property_result?.value_level,
+        renderedBranch: d.result_level === "exact_property" ? "exact_apartment" : (d.result_level === "building" ? "building" : "other"),
+      });
+    }
+  }, [isFR, activeInsightsData]);
   const hasFranceBuildingOrAreaData =
     isFranceData &&
     (
@@ -556,11 +721,25 @@ export function PropertyValueCard({
   return (
     <div
       className={[
-        "pointer-events-none absolute right-4 bottom-6 left-auto z-20 flex flex-col justify-end transition-all duration-300 ease-out",
+        "pointer-events-none z-20 flex flex-col justify-end transition-all duration-300 ease-out",
+        isLotInputFocused && isMobileViewport
+          ? "fixed inset-x-2"
+          : "absolute right-4 left-auto",
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
+      style={{
+        // When focused on mobile, use a fixed panel that stays within the visual viewport.
+        // When not focused, keep normal bottom-right positioning.
+        bottom: `calc(${isMobileViewport ? "6rem" : "1.5rem"} + ${(isLotInputFocused ? keyboardInsetPx : 0)}px)`,
+        ...(isLotInputFocused && isMobileViewport ? { top: "0.5rem" } : {}),
+      }}
     >
-      <div className="pointer-events-auto flex w-[340px] max-w-[92vw] sm:w-[360px] sm:max-w-[380px] shrink-0 min-h-0 max-h-[min(42vh,calc(100vh-6rem))] flex-col overflow-hidden rounded-xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl">
+      <div className={[
+        "pointer-events-auto flex shrink-0 min-h-0 flex-col overflow-hidden rounded-xl border border-amber-400/20 bg-black/85 shadow-2xl backdrop-blur-xl",
+        isLotInputFocused && isMobileViewport
+          ? "w-full max-h-[calc(100dvh-1rem)]"
+          : "w-[340px] max-w-[92vw] sm:w-[360px] sm:max-w-[380px] max-h-[min(42vh,calc(100vh-6rem))]",
+      ].join(" ")}>
         <div className="flex shrink-0 items-start justify-between gap-1.5 border-b border-amber-400/15 bg-black/90 px-2 py-1 sm:px-2.5 sm:py-1">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
@@ -645,15 +824,17 @@ export function PropertyValueCard({
                     placeholder="Apartment / Lot"
                     value={aptNumber}
                     onChange={(e) => setAptNumber(e.target.value)}
+                    onFocus={() => setIsLotInputFocused(true)}
+                    onBlur={() => setIsLotInputFocused(false)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
                         e.stopPropagation();
-                        setSearchApt(aptNumber.trim() || undefined);
-                        setAptSearchTrigger((t) => t + 1);
+                        if ((e as unknown as { isComposing?: boolean }).isComposing) return;
+                        submitLotSearch("enter");
                       }
                     }}
-                    className="flex-1 rounded border border-zinc-600 bg-zinc-900/80 px-1.5 py-1 text-[11px] text-white placeholder:text-zinc-500"
+                    className="flex-1 rounded border border-zinc-600 bg-zinc-900/80 px-1.5 py-1 text-[16px] sm:text-[11px] text-white placeholder:text-zinc-500"
                   />
                   <button
                     type="button"
@@ -661,8 +842,7 @@ export function PropertyValueCard({
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      setSearchApt(aptNumber.trim() || undefined);
-                      setAptSearchTrigger((t) => t + 1);
+                      submitLotSearch("button");
                     }}
                     className="shrink-0 rounded border border-violet-500/50 bg-violet-500/20 px-2 py-1 text-[10px] font-medium text-violet-300 hover:bg-violet-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -738,15 +918,17 @@ export function PropertyValueCard({
                       placeholder="Apartment / Lot"
                       value={aptNumber}
                       onChange={(e) => setAptNumber(e.target.value)}
+                      onFocus={() => setIsLotInputFocused(true)}
+                      onBlur={() => setIsLotInputFocused(false)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
                           e.stopPropagation();
-                          setSearchApt(aptNumber.trim() || undefined);
-                          setAptSearchTrigger((t) => t + 1);
+                          if ((e as unknown as { isComposing?: boolean }).isComposing) return;
+                          submitLotSearch("enter");
                         }
                       }}
-                      className="flex-1 rounded border border-zinc-600 bg-zinc-900/80 px-1.5 py-1 text-[11px] text-white placeholder:text-zinc-500"
+                      className="flex-1 rounded border border-zinc-600 bg-zinc-900/80 px-1.5 py-1 text-[16px] sm:text-[11px] text-white placeholder:text-zinc-500"
                     />
                     <button
                       type="button"
@@ -754,8 +936,7 @@ export function PropertyValueCard({
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        setSearchApt(aptNumber.trim() || undefined);
-                        setAptSearchTrigger((t) => t + 1);
+                        submitLotSearch("button");
                       }}
                       className="shrink-0 rounded border border-violet-500/50 bg-violet-500/20 px-2 py-1 text-[10px] font-medium text-violet-300 hover:bg-violet-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -920,7 +1101,7 @@ export function PropertyValueCard({
                 </CollapsibleSection>
               )}
             </div>
-          ) : isFranceData && !hasFranceBuildingOrAreaData ? (
+          ) : isFranceData && !hasFranceBuildingOrAreaData && !hasStickyFranceBuilding ? (
             <div className="text-[11px] text-zinc-500">
               {isLoading ? "Loading property data…" : "No DVF data for this area."}
             </div>

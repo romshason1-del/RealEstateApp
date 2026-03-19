@@ -173,7 +173,19 @@ export function parseFRAddressFromFullString(
   address: string
 ): { houseNumber: string; street: string; city: string; postcode: string } {
   const trimmed = address.trim().replace(/\s+/g, " ");
-  const withoutFR = trimmed.replace(/,?\s*(France|FR)\s*$/i, "").trim();
+  // Google Places may end French overseas departments with region names (e.g. "Réunion")
+  // which breaks our "postcode + city at end" extraction. Strip common trailing suffixes.
+  const withoutFR = trimmed
+    .replace(/,?\s*(France|FR)\s*$/i, "")
+    .replace(/,?\s*(La\s*)?R\u00e9union\s*$/i, "")
+    .replace(/,?\s*Reunion\s*$/i, "")
+    .replace(/,?\s*Guadeloupe\s*$/i, "")
+    .replace(/,?\s*Martinique\s*$/i, "")
+    .replace(/,?\s*Guyane\s*$/i, "")
+    .replace(/,?\s*Mayotte\s*$/i, "")
+    .replace(/,?\s*Nouvelle-?Cal\u00e9donie\s*$/i, "")
+    .replace(/,?\s*Polyn\u00e9sie\s*fran\u00e7aise\s*$/i, "")
+    .trim();
   if (!withoutFR) return { houseNumber: "", street: "", city: "", postcode: "" };
 
   // Primary: "10000 Troyes" or "06000 Nice" at end
@@ -195,6 +207,16 @@ export function parseFRAddressFromFullString(
       postcode = fiveDigit[1];
     } else if (fourDigit) {
       postcode = "0" + fourDigit[1];
+    }
+  }
+
+  // If we have a postcode but no city (e.g. "..., 97435 Saint-Paul, Réunion"),
+  // try extracting "postcode + city" from the middle of the string.
+  if (postcode && !city) {
+    const re = new RegExp(`\\b${postcode}\\s+([A-Za-zÀ-ÿ\\s'-]+)\\b`, "i");
+    const m = withoutFR.match(re);
+    if (m?.[1]) {
+      city = m[1].trim();
     }
   }
 

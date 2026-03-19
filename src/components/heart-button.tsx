@@ -24,8 +24,19 @@ export function HeartButton({
   iconSize = "size-3.5",
 }: HeartButtonProps) {
   const [optimisticSaved, setOptimisticSaved] = React.useState(isSaved);
+  const expectedRef = React.useRef<boolean | null>(null);
 
   React.useEffect(() => {
+    // If the user just clicked, keep the optimistic UI until the parent
+    // reports the expected value. This prevents brief prop sync from
+    // canceling the immediate visual update.
+    if (expectedRef.current != null) {
+      if (isSaved === expectedRef.current) {
+        setOptimisticSaved(isSaved);
+        expectedRef.current = null;
+      }
+      return;
+    }
     setOptimisticSaved(isSaved);
   }, [isSaved]);
 
@@ -37,6 +48,7 @@ export function HeartButton({
       e.stopPropagation();
       const next = !displaySaved;
       setOptimisticSaved(next);
+      expectedRef.current = next;
       onToggle();
     },
     [displaySaved, onToggle]

@@ -145,6 +145,8 @@ export type FetchPropertyValueOptions = {
   latitude?: number;
   longitude?: number;
   countryCode?: string;
+  /** Optional abort signal (used by hooks to prevent stale updates). */
+  signal?: AbortSignal;
   /** UK only: raw typed input (preserves Flat/Unit) */
   rawInputAddress?: string;
   /** UK only: Google formatted_address from selected suggestion */
@@ -270,7 +272,7 @@ export async function fetchPropertyValueInsights(
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
     const res = await fetch(`/api/property-value?${params.toString()}`, {
-      signal: AbortSignal.timeout(code === "FR" ? 60000 : 20000),
+      signal: options?.signal ?? AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });
     const data: PropertyValueInsightsResponse = await res.json().catch(() => ({
       message: "Invalid response",

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { PropertyValueCardSafe } from "@/components/property-value-card-safe";
+import { FranceApartmentSheet } from "@/components/france-apartment-sheet";
 import {
   GoogleMap,
   useJsApiLoader,
@@ -104,6 +105,8 @@ type BuildingInsight = {
   typedAddressForFrance?: string;
   /** France: postcode from Google address_components (avoids "Postcode required" when formatted_address omits it) */
   postcode?: string;
+  /** Debug: raw country short_name from Google address_components (e.g. FR, RE) */
+  debugCountryFromComponents?: string;
 };
 
 type GeocodeResult = {
@@ -274,6 +277,27 @@ type CountryProfile = {
   providerLabel: string;
 };
 
+function resolveCountryProfileFromCountryCode(countryCode: string): CountryProfile {
+  switch (countryCode) {
+    case "IL":
+      return { countryCode: "IL", currencySymbol: "₪", providerLabel: "data.gov.il" };
+    case "IT":
+      return { countryCode: "IT", currencySymbol: "€", providerLabel: "OMI" };
+    case "FR":
+    case "RE": // Réunion (FR overseas department) – treat as France DVF flow
+      return { countryCode: "FR", currencySymbol: "€", providerLabel: "DVF (data.gouv.fr)" };
+    case "ES":
+      return { countryCode: "ES", currencySymbol: "€", providerLabel: "RentCast Global Mock" };
+    case "US":
+      return { countryCode: "US", currencySymbol: "$", providerLabel: "RentCast Global Mock" };
+    case "UK":
+    case "GB":
+      return { countryCode: "UK", currencySymbol: "£", providerLabel: "HM Land Registry" };
+    default:
+      return { countryCode: "INTL", currencySymbol: "$", providerLabel: "RentCast Global Mock" };
+  }
+}
+
 function resolveCountryProfile(address: string): CountryProfile {
   const normalizedAddress = address.toLowerCase();
 
@@ -300,7 +324,7 @@ function resolveCountryProfile(address: string): CountryProfile {
   }
 
   if (
-    /france|paris|lyon|marseille|nice|bordeaux|chaley|delivr|promenade des anglais/.test(normalizedAddress)
+    /france|paris|lyon|marseille|nice|bordeaux|chaley|delivr|promenade des anglais|réunion|reunion|saint-paul|saint denis|saint-denis/.test(normalizedAddress)
   ) {
     return {
       countryCode: "FR",
@@ -406,7 +430,10 @@ function getPropertyInsight(
 ): BuildingInsight {
   const seed = Math.abs(Math.round(position.lat * 10000) + Math.round(position.lng * 10000));
   const insight = getMockPropertyInsight(seed);
-  const countryProfile = resolveCountryProfile(address);
+  const countryFromComponents = addressComponents?.find((c) => c.types.includes("country"))?.short_name?.trim();
+  const countryProfile = countryFromComponents
+    ? resolveCountryProfileFromCountryCode(countryFromComponents.toUpperCase())
+    : resolveCountryProfile(address);
   const baseValue = parseCurrencyAmount(insight.estimatedPropertyValue);
   const streetAverageValueNumber = localizeEstimatedValue(
     baseValue,
@@ -445,6 +472,7 @@ function getPropertyInsight(
       : null,
     lastTransactions: insight.lastTransactions,
     ...(postcode ? { postcode } : {}),
+    ...(countryFromComponents ? { debugCountryFromComponents: countryFromComponents.toUpperCase() } : {}),
   };
 }
 
@@ -507,12 +535,32 @@ export const AddressExplorer = () => {
   const [assetPropertyType, setAssetPropertyType] =
     React.useState<AssetPropertyType>("house");
   const [showWelcomeScreen, setShowWelcomeScreen] = React.useState(true);
+
+  // (mapCenterProp/mapZoomProp computed after initialGeolocationComplete state is declared)
   const [showUpgradeComingSoon, setShowUpgradeComingSoon] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
   const [flashMessage, setFlashMessage] = React.useState<string | null>(null);
   const [locationNotice, setLocationNotice] = React.useState<string | null>(null);
   const [isWaitingForLocation, setIsWaitingForLocation] = React.useState(false);
   const [initialGeolocationComplete, setInitialGeolocationComplete] = React.useState(false);
+  // Map viewport props must be stable and depend ONLY on location/address state.
+  // (Apartment/lot changes happen inside the property card and must not affect the map.)
+  const mapCenterProp = React.useMemo(
+    () => currentLocation ?? center ?? (initialGeolocationComplete ? defaultCenter : WORLD_VIEW_CENTER),
+    [
+      currentLocation?.lat,
+      currentLocation?.lng,
+      center?.lat,
+      center?.lng,
+      initialGeolocationComplete,
+      defaultCenter.lat,
+      defaultCenter.lng,
+    ]
+  );
+  const mapZoomProp = React.useMemo(
+    () => (currentLocation ?? center ? 17 : (initialGeolocationComplete ? 15 : WORLD_VIEW_ZOOM)),
+    [currentLocation?.lat, currentLocation?.lng, center?.lat, center?.lng, initialGeolocationComplete]
+  );
   const [isPropertyValueChoiceOpen, setIsPropertyValueChoiceOpen] = React.useState(false);
   const [isPropertyValueAddressInputOpen, setIsPropertyValueAddressInputOpen] = React.useState(false);
   const [propertyValueAddressQuery, setPropertyValueAddressQuery] = React.useState("");
@@ -524,6 +572,17 @@ export const AddressExplorer = () => {
     email: "",
     password: "",
   });
+
+  React.useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    if (!selectedBuilding) return;
+    console.log("[selectedBuilding]", {
+      address: selectedBuilding.address,
+      countryCode: selectedBuilding.countryCode,
+      postcode: selectedBuilding.postcode,
+      debugCountryFromComponents: selectedBuilding.debugCountryFromComponents,
+    });
+  }, [selectedBuilding]);
   const { isLoaded, loadError } = useJsApiLoader({
     id: "streetiq-google-map",
     googleMapsApiKey: apiKey,
@@ -1208,8 +1267,9 @@ export const AddressExplorer = () => {
     if (!map) return;
     const mapCenter = map.getCenter();
     if (!mapCenter) return;
-    const viewCenter = { lat: mapCenter.lat(), lng: mapCenter.lng() };
-    setCenter(viewCenter);
+    // IMPORTANT: Do not feed map viewport changes back into `center` state.
+    // `center` is the controlled "searched address" center. Updating it on idle
+    // can cause unwanted recenter/zoom on unrelated UI changes (like lot switching).
     // Do NOT auto-trigger places search on map move (cost control).
     // User must click "Search this area" to fetch places.
   }, [map]);
@@ -2052,6 +2112,17 @@ export const AddressExplorer = () => {
     setError(null);
   }, [error]);
 
+  // Auto-close France property card/sheet when the address input diverges
+  // from the currently selected building context.
+  React.useEffect(() => {
+    if (!selectedBuilding) return;
+    const typed = propertyValueAddressQuery.trim().toLowerCase();
+    const current = (selectedBuilding.address ?? "").trim().toLowerCase();
+    if (typed && typed !== current) {
+      dismissSelectedBuilding();
+    }
+  }, [propertyValueAddressQuery, selectedBuilding, dismissSelectedBuilding]);
+
   const renderExplore = () => (
     <div className="relative min-h-0 flex-1 flex flex-col gap-0 overflow-hidden">
       <div className="relative flex h-full min-h-0 flex-col gap-0 overflow-hidden bg-[#000000]">
@@ -2130,11 +2201,10 @@ export const AddressExplorer = () => {
             <>
             <div className="relative w-full shrink-0 touch-pan-x touch-pan-y" style={{ height: "min(55vh, 50dvh)", minHeight: "280px", backgroundColor: MAP_DARK.containerBg }}>
             <GoogleMap
-              key={center ? "loaded" : "loading"}
               mapContainerStyle={mapContainerStyle}
               mapContainerClassName="h-full min-h-[280px] w-full"
-              center={currentLocation ?? center ?? (initialGeolocationComplete ? defaultCenter : WORLD_VIEW_CENTER)}
-              zoom={currentLocation ?? center ? 17 : (initialGeolocationComplete ? 15 : WORLD_VIEW_ZOOM)}
+              center={mapCenterProp}
+              zoom={mapZoomProp}
               onLoad={(instance) => {
                 mapRef.current = instance;
                 setMap(instance);
@@ -2322,32 +2392,43 @@ export const AddressExplorer = () => {
           ) : null}
 
           {selectedBuilding ? (
-            <PropertyValueCardSafe
-              address={selectedBuilding.address}
-              position={selectedBuilding.position}
-              currencySymbol={selectedBuilding.currencySymbol}
-              countryCode={selectedBuilding.countryCode}
-              onClose={dismissSelectedBuilding}
-              rawInputAddress={selectedBuilding.rawInputAddress}
-              selectedFormattedAddress={selectedBuilding.selectedFormattedAddress}
-              typedAddressForFrance={selectedBuilding.typedAddressForFrance}
-              postcode={selectedBuilding.postcode}
-              isSaved={isPropertySaved(selectedBuilding.address)}
-              onToggleSave={() =>
-                toggleSavedProperty({
-                  id: `saved-${selectedBuilding.address}`,
-                  address: selectedBuilding.address,
-                  position: selectedBuilding.position,
-                  ownership: "wishlist",
-                  propertyType: "apartment",
-                  estimatedPropertyValue: selectedBuilding.estimatedPropertyValue,
-                  estimatedPropertyValueNumber:
-                    selectedBuilding.estimatedPropertyValueNumber,
-                  currencySymbol: selectedBuilding.currencySymbol,
-                  countryCode: selectedBuilding.countryCode,
-                })
-              }
-            />
+            selectedBuilding.countryCode === "FR" ? (
+              <FranceApartmentSheet
+                address={selectedBuilding.address}
+                position={selectedBuilding.position}
+                typedAddressForFrance={selectedBuilding.typedAddressForFrance}
+                postcode={selectedBuilding.postcode}
+                currencySymbol={selectedBuilding.currencySymbol}
+                onClose={dismissSelectedBuilding}
+              />
+            ) : (
+              <PropertyValueCardSafe
+                address={selectedBuilding.address}
+                position={selectedBuilding.position}
+                currencySymbol={selectedBuilding.currencySymbol}
+                countryCode={selectedBuilding.countryCode}
+                onClose={dismissSelectedBuilding}
+                rawInputAddress={selectedBuilding.rawInputAddress}
+                selectedFormattedAddress={selectedBuilding.selectedFormattedAddress}
+                typedAddressForFrance={selectedBuilding.typedAddressForFrance}
+                postcode={selectedBuilding.postcode}
+                isSaved={isPropertySaved(selectedBuilding.address)}
+                onToggleSave={() =>
+                  toggleSavedProperty({
+                    id: `saved-${selectedBuilding.address}`,
+                    address: selectedBuilding.address,
+                    position: selectedBuilding.position,
+                    ownership: "wishlist",
+                    propertyType: "apartment",
+                    estimatedPropertyValue: selectedBuilding.estimatedPropertyValue,
+                    estimatedPropertyValueNumber:
+                      selectedBuilding.estimatedPropertyValueNumber,
+                    currencySymbol: selectedBuilding.currencySymbol,
+                    countryCode: selectedBuilding.countryCode,
+                  })
+                }
+              />
+            )
           ) : null}
 
           {showRestoreButton ? (
