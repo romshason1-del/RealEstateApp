@@ -180,22 +180,39 @@ export function FranceApartmentSheet({
     isHouseInferredByHeuristic;
   const isApartmentLikely = parsed?.multiple_units === true || availableLots.length > 0 || hasAppartementType;
   const isPropertyTypeUnknown = !isHouseDetected && !isApartmentLikely;
+  const postcodeStr = String(parsed?.address?.postcode ?? postcode ?? "").trim();
+  const isDenseUrbanAddress =
+    /^75\d{3}$/.test(postcodeStr) ||
+    /\b(paris|lyon|marseille|bordeaux|lille|nice|nantes)\b/i.test(address);
+  const propertyTypeHint = String((normalized?.property?.propertyType ?? pr?.property_type ?? "")).toLowerCase();
+  const isApartmentTypeHint = propertyTypeHint.includes("appart");
 
   // UI-only override: some "house-like" addresses can be classified as multi-unit due to sparse DVF type info.
   // If the payload looks like a small inventory (low counts), treat as house-like for copy only.
-  const isHouseLikeOverride = buildingSales.length <= 5 && availableLots.length < 20;
-  const isHouseLikeUI = isHouseDetected || isHouseLikeOverride;
+  const isHouseLikeOverride = buildingSales.length <= 5 && availableLots.length < 20 && !isDenseUrbanAddress;
+  const isApartmentLikeForLotFirst =
+    availableLots.length > 0 ||
+    hasAppartementType ||
+    parsed?.multiple_units === true ||
+    isDenseUrbanAddress ||
+    isApartmentTypeHint;
+  const isHouseLikeUI = isHouseDetected || (isHouseLikeOverride && !isApartmentLikeForLotFirst);
+  const shouldForceLotFirstFlow = isApartmentLikeForLotFirst && !isHouseLikeUI;
   React.useEffect(() => {
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
       isHouseDetected,
       isHouseLikeUI,
+      shouldForceLotFirstFlow,
       isApartmentLikely,
+      isApartmentLikeForLotFirst,
       multipleUnits: parsed?.multiple_units === true,
       availableLots: availableLots.length,
       hasAppartementType,
+      isDenseUrbanAddress,
+      isApartmentTypeHint,
     });
-  }, [isDev, isHouseDetected, isHouseLikeUI, isApartmentLikely, parsed?.multiple_units, availableLots.length, hasAppartementType]);
+  }, [isDev, isHouseDetected, isHouseLikeUI, shouldForceLotFirstFlow, isApartmentLikely, isApartmentLikeForLotFirst, parsed?.multiple_units, availableLots.length, hasAppartementType, isDenseUrbanAddress, isApartmentTypeHint]);
 
   const displayConfidence = React.useMemo(() => {
     const c = normalized?.confidence;
@@ -271,9 +288,17 @@ export function FranceApartmentSheet({
     if (!isHouseLikeUI) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;
+    if (isDev) console.log("[FR_UI] direct_house_flow_chosen");
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [isHouseLikeUI, hasSubmittedLotSearch, isLoading]);
+  }, [isHouseLikeUI, hasSubmittedLotSearch, isLoading, isDev]);
+
+  React.useEffect(() => {
+    if (!isDev) return;
+    if (shouldForceLotFirstFlow) {
+      console.log("[FR_UI] lot_first_flow_triggered");
+    }
+  }, [isDev, shouldForceLotFirstFlow]);
 
   const badge = React.useMemo(() => {
     if (phase === "exact_apartment_match_state") {
@@ -548,7 +573,9 @@ export function FranceApartmentSheet({
     };
 
     const dateText = isLoadingNow ? "—" : formatDisplayDate(fr?.property?.transactionDate ?? null);
-    const sourceText = isLoadingNow ? "—" : (sourceLabel ? sourceLabel : "—");
+    const sourceText = isLoadingNow
+      ? "—"
+      : (sourceLabel || (typeof pr?.street_average_message === "string" && pr.street_average_message.trim() ? pr.street_average_message.trim() : "—"));
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
     // Reuse the exact gold token used by the Search button and active Explore icon.
