@@ -291,6 +291,10 @@ export async function GET(request: NextRequest) {
     // Minimal France gold-table path (exact -> area fallback -> no data).
     try {
       const frStartTs = Date.now();
+        console.log("[ENV_CHECK]", {
+          projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
+          hasKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
+        });
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
       console.log("[FR_GOLD] request_start", {
