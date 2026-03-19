@@ -7,6 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { BigQuery } from "@google-cloud/bigquery";
 import { createClient } from "@supabase/supabase-js";
 import getPropertyValueInsights from "@/lib/property-value-insights";
 import { getFrancePropertyResult, mapLivabilityToRating, normalizeLot } from "@/lib/bigquery-france-service";
@@ -122,6 +123,18 @@ function buildUKMinimalResponse(): Record<string, unknown> {
       livability_rating: "POOR" as const,
     },
   };
+}
+
+function getGoldBigQueryClient(): BigQuery {
+  const projectId = (process.env.GOOGLE_CLOUD_PROJECT_ID ?? "").trim();
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!projectId) throw new Error("GOOGLE_CLOUD_PROJECT_ID is required");
+  if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is required");
+  const credentials = JSON.parse(raw) as { client_email?: string; private_key?: string };
+  if (credentials.private_key) {
+    credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
+  }
+  return new BigQuery({ projectId, credentials });
 }
 
 export async function GET(request: NextRequest) {
@@ -280,6 +293,146 @@ export async function GET(request: NextRequest) {
   }
 
   if (isFR) {
+    // Minimal France gold-table path (exact -> area fallback -> no data).
+    try {
+      const bq = getGoldBigQueryClient();
+      const country = "FR";
+      const cityNorm = city.trim();
+      const streetNorm = street.trim();
+      const postcodeNorm = (postcode || zip || "").trim();
+      const houseNumberNorm = houseNumber.trim();
+      const unitNumberNorm = (aptNumber ?? "").trim();
+      const propertyType = (searchParams.get("property_type") ?? searchParams.get("propertyType") ?? "").trim() || null;
+      const inputSurfaceRaw = searchParams.get("surface_m2") ?? searchParams.get("surfaceM2");
+      const inputSurfaceM2 = inputSurfaceRaw ? Number(inputSurfaceRaw) : NaN;
+      const validInputSurfaceM2 = Number.isFinite(inputSurfaceM2) && inputSurfaceM2 > 0 ? inputSurfaceM2 : null;
+
+      const exactQuery = `
+        SELECT
+          surface_m2,
+          price_per_m2,
+          last_sale_price,
+          last_sale_date
+        FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+        WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+          AND TRIM(postcode) = @postcode
+          AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND (@unit_number = '' OR TRIM(COALESCE(CAST(unit_number AS STRING), '')) = TRIM(CAST(@unit_number AS STRING)))
+        LIMIT 1
+      `;
+
+      const [exactRows] = await bq.query({
+        query: exactQuery,
+        params: {
+          country,
+          city: cityNorm,
+          postcode: postcodeNorm,
+          street: streetNorm,
+          house_number: houseNumberNorm,
+          unit_number: unitNumberNorm,
+        },
+      });
+
+      const exact = (exactRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>)[0];
+      if (exact) {
+        const surface = Number(exact.surface_m2 ?? 0);
+        const pricePerM2 = Number(exact.price_per_m2 ?? 0);
+        const estimated = Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2) && pricePerM2 > 0
+          ? Math.round(surface * pricePerM2)
+          : null;
+        return NextResponse.json({
+          address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+          data_source: "properties_france",
+          property_result: {
+            exact_value: estimated,
+            exact_value_message: estimated == null ? "No reliable data found" : null,
+            value_level: "property-level",
+            last_transaction: {
+              amount: Number(exact.last_sale_price ?? 0) || 0,
+              date: exact.last_sale_date ?? null,
+              message: Number(exact.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+            },
+            street_average: null,
+            street_average_message: "Exact property",
+            livability_rating: "FAIR",
+          },
+        });
+      }
+
+      const fallbackQuery = `
+        SELECT
+          avg_price_per_m2,
+          newest_sale_date
+        FROM \`streetiq-bigquery.streetiq_gold.property_area_fallback\`
+        WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+          AND TRIM(postcode) = @postcode
+          AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+          AND (@property_type IS NULL OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
+        LIMIT 1
+      `;
+
+      const [fallbackRows] = await bq.query({
+        query: fallbackQuery,
+        params: {
+          country,
+          city: cityNorm,
+          postcode: postcodeNorm,
+          street: streetNorm,
+          property_type: propertyType,
+        },
+      });
+
+      const fallback = (fallbackRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0];
+      if (fallback) {
+        const avgPrice = Number(fallback.avg_price_per_m2 ?? 0);
+        const estimated = validInputSurfaceM2 != null && Number.isFinite(avgPrice) && avgPrice > 0
+          ? Math.round(validInputSurfaceM2 * avgPrice)
+          : null;
+        return NextResponse.json({
+          address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+          data_source: "properties_france",
+          property_result: {
+            exact_value: estimated,
+            exact_value_message: estimated == null ? "No reliable data found" : null,
+            value_level: "street-level",
+            last_transaction: {
+              amount: 0,
+              date: fallback.newest_sale_date ?? null,
+              message: "No recent transaction available",
+            },
+            street_average: null,
+            street_average_message: "Similar properties on same street",
+            livability_rating: "FAIR",
+          },
+        });
+      }
+
+      return NextResponse.json({
+        address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+        data_source: "properties_france",
+        property_result: {
+          exact_value: null,
+          exact_value_message: "No reliable data found",
+          value_level: "no_match",
+          last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
+          street_average: null,
+          street_average_message: "No reliable data found",
+          livability_rating: "FAIR",
+        },
+      });
+    } catch (err) {
+      return NextResponse.json(
+        {
+          message: "Failed to fetch France property value",
+          error: err instanceof Error ? err.message : "Unknown error",
+        },
+        { status: 500 }
+      );
+    }
+
     const frRequestStartedAt = Date.now();
     const frErrorCacheKey = `fr_err:${cacheKey}${aptNumber ? `|apt:${aptNumber}` : ""}`;
     const frCached = FR_ERROR_CACHE.get(frErrorCacheKey);
