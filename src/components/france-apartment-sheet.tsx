@@ -582,9 +582,10 @@ export function FranceApartmentSheet({
     const dateText = isLoadingNow ? "—" : formatDisplayDate(fr?.property?.transactionDate ?? null);
     const sourceText = isLoadingNow
       ? "—"
-      : (sourceLabel ||
-          (typeof pr?.street_average_message === "string" && pr.street_average_message.trim() ? pr.street_average_message.trim() : null) ||
-          (fr?.success === false ? "No reliable data found" : "Area fallback"));
+      : (typeof pr?.street_average_message === "string" && pr.street_average_message.trim()
+          ? pr.street_average_message.trim()
+          : (sourceLabel ||
+              (fr?.success === false ? "No reliable data found" : "Area fallback")));
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
     const flowMarker = shouldForceLotFirstFlow ? "FR Flow: apartment-first" : isHouseLikeUI ? "FR Flow: house-direct" : "FR Flow: fallback";
@@ -920,48 +921,36 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
-          {!isHouseLikeUI ? (
+          {!isHouseLikeUI && hasMultiUnitEvidence ? (
             <div className="mt-3 rounded-xl border border-zinc-500/20 bg-black/35 px-3 py-2.5">
-              {isPropertyTypeUnknown && !showOptionalAptInput ? (
+              <div className="text-[10px] font-medium text-zinc-400">Apartment / lot number</div>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="text"
+                  inputMode="text"
+                  value={lotInput}
+                  onChange={(e) => setLotInput(e.target.value)}
+                  onFocus={() => setIsLotFocused(true)}
+                  onBlur={() => setIsLotFocused(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      submit("enter");
+                    }
+                  }}
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950/70 px-3 py-2 text-[16px] text-white placeholder:text-zinc-600 outline-none focus:border-amber-400/40"
+                  placeholder="e.g. 9"
+                />
                 <button
                   type="button"
-                  onClick={() => setShowOptionalAptInput(true)}
-                  className="w-full rounded-lg border border-white/10 bg-black/20 px-2 py-2 text-left text-[11px] font-medium text-zinc-300 hover:border-white/20"
+                  onClick={() => submit("button")}
+                  disabled={isLoading}
+                  className="shrink-0 rounded-lg border border-amber-400/35 bg-amber-400/15 px-3.5 py-2 text-[13px] font-semibold text-amber-200 hover:bg-amber-400/20 disabled:opacity-50"
                 >
-                  {isHouseLikeUI ? "Add property/lot only if relevant" : "Add apartment/lot only if relevant"}
+                  {isLoading ? "Searching…" : "Search"}
                 </button>
-              ) : (
-                <>
-                  <div className="text-[10px] font-medium text-zinc-400">{isHouseLikeUI ? "Property / lot number" : "Apartment / lot number"}</div>
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="text"
-                      inputMode="text"
-                      value={lotInput}
-                      onChange={(e) => setLotInput(e.target.value)}
-                      onFocus={() => setIsLotFocused(true)}
-                      onBlur={() => setIsLotFocused(false)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          submit("enter");
-                        }
-                      }}
-                      className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950/70 px-3 py-2 text-[16px] text-white placeholder:text-zinc-600 outline-none focus:border-amber-400/40"
-                      placeholder="e.g. 9"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => submit("button")}
-                      disabled={isLoading}
-                      className="shrink-0 rounded-lg border border-amber-400/35 bg-amber-400/15 px-3.5 py-2 text-[13px] font-semibold text-amber-200 hover:bg-amber-400/20 disabled:opacity-50"
-                    >
-                      {isLoading ? "Searching…" : "Search"}
-                    </button>
-                  </div>
-                </>
-              )}
+              </div>
             </div>
           ) : null}
         </div>
@@ -973,15 +962,6 @@ export function FranceApartmentSheet({
               <div className="text-[11px] text-zinc-300">
                 Search results open in a separate floating card above the map.
               </div>
-            ) : null}
-            {normalized?.success === false ? (
-              <button
-                type="button"
-                onClick={() => refetch()}
-                className="mt-2 inline-flex items-center justify-center rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[12px] font-semibold text-amber-200"
-              >
-                Retry
-              </button>
             ) : null}
           </div>
         </div>

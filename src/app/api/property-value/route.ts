@@ -512,6 +512,82 @@ export async function GET(request: NextRequest) {
         }, "exact_match");
       }
 
+      // Same building fallback (when unit/lot was provided but exact unit match is missing):
+      // Uses property_latest_facts with the same address key but without unit_number filtering.
+      if (unitNumberNorm) {
+        const buildingQuery = `
+          SELECT
+            surface_m2,
+            price_per_m2,
+            last_sale_price,
+            last_sale_date
+          FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+          WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+            AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+            AND TRIM(postcode) = @postcode
+            AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+            AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          LIMIT 1
+        `;
+        console.log("[FR_GOLD] before_building_query");
+        const [buildingRows] = await queryWithTimeout<
+          Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>
+        >(
+          {
+            query: buildingQuery,
+            params: {
+              country,
+              city: cityNorm,
+              postcode: postcodeNorm,
+              street: streetNorm,
+              house_number: houseNumberNorm,
+            },
+          },
+          "building_same_address_query"
+        );
+        console.log("[FR_GOLD] after_building_query", { rows: (buildingRows as any[])?.length ?? 0 });
+        const buildingRow = (buildingRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>)[0];
+        if (buildingRow) {
+          const surface = Number(buildingRow.surface_m2 ?? 0);
+          const pricePerM2 = Number(buildingRow.price_per_m2 ?? 0);
+          const estimated = Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2) && pricePerM2 > 0
+            ? Math.round(surface * pricePerM2)
+            : null;
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              fr_detect: detectClass,
+              property_result: {
+                exact_value: estimated,
+                exact_value_message: estimated == null ? "No reliable data found" : null,
+                value_level: "building-level",
+                last_transaction: {
+                  amount: Number(buildingRow.last_sale_price ?? 0) || 0,
+                  date: buildingRow.last_sale_date ?? null,
+                  message: Number(buildingRow.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+                },
+                street_average: null,
+                street_average_message: "Building-level estimate",
+                livability_rating: "FAIR",
+              },
+              fr: emptyFranceResponse({
+                success: estimated != null,
+                resultType: "building_level",
+                confidence: "medium",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: null,
+                buildingStats: { transactionCount: 1, avgPricePerSqm: null, avgTransactionValue: null },
+                comparables: [],
+                matchExplanation: "Building-level estimate (no exact unit match found).",
+              }),
+            },
+            "building_same_address_match"
+          );
+        }
+      }
+
       // Street-level intelligence helper (detection only):
       // If exact gold lookup returned no rows, detect apartment vs house from raw France transactions
       // using the same city + same postcode + same street (ignoring house_number). LIMIT 50.
