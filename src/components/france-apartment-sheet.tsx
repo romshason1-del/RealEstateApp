@@ -575,14 +575,16 @@ export function FranceApartmentSheet({
     const mainValue = isLoadingNow
       ? "Searching…"
       : isNoResult
-        ? "No reliable data available"
+        ? frDetect === "unclear"
+          ? "No reliable France property data found for this address in the current dataset."
+          : "No reliable data available"
         : isSuspiciousFallback
           ? "No reliable price available"
           : hasValue
-          ? formatCurrency(rawValue, currencySymbol)
-          : (fr?.resultType === "building_level"
+            ? formatCurrency(rawValue, currencySymbol)
+            : fr?.resultType === "building_level"
               ? "No reliable building value available"
-              : "—");
+              : "—";
 
     const formatDisplayDate = (raw: string | null | undefined): string => {
       if (!raw) return "—";
@@ -718,17 +720,25 @@ export function FranceApartmentSheet({
 
                 {!isLoadingNow ? (
                   <div className="mt-1 text-xs font-medium leading-tight text-zinc-300/75">
-                    {fr?.resultType === "exact_apartment"
-                      ? "Based on an exact transaction for this property"
-                      : fr?.resultType === "similar_apartment_same_building"
-                        ? isHouseLikeUI ? "Based on nearby property transactions" : "Based on similar apartments in the same building"
-                        : fr?.resultType === "nearby_comparable"
-                          ? isHouseLikeUI ? "Based on nearby comparable houses" : "Based on nearby comparable apartments"
-                          : fr?.resultType === "building_level"
-                            ? isHouseLikeUI ? "Based on recent house transactions in this building" : "Based on recent transactions in this building"
-                            : fr?.resultType === "no_reliable_data"
-                              ? "Not enough reliable data to estimate value"
-                              : null}
+                    {frDetect === "unclear" && isNoResult
+                      ? "Try another address with confirmed France DVF coverage."
+                      : fr?.resultType === "exact_apartment"
+                        ? "Based on an exact transaction for this property"
+                        : fr?.resultType === "similar_apartment_same_building"
+                          ? isHouseLikeUI
+                            ? "Based on nearby property transactions"
+                            : "Based on similar apartments in the same building"
+                          : fr?.resultType === "nearby_comparable"
+                            ? isHouseLikeUI
+                              ? "Based on nearby comparable houses"
+                              : "Based on nearby comparable apartments"
+                            : fr?.resultType === "building_level"
+                              ? isHouseLikeUI
+                                ? "Based on recent house transactions in this building"
+                                : "Based on recent transactions in this building"
+                              : fr?.resultType === "no_reliable_data"
+                                ? "Not enough reliable data to estimate value"
+                                : null}
                   </div>
                 ) : null}
               </div>
