@@ -327,6 +327,73 @@ export async function GET(request: NextRequest) {
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         return NextResponse.json(payload, status ? { status } : undefined);
       };
+      const rawDetectQuery = `
+        SELECT
+          COUNT(DISTINCT NULLIF(TRIM(CAST(\`1er lot\` AS STRING)), '')) AS distinct_lot_count,
+          COUNT(DISTINCT NULLIF(TRIM(CAST(\`Identifiant local\` AS STRING)), '')) AS distinct_local_id_count,
+          SUM(CASE WHEN LOWER(TRIM(CAST(\`Type local\` AS STRING))) LIKE 'appartement%' THEN 1 ELSE 0 END) AS appartement_rows,
+          SUM(CASE WHEN LOWER(TRIM(CAST(\`Type local\` AS STRING))) LIKE 'maison%' THEN 1 ELSE 0 END) AS maison_rows,
+          ARRAY_AGG(DISTINCT NULLIF(TRIM(CAST(\`1er lot\` AS STRING)), '') IGNORE NULLS LIMIT 20) AS candidate_lots
+        FROM \`project-29fdf5d2-b1fb-4c43-b66.real_estate_data.france_transactions\`
+        WHERE TRIM(CAST(\`Code postal\` AS STRING)) = @postcode
+          AND TRIM(CAST(\`No voie\` AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND (
+            LOWER(TRIM(CONCAT(COALESCE(CAST(\`Type de voie\` AS STRING), ''), ' ', COALESCE(CAST(\`Voie\` AS STRING), '')))) = LOWER(TRIM(@street))
+            OR LOWER(TRIM(CAST(\`Voie\` AS STRING))) = LOWER(TRIM(@street))
+          )
+      `;
+      console.log("[FR_GOLD] before_raw_detection_query");
+      const [rawDetectRows] = await queryWithTimeout<[Array<{
+        distinct_lot_count?: number;
+        distinct_local_id_count?: number;
+        appartement_rows?: number;
+        maison_rows?: number;
+        candidate_lots?: string[];
+      }> ]>(
+        {
+          query: rawDetectQuery,
+          params: {
+            postcode: postcodeNorm,
+            house_number: houseNumberNorm,
+            street: streetNorm,
+          },
+        },
+        "raw_detection_query"
+      );
+      console.log("[FR_GOLD] after_raw_detection_query", { rows: (rawDetectRows as any[])?.length ?? 0 });
+      const detect = (rawDetectRows as Array<{
+        distinct_lot_count?: number;
+        distinct_local_id_count?: number;
+        appartement_rows?: number;
+        maison_rows?: number;
+        candidate_lots?: string[];
+      }>)[0] ?? {};
+      const distinctLotCount = Number(detect.distinct_lot_count ?? 0);
+      const distinctLocalIdCount = Number(detect.distinct_local_id_count ?? 0);
+      const appartementRows = Number(detect.appartement_rows ?? 0);
+      const maisonRows = Number(detect.maison_rows ?? 0);
+      const candidateLots = Array.isArray(detect.candidate_lots) ? detect.candidate_lots.filter(Boolean) : [];
+      const apartmentEvidence =
+        distinctLotCount > 1 ||
+        distinctLocalIdCount > 1 ||
+        appartementRows > 0 ||
+        candidateLots.length > 1;
+      const houseEvidence =
+        !apartmentEvidence &&
+        maisonRows > 0 &&
+        distinctLotCount <= 1 &&
+        distinctLocalIdCount <= 1;
+      const detectClass: "apartment" | "house" | "unclear" = apartmentEvidence ? "apartment" : houseEvidence ? "house" : "unclear";
+      console.log("[FR_GOLD] apartment_vs_house_decision", {
+        detectClass,
+        apartmentEvidence,
+        houseEvidence,
+        distinctLotCount,
+        distinctLocalIdCount,
+        appartementRows,
+        maisonRows,
+        candidateLotsCount: candidateLots.length,
+      });
 
       const exactQuery = `
         SELECT
@@ -343,35 +410,8 @@ export async function GET(request: NextRequest) {
           AND (@unit_number = '' OR TRIM(COALESCE(CAST(unit_number AS STRING), '')) = TRIM(CAST(@unit_number AS STRING)))
         LIMIT 1
       `;
-      const unitProbeQuery = `
-        SELECT COUNT(DISTINCT TRIM(COALESCE(CAST(unit_number AS STRING), ''))) AS unit_count
-        FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
-        WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
-          AND TRIM(postcode) = @postcode
-          AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
-          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
-      `;
-
       if (!unitNumberNorm) {
-        console.log("[FR_GOLD] before_unit_probe_query");
-        const [unitProbeRows] = await queryWithTimeout<[Array<{ unit_count?: number }>]>(
-          {
-            query: unitProbeQuery,
-            params: {
-              country,
-              city: cityNorm,
-              postcode: postcodeNorm,
-              street: streetNorm,
-              house_number: houseNumberNorm,
-            },
-          },
-          "unit_probe"
-        );
-        console.log("[FR_GOLD] after_unit_probe_query", { rows: (unitProbeRows as any[])?.length ?? 0 });
-        const unitCount = Number((unitProbeRows as Array<{ unit_count?: number }>)[0]?.unit_count ?? 0);
-        const apartmentLike = unitCount > 1;
-        console.log("[FR_GOLD] apartment_vs_house_decision", { unitCount, apartmentLike, evidence: "unit_count_for_same_address" });
-        if (apartmentLike) {
+        if (detectClass === "apartment") {
           console.log("[FR_GOLD] lot_prompt_triggered");
           return frReturn(
             {
@@ -379,6 +419,7 @@ export async function GET(request: NextRequest) {
               data_source: "properties_france",
               multiple_units: true,
               prompt_for_apartment: true,
+              available_lots: candidateLots,
               property_result: {
                 exact_value: null,
                 exact_value_message: "Enter apartment/lot for a more precise result.",
@@ -388,6 +429,7 @@ export async function GET(request: NextRequest) {
                 street_average_message: "Lot-first precision recommended",
                 livability_rating: "FAIR",
               },
+              fr_detect: detectClass,
               fr: emptyFranceResponse({
                 success: true,
                 resultType: "building_level",
@@ -395,7 +437,7 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: null,
-                buildingStats: { transactionCount: unitCount, avgPricePerSqm: null, avgTransactionValue: null },
+                buildingStats: { transactionCount: Math.max(candidateLots.length, distinctLotCount), avgPricePerSqm: null, avgTransactionValue: null },
                 comparables: [],
                 matchExplanation: "Apartment-like building detected. Enter lot/apartment for precise valuation.",
               }),
@@ -432,6 +474,7 @@ export async function GET(request: NextRequest) {
         return frReturn({
           address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
           data_source: "properties_france",
+          fr_detect: detectClass,
           property_result: {
             exact_value: estimated,
             exact_value_message: estimated == null ? "No reliable data found" : null,
@@ -566,6 +609,7 @@ export async function GET(request: NextRequest) {
         return frReturn({
           address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
           data_source: "properties_france",
+          fr_detect: detectClass,
           property_result: {
             exact_value: estimated,
             exact_value_message: estimated == null ? "No reliable data found" : null,
@@ -608,6 +652,7 @@ export async function GET(request: NextRequest) {
       return frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
         data_source: "properties_france",
+        fr_detect: detectClass,
         property_result: {
           exact_value: null,
           exact_value_message: "No reliable data found",
@@ -634,6 +679,7 @@ export async function GET(request: NextRequest) {
       const payload = {
         message: "Failed to fetch France property value",
         error: err instanceof Error ? err.message : "Unknown error",
+        fr_detect: "unclear",
         fr: emptyFranceResponse({
           success: false,
           resultType: "no_result",

@@ -586,6 +586,7 @@ export function FranceApartmentSheet({
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
     const flowMarker = shouldForceLotFirstFlow ? "FR Flow: apartment-first" : isHouseLikeUI ? "FR Flow: house-direct" : "FR Flow: fallback";
+    const detectMarker = `FR Detect: ${String(parsed?.fr_detect ?? (shouldForceLotFirstFlow ? "apartment" : isHouseLikeUI ? "house" : "unclear"))}`;
     // Reuse the exact gold token used by the Search button and active Explore icon.
     const goldTextClass = "text-amber-400";
     const confidenceTone =
@@ -652,6 +653,7 @@ export function FranceApartmentSheet({
                 ) : null}
               </div>
               <div className="mt-1 text-[10px] font-semibold text-zinc-400">{flowMarker}</div>
+              <div className="mt-0.5 text-[10px] font-semibold text-zinc-400">{detectMarker}</div>
             </div>
 
             {/* Core summary – 4 primary sections */}
