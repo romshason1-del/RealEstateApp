@@ -127,13 +127,8 @@ function buildUKMinimalResponse(): Record<string, unknown> {
 
 function getGoldBigQueryClient(): BigQuery {
   const projectId = (process.env.GOOGLE_CLOUD_PROJECT_ID ?? "").trim();
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (!projectId) throw new Error("GOOGLE_CLOUD_PROJECT_ID is required");
-  if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY is required");
-  const credentials = JSON.parse(raw) as { client_email?: string; private_key?: string };
-  if (credentials.private_key) {
-    credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
-  }
+  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}") as { client_email?: string; private_key?: string };
+  if (credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
   return new BigQuery({ projectId, credentials });
 }
 
@@ -305,7 +300,18 @@ export async function GET(request: NextRequest) {
         postcode: (postcode || zip || "").trim(),
         aptNumber: (aptNumber ?? "").trim(),
       });
-      const bq = getGoldBigQueryClient();
+      console.log("[FR_INIT] creating BigQuery client");
+      let bq: BigQuery;
+      try {
+        bq = new BigQuery({
+          projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
+          credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}"),
+        });
+        console.log("[FR_INIT] BigQuery client created");
+      } catch (err) {
+        console.error("[FR_ERROR] BigQuery init failed", err);
+        return new Response(JSON.stringify({ success: false, error: "BigQuery init failed" }), { status: 200 });
+      }
       const country = "FR";
       const cityNorm = city.trim();
       const streetNorm = street.trim();
@@ -414,20 +420,27 @@ export async function GET(request: NextRequest) {
         LIMIT 1
       `;
 
-      console.log("[FR_GOLD] before_intelligence_detection_query");
-      const [detectRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-        {
-          query: detectionQuery,
-          params: {
-            city: cityNorm,
-            postcode: postcodeNorm,
-            normalizedStreet: streetNormalizedDet,
-            house_number: houseNumberNorm,
+      console.log("[FR_INIT] about to run first query");
+      let detectRows: Array<Record<string, unknown>> = [];
+      try {
+        console.log("[FR_GOLD] before_intelligence_detection_query");
+        [detectRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          {
+            query: detectionQuery,
+            params: {
+              city: cityNorm,
+              postcode: postcodeNorm,
+              normalizedStreet: streetNormalizedDet,
+              house_number: houseNumberNorm,
+            },
           },
-        },
-        "intelligence_detection_query"
-      );
-      console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
+          "intelligence_detection_query"
+        );
+        console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
+      } catch (err) {
+        console.error("[FR_ERROR] query failed", err);
+        return new Response(JSON.stringify({ success: false, error: "Query failed" }), { status: 200 });
+      }
 
       // Debug: log exact query params + raw row result (do not change logic).
       console.log("[FR_GOLD] intelligence_detection_query_params", {
