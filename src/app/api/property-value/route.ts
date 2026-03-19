@@ -327,8 +327,8 @@ export async function GET(request: NextRequest) {
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         return NextResponse.json(payload, status ? { status } : undefined);
       };
-      const normalizeStreetForDetection = (s: string): string =>
-        s
+      const normalizeStreetForDetection = (s: string): string => {
+        const unified = s
           .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
           .replace(/[’‘]/g, "'")
           .replace(/\s+/g, " ")
@@ -336,8 +336,41 @@ export async function GET(request: NextRequest) {
           .toUpperCase()
           .normalize("NFD")
           .replace(/\p{M}/gu, "")
+          .replace(/[^A-Z0-9 ]+/g, " ")
           .replace(/\s+/g, " ")
           .trim();
+
+        // Remove common French voie-type prefixes (RUE, AVENUE, BD, ...).
+        // This makes UI variations like "Rue X" vs "X" match the same key.
+        const prefixes = [
+          "RUE",
+          "AVENUE",
+          "AV",
+          "BD",
+          "BOULEVARD",
+          "BOUL",
+          "CHEMIN",
+          "IMPASSE",
+          "ALLEE",
+          "ALLE",
+          "PLACE",
+          "SQUARE",
+          "QUAI",
+          "ROUTE",
+          "TRAVERSE",
+          "AUTOROUTE",
+          "ROND POINT",
+          "ROND-POINT",
+        ];
+
+        const prefixRegex = new RegExp(`^(?:${prefixes.join("|")})\\s+`, "i");
+        let cleaned = unified.replace(prefixRegex, "").trim();
+
+        const anyPrefixRegex = new RegExp(`\\b(?:${prefixes.join("|")})\\b\\.?`, "gi");
+        cleaned = cleaned.replace(anyPrefixRegex, "").replace(/\s+/g, " ").trim();
+
+        return cleaned;
+      };
 
       const streetNormalizedDet = normalizeStreetForDetection(streetNorm);
 
@@ -381,13 +414,31 @@ export async function GET(request: NextRequest) {
       };
 
       const detectionQuery = `
+        WITH candidates AS (
+          SELECT
+            *,
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(
+                REGEXP_REPLACE(NORMALIZE(UPPER(TRIM(street_norm)), 'NFD'), r'\\pM', ''),
+                r'[^A-Z0-9 ]+',
+                ' '
+              ),
+              r'\\s+',
+              ' '
+            ) AS street_norm_clean
+          FROM \`streetiq-bigquery.streetiq_gold.france_building_intelligence_v2\`
+        )
         SELECT
           *
-        FROM \`streetiq-bigquery.streetiq_gold.france_building_intelligence_v2\`
+        FROM candidates
         WHERE LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = TRIM(@postcode)
-          AND normalized_street = @street_normalized
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND (
+            street_norm_clean LIKE CONCAT('%', @normalizedStreet, '%')
+            OR @normalizedStreet LIKE CONCAT('%', street_norm_clean, '%')
+          )
+        ORDER BY unit_signal_count DESC, row_count DESC
         LIMIT 1
       `;
 
@@ -398,7 +449,7 @@ export async function GET(request: NextRequest) {
           params: {
             city: cityNorm,
             postcode: postcodeNorm,
-            street_normalized: streetNormalizedDet,
+            normalizedStreet: streetNormalizedDet,
             house_number: houseNumberNorm,
           },
         },
