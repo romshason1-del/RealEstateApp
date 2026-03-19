@@ -585,6 +585,7 @@ export function FranceApartmentSheet({
           (fr?.success === false ? "No reliable data found" : "Area fallback"));
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
+    const flowMarker = shouldForceLotFirstFlow ? "FR Flow: apartment-first" : isHouseLikeUI ? "FR Flow: house-direct" : "FR Flow: fallback";
     // Reuse the exact gold token used by the Search button and active Explore icon.
     const goldTextClass = "text-amber-400";
     const confidenceTone =
@@ -650,6 +651,7 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
+              <div className="mt-1 text-[10px] font-semibold text-zinc-400">{flowMarker}</div>
             </div>
 
             {/* Core summary – 4 primary sections */}

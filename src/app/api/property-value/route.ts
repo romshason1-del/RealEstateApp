@@ -347,7 +347,6 @@ export async function GET(request: NextRequest) {
         SELECT COUNT(DISTINCT TRIM(COALESCE(CAST(unit_number AS STRING), ''))) AS unit_count
         FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
-          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = @postcode
           AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
@@ -370,9 +369,8 @@ export async function GET(request: NextRequest) {
         );
         console.log("[FR_GOLD] after_unit_probe_query", { rows: (unitProbeRows as any[])?.length ?? 0 });
         const unitCount = Number((unitProbeRows as Array<{ unit_count?: number }>)[0]?.unit_count ?? 0);
-        const centralUrbanMultiUnitHeuristic = /^75\d{3}$/.test(postcodeNorm);
-        const apartmentLike = unitCount > 1 || centralUrbanMultiUnitHeuristic;
-        console.log("[FR_GOLD] apartment_vs_house_decision", { unitCount, centralUrbanMultiUnitHeuristic, apartmentLike });
+        const apartmentLike = unitCount > 1;
+        console.log("[FR_GOLD] apartment_vs_house_decision", { unitCount, apartmentLike, evidence: "unit_count_for_same_address" });
         if (apartmentLike) {
           console.log("[FR_GOLD] lot_prompt_triggered");
           return frReturn(
