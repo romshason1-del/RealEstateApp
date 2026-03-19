@@ -394,11 +394,7 @@ export async function GET(request: NextRequest) {
           SELECT
             *,
             REGEXP_REPLACE(
-              REGEXP_REPLACE(
-                REGEXP_REPLACE(NORMALIZE(UPPER(TRIM(street_norm)), 'NFD'), r'\\pM', ''),
-                r'[^A-Z0-9 ]+',
-                ' '
-              ),
+              REGEXP_REPLACE(UPPER(TRIM(street_norm)), r'[^A-Z0-9 ]+', ' '),
               r'\\s+',
               ' '
             ) AS street_norm_clean
