@@ -416,7 +416,7 @@ export async function GET(request: NextRequest) {
         FROM candidates
         WHERE LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = TRIM(@postcode)
-          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number AS STRING))
           AND (
             street_norm_clean LIKE CONCAT('%', @normalizedStreet, '%')
             OR @normalizedStreet LIKE CONCAT('%', street_norm_clean, '%')
