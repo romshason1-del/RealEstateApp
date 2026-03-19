@@ -257,12 +257,12 @@ export function FranceApartmentSheet({
   // Houses/single-unit properties should not require apartment/lot input.
   // As soon as we have enough data to infer "house", open the results directly from the address.
   React.useEffect(() => {
-    if (!isHouseDetected) return;
+    if (!isHouseLikeUI) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [isHouseDetected, hasSubmittedLotSearch, isLoading]);
+  }, [isHouseLikeUI, hasSubmittedLotSearch, isLoading]);
 
   const badge = React.useMemo(() => {
     if (phase === "exact_apartment_match_state") {
@@ -539,6 +539,7 @@ export function FranceApartmentSheet({
     const dateText = isLoadingNow ? "—" : formatDisplayDate(fr?.property?.transactionDate ?? null);
     const sourceText = isLoadingNow ? "—" : (sourceLabel ? sourceLabel : "—");
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
+    const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
     // Reuse the exact gold token used by the Search button and active Explore icon.
     const goldTextClass = "text-amber-400";
     const confidenceTone =
@@ -670,9 +671,11 @@ export function FranceApartmentSheet({
                   Last transaction
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
-                  {!isLoadingNow && !isNoResult && fr?.property?.transactionValue && fr.property.transactionValue > 0 && fr?.property?.transactionDate
+                  {isLoadingNow
+                    ? "—"
+                    : (!isNoResult && fr?.property?.transactionValue && fr.property.transactionValue > 0 && fr?.property?.transactionDate
                     ? `${formatCurrency(fr.property.transactionValue, currencySymbol)} • ${formatDisplayDate(fr?.property?.transactionDate ?? null)}`
-                    : "No recent transaction available"}
+                    : "No recent transaction available")}
                 </div>
               </div>
 
@@ -687,7 +690,7 @@ export function FranceApartmentSheet({
                 <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
                   Livability
                 </div>
-                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{legacy?.livabilityRating ?? "—"}</div>
+                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
               </div>
             </div>
 

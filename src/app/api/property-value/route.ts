@@ -295,6 +295,14 @@ export async function GET(request: NextRequest) {
   if (isFR) {
     // Minimal France gold-table path (exact -> area fallback -> no data).
     try {
+      const frStartTs = Date.now();
+      console.log("[FR_GOLD] request_start", {
+        city: city.trim(),
+        street: street.trim(),
+        houseNumber: houseNumber.trim(),
+        postcode: (postcode || zip || "").trim(),
+        aptNumber: (aptNumber ?? "").trim(),
+      });
       const bq = getGoldBigQueryClient();
       const country = "FR";
       const cityNorm = city.trim();
@@ -306,6 +314,17 @@ export async function GET(request: NextRequest) {
       const inputSurfaceRaw = searchParams.get("surface_m2") ?? searchParams.get("surfaceM2");
       const inputSurfaceM2 = inputSurfaceRaw ? Number(inputSurfaceRaw) : NaN;
       const validInputSurfaceM2 = Number.isFinite(inputSurfaceM2) && inputSurfaceM2 > 0 ? inputSurfaceM2 : null;
+      const queryWithTimeout = async <T,>(opts: Parameters<typeof bq.query>[0], label: string): Promise<T> => {
+        const timeoutMs = 10000;
+        return (await Promise.race([
+          bq.query(opts),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout:${label}`)), timeoutMs)),
+        ])) as T;
+      };
+      const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
+        console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
+        return NextResponse.json(payload, status ? { status } : undefined);
+      };
 
       const exactQuery = `
         SELECT
@@ -322,18 +341,71 @@ export async function GET(request: NextRequest) {
           AND (@unit_number = '' OR TRIM(COALESCE(CAST(unit_number AS STRING), '')) = TRIM(CAST(@unit_number AS STRING)))
         LIMIT 1
       `;
+      const unitProbeQuery = `
+        SELECT COUNT(DISTINCT TRIM(COALESCE(CAST(unit_number AS STRING), ''))) AS unit_count
+        FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+        WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+          AND TRIM(postcode) = @postcode
+          AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+      `;
 
-      const [exactRows] = await bq.query({
-        query: exactQuery,
-        params: {
-          country,
-          city: cityNorm,
-          postcode: postcodeNorm,
-          street: streetNorm,
-          house_number: houseNumberNorm,
-          unit_number: unitNumberNorm,
+      if (!unitNumberNorm) {
+        console.log("[FR_GOLD] before_unit_probe_query");
+        const [unitProbeRows] = await queryWithTimeout<[Array<{ unit_count?: number }>]>(
+          {
+            query: unitProbeQuery,
+            params: {
+              country,
+              city: cityNorm,
+              postcode: postcodeNorm,
+              street: streetNorm,
+              house_number: houseNumberNorm,
+            },
+          },
+          "unit_probe"
+        );
+        console.log("[FR_GOLD] after_unit_probe_query", { rows: (unitProbeRows as any[])?.length ?? 0 });
+        const unitCount = Number((unitProbeRows as Array<{ unit_count?: number }>)[0]?.unit_count ?? 0);
+        if (unitCount > 1) {
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              multiple_units: true,
+              prompt_for_apartment: true,
+              property_result: {
+                exact_value: null,
+                exact_value_message: "Enter apartment/lot for a more precise result.",
+                value_level: "building-level",
+                last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
+                street_average: null,
+                street_average_message: "Lot-first precision recommended",
+                livability_rating: "FAIR",
+              },
+            },
+            "prompt_lot_first"
+          );
+        }
+      }
+
+      console.log("[FR_GOLD] before_exact_query");
+      const [exactRows] = await queryWithTimeout<[Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }> ]>(
+        {
+          query: exactQuery,
+          params: {
+            country,
+            city: cityNorm,
+            postcode: postcodeNorm,
+            street: streetNorm,
+            house_number: houseNumberNorm,
+            unit_number: unitNumberNorm,
+          },
         },
-      });
+        "exact_query"
+      );
+      console.log("[FR_GOLD] after_exact_query", { rows: (exactRows as any[])?.length ?? 0 });
 
       const exact = (exactRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>)[0];
       if (exact) {
@@ -342,7 +414,7 @@ export async function GET(request: NextRequest) {
         const estimated = Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2) && pricePerM2 > 0
           ? Math.round(surface * pricePerM2)
           : null;
-        return NextResponse.json({
+        return frReturn({
           address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
           data_source: "properties_france",
           property_result: {
@@ -358,10 +430,10 @@ export async function GET(request: NextRequest) {
             street_average_message: "Exact property",
             livability_rating: "FAIR",
           },
-        });
+        }, "exact_match");
       }
 
-      const fallbackQuery = `
+      const fallbackStreetQuery = `
         SELECT
           avg_price_per_m2,
           newest_sale_date
@@ -374,24 +446,88 @@ export async function GET(request: NextRequest) {
         LIMIT 1
       `;
 
-      const [fallbackRows] = await bq.query({
-        query: fallbackQuery,
-        params: {
-          country,
-          city: cityNorm,
-          postcode: postcodeNorm,
-          street: streetNorm,
-          property_type: propertyType,
-        },
-      });
+      const fallbackPostcodeQuery = `
+        SELECT
+          avg_price_per_m2,
+          newest_sale_date
+        FROM \`streetiq-bigquery.streetiq_gold.property_area_fallback\`
+        WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+          AND TRIM(postcode) = @postcode
+          AND (@property_type IS NULL OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
+        LIMIT 1
+      `;
+      const fallbackCommuneQuery = `
+        SELECT
+          avg_price_per_m2,
+          newest_sale_date
+        FROM \`streetiq-bigquery.streetiq_gold.property_area_fallback\`
+        WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+          AND (@property_type IS NULL OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
+        LIMIT 1
+      `;
 
-      const fallback = (fallbackRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0];
+      console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
+      const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+        {
+          query: fallbackStreetQuery,
+          params: {
+            country,
+            city: cityNorm,
+            postcode: postcodeNorm,
+            street: streetNorm,
+            property_type: propertyType,
+          },
+        },
+        "fallback_street_query"
+      );
+      console.log("[FR_GOLD] after_fallback_query", { level: "same_street", rows: (fallbackStreetRows as any[])?.length ?? 0 });
+
+      let fallback = (fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0] ?? null;
+      let fallbackSource = "Similar properties on same street";
+      if (!fallback) {
+        console.log("[FR_GOLD] before_fallback_query", { level: "postcode_area" });
+        const [fallbackPostcodeRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+          {
+            query: fallbackPostcodeQuery,
+            params: {
+              country,
+              city: cityNorm,
+              postcode: postcodeNorm,
+              property_type: propertyType,
+            },
+          },
+          "fallback_postcode_query"
+        );
+        console.log("[FR_GOLD] after_fallback_query", { level: "postcode_area", rows: (fallbackPostcodeRows as any[])?.length ?? 0 });
+        fallback = (fallbackPostcodeRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0] ?? null;
+        fallbackSource = "Similar properties in postcode area";
+      }
+      if (!fallback) {
+        console.log("[FR_GOLD] before_fallback_query", { level: "commune" });
+        const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+          {
+            query: fallbackCommuneQuery,
+            params: {
+              country,
+              city: cityNorm,
+              property_type: propertyType,
+            },
+          },
+          "fallback_commune_query"
+        );
+        console.log("[FR_GOLD] after_fallback_query", { level: "commune", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
+        fallback = (fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0] ?? null;
+        fallbackSource = "Similar properties in commune";
+      }
+
       if (fallback) {
         const avgPrice = Number(fallback.avg_price_per_m2 ?? 0);
         const estimated = validInputSurfaceM2 != null && Number.isFinite(avgPrice) && avgPrice > 0
           ? Math.round(validInputSurfaceM2 * avgPrice)
           : null;
-        return NextResponse.json({
+        return frReturn({
           address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
           data_source: "properties_france",
           property_result: {
@@ -404,13 +540,13 @@ export async function GET(request: NextRequest) {
               message: "No recent transaction available",
             },
             street_average: null,
-            street_average_message: "Similar properties on same street",
+            street_average_message: fallbackSource,
             livability_rating: "FAIR",
           },
-        });
+        }, "fallback_match");
       }
 
-      return NextResponse.json({
+      return frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
         data_source: "properties_france",
         property_result: {
@@ -422,15 +558,15 @@ export async function GET(request: NextRequest) {
           street_average_message: "No reliable data found",
           livability_rating: "FAIR",
         },
-      });
+      }, "no_data");
     } catch (err) {
-      return NextResponse.json(
-        {
-          message: "Failed to fetch France property value",
-          error: err instanceof Error ? err.message : "Unknown error",
-        },
-        { status: 500 }
-      );
+      console.log("[FR_GOLD] catch_error", { message: err instanceof Error ? err.message : "Unknown error" });
+      const payload = {
+        message: "Failed to fetch France property value",
+        error: err instanceof Error ? err.message : "Unknown error",
+      };
+      console.log("[FR_GOLD] return", { tag: "error", status: 500 });
+      return NextResponse.json(payload, { status: 500 });
     }
 
     const frRequestStartedAt = Date.now();
