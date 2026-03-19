@@ -512,6 +512,139 @@ export async function GET(request: NextRequest) {
         }, "exact_match");
       }
 
+      // Street-level intelligence helper (detection only):
+      // If exact gold lookup returned no rows, detect apartment vs house from raw France transactions
+      // using the same city + same postcode + same street (ignoring house_number). LIMIT 50.
+      let frDetectToUse: "apartment" | "house" | "unclear" = detectClass;
+      let streetFallbackUsed = false;
+      if (!exact && !unitNumberNorm) {
+        streetFallbackUsed = true;
+        const rawStreetDetectQuery = `
+          WITH base AS (
+            SELECT
+              TRIM(CAST(\`1er lot\` AS STRING)) AS lot_1er,
+              TRIM(CAST(\`Identifiant local\` AS STRING)) AS local_id,
+              TRIM(CAST(\`Type local\` AS STRING)) AS type_local
+            FROM \`project-29fdf5d2-b1fb-4c43-b66.real_estate_data.france_transactions\`
+            WHERE TRIM(CAST(\`Code postal\` AS STRING)) = @postcode
+              AND LOWER(TRIM(CAST(\`Commune\` AS STRING))) = LOWER(TRIM(@city))
+              AND (
+                UPPER(TRIM(CONCAT(COALESCE(TRIM(CAST(\`Type de voie\` AS STRING)), ''), ' ', COALESCE(TRIM(CAST(\`Voie\` AS STRING)), '')))) = UPPER(TRIM(@street))
+                OR UPPER(TRIM(CAST(\`Voie\` AS STRING))) = UPPER(TRIM(@street))
+              )
+            LIMIT 50
+          )
+          SELECT
+            COUNT(DISTINCT NULLIF(lot_1er, '')) AS distinct_lot_count,
+            COUNT(DISTINCT NULLIF(local_id, '')) AS distinct_local_id_count,
+            SUM(CASE WHEN LOWER(type_local) LIKE 'appartement%' THEN 1 ELSE 0 END) AS appartement_rows,
+            SUM(CASE WHEN LOWER(type_local) LIKE 'maison%' THEN 1 ELSE 0 END) AS maison_rows,
+            ARRAY(
+              SELECT DISTINCT lot_1er
+              FROM base
+              WHERE lot_1er IS NOT NULL AND TRIM(lot_1er) != ''
+              LIMIT 20
+            ) AS candidate_lots
+          FROM base
+        `;
+
+        console.log("[FR_GOLD] before_raw_street_detection_query");
+        const [rawStreetDetectRows] = await queryWithTimeout<
+          Array<{
+            distinct_lot_count?: number;
+            distinct_local_id_count?: number;
+            appartement_rows?: number;
+            maison_rows?: number;
+            candidate_lots?: string[];
+          }>
+        >(
+          {
+            query: rawStreetDetectQuery,
+            params: {
+              postcode: postcodeNorm,
+              city: cityNorm,
+              street: streetNorm,
+            },
+          },
+          "raw_street_detection_query"
+        );
+        console.log("[FR_GOLD] after_raw_street_detection_query", { rows: (rawStreetDetectRows as any[])?.length ?? 0 });
+
+        const streetDetect = (rawStreetDetectRows as Array<{
+          distinct_lot_count?: number;
+          distinct_local_id_count?: number;
+          appartement_rows?: number;
+          maison_rows?: number;
+          candidate_lots?: string[];
+        }>)[0] ?? {};
+
+        const distinctLotCountStreet = Number(streetDetect.distinct_lot_count ?? 0);
+        const distinctLocalIdCountStreet = Number(streetDetect.distinct_local_id_count ?? 0);
+        const appartementRowsStreet = Number(streetDetect.appartement_rows ?? 0);
+        const maisonRowsStreet = Number(streetDetect.maison_rows ?? 0);
+        const candidateLotsStreet = Array.isArray(streetDetect.candidate_lots) ? streetDetect.candidate_lots.filter(Boolean) : [];
+
+        const apartmentEvidenceStreet =
+          distinctLotCountStreet > 1 || distinctLocalIdCountStreet > 1;
+
+        const mixedEvidenceStreet = appartementRowsStreet > 0 && maisonRowsStreet > 0;
+
+        const streetDetectClass: "apartment" | "house" | "unclear" = apartmentEvidenceStreet
+          ? "apartment"
+          : mixedEvidenceStreet
+            ? "unclear"
+            : maisonRowsStreet > 0
+              ? "house"
+              : appartementRowsStreet > 0
+                ? "house"
+                : "unclear";
+
+        frDetectToUse = streetDetectClass;
+        console.log("[FR_GOLD] apartment_vs_house_decision_street_fallback", {
+          streetDetectClass,
+          distinctLotCountStreet,
+          distinctLocalIdCountStreet,
+          appartementRowsStreet,
+          maisonRowsStreet,
+          candidateLotsStreetCount: candidateLotsStreet.length,
+        });
+
+        if (streetDetectClass === "apartment") {
+          console.log("[FR_GOLD] lot_prompt_triggered_from_street_fallback");
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              multiple_units: true,
+              prompt_for_apartment: true,
+              available_lots: candidateLotsStreet,
+              property_result: {
+                exact_value: null,
+                exact_value_message: "Enter apartment/lot for a more precise result.",
+                value_level: "building-level",
+                last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
+                street_average: null,
+                street_average_message: "Street-level analysis",
+                livability_rating: "FAIR",
+              },
+              fr_detect: "apartment",
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "building_level",
+                confidence: "medium",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: null,
+                buildingStats: { transactionCount: Math.max(candidateLotsStreet.length, distinctLotCountStreet), avgPricePerSqm: null, avgTransactionValue: null },
+                comparables: [],
+                matchExplanation: "Street-level analysis indicates apartment-like multi-unit evidence. Enter lot/apartment for precise valuation.",
+              }),
+            },
+            "street_prompt_lot_first"
+          );
+        }
+      }
+
       const fallbackStreetQuery = `
         SELECT
           avg_price_per_m2,
@@ -609,7 +742,7 @@ export async function GET(request: NextRequest) {
         return frReturn({
           address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
           data_source: "properties_france",
-          fr_detect: detectClass,
+          fr_detect: frDetectToUse,
           property_result: {
             exact_value: estimated,
             exact_value_message: estimated == null ? "No reliable data found" : null,
@@ -652,14 +785,15 @@ export async function GET(request: NextRequest) {
       return frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
         data_source: "properties_france",
-        fr_detect: detectClass,
+        fr_detect: frDetectToUse,
         property_result: {
           exact_value: null,
           exact_value_message: "No reliable data found",
           value_level: "no_match",
           last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
           street_average: null,
-          street_average_message: "No reliable data found",
+          street_average_message:
+            streetFallbackUsed && frDetectToUse !== "unclear" ? "Street-level analysis" : "No reliable data found",
           livability_rating: "FAIR",
         },
         fr: emptyFranceResponse({

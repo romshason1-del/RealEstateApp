@@ -172,10 +172,11 @@ export function FranceApartmentSheet({
   // UI-only inference:
   // If we have no lot inventory, no explicit "appartement" type, and the address doesn't look like
   // a dense multi-unit pattern (low result count / single transaction), treat it as a private house.
-  const isHouseInferredByHeuristic = hasNoLots && !hasAppartementType && lowMultiUnitHeuristic;
+  const frDetect = typeof parsed?.fr_detect === "string" ? (parsed?.fr_detect as string) : undefined;
+  const isHouseInferredByHeuristic = frDetect === "house" && hasNoLots && !hasAppartementType && lowMultiUnitHeuristic;
 
   const isHouseDetected =
-    (parsed?.multiple_units === false && availableLots.length === 0) ||
+    (frDetect === "house" && parsed?.multiple_units === false && availableLots.length === 0) ||
     (hasMaisonType && !hasAppartementType) ||
     isHouseInferredByHeuristic;
   const isApartmentLikely = parsed?.multiple_units === true || availableLots.length > 0 || hasAppartementType;
@@ -191,7 +192,8 @@ export function FranceApartmentSheet({
 
   // UI-only override: some "house-like" addresses can be classified as multi-unit due to sparse DVF type info.
   // If the payload looks like a small inventory (low counts), treat as house-like for copy only.
-  const isHouseLikeOverride = buildingSales.length <= 5 && availableLots.length < 20 && !hasMultiUnitEvidence;
+  const isHouseLikeOverride =
+    frDetect === "house" && buildingSales.length <= 5 && availableLots.length < 20 && !hasMultiUnitEvidence;
   const isApartmentLikeForLotFirst = hasMultiUnitEvidence;
   const isHouseLikeUI = isHouseDetected || (isHouseLikeOverride && !isApartmentLikeForLotFirst);
   const shouldForceLotFirstFlow = isApartmentLikeForLotFirst && !isHouseLikeUI;
