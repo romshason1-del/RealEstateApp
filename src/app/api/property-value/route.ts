@@ -433,6 +433,17 @@ export async function GET(request: NextRequest) {
       );
       console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
 
+      // Debug: log exact query params + raw row result (do not change logic).
+      console.log("[FR_GOLD] intelligence_detection_query_params", {
+        city: cityNorm,
+        postcode: postcodeNorm,
+        normalized_street: streetNormalizedDet,
+        house_number: houseNumberNorm,
+      });
+      console.log("[FR_GOLD] intelligence_detection_raw_row", {
+        row: detectRows?.[0] ?? null,
+      });
+
       const detectRow = (detectRows?.[0] ?? {}) as Record<string, unknown>;
       const isMultiUnitDetected = getBool(detectRow, ["is_multi_unit", "isMultiUnit", "multi_unit", "is_multiunit"]);
       const isHouseLikeDetected = getBool(detectRow, ["is_house_like", "isHouseLike", "house_like", "is_house_like_flag", "houseLike"]);
@@ -457,6 +468,13 @@ export async function GET(request: NextRequest) {
       // - If house-like evidence exists, run house-direct flow.
       // - Else if multi-unit / apartment-like evidence exists, ask for apartment/lot.
       const detectClass: "apartment" | "house" | "unclear" = detectedHouse ? "house" : detectedApartment ? "apartment" : "unclear";
+
+      console.log("[FR_GOLD] intelligence_detection_computed", {
+        isMultiUnitDetected,
+        isHouseLikeDetected,
+        detectedTypeStr,
+        detectClass,
+      });
 
       const candidateLots = getStringArray(detectRow, [
         "candidate_lots",
