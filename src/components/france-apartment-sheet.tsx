@@ -304,13 +304,14 @@ export function FranceApartmentSheet({
     // If backend indicates a multi-unit building (apartment/lot-first), never auto-open results.
     // This guarantees we don't show a final result/no-data card before the user submits a lot.
     if (parsed?.multiple_units === true || parsed?.prompt_for_apartment === true) return;
+    if (frDetect === "apartment") return;
     if (shouldShowApartmentInput) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;
     if (isDev) console.log("[FR_UI] direct_house_flow_chosen");
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, isDev]);
+  }, [shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, isDev, frDetect]);
 
   React.useEffect(() => {
     if (!isDev) return;
@@ -387,6 +388,11 @@ export function FranceApartmentSheet({
 
   const submit = React.useCallback((source: "enter" | "button") => {
     const lot = lotInput.trim();
+    // Hard block: apartment-first flow requires a lot before any final card can render.
+    if (frDetect === "apartment" && !lot) {
+      if (isDev) console.log("[FR_UI_DEBUG] lot_submit_blocked_no_value", { detectClass: frDetect, hasSubmittedLot: false, source });
+      return;
+    }
     setRequestedLot(lot || undefined);
     // Hard guarantee: never show any previous result while a new lot search is in flight.
     // We only render a final result once the latest request resolves and matches the requested lot.
@@ -394,7 +400,7 @@ export function FranceApartmentSheet({
     setTrigger((t) => t + 1);
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [lotInput]);
+  }, [lotInput, frDetect, isDev]);
 
   // Capture ONLY the final resolved result for the active lot request.
   // This prevents intermediate flashes from stale building-only payloads.
@@ -411,6 +417,28 @@ export function FranceApartmentSheet({
       fr,
       legacy: { averageBuildingValue, livabilityRating: legacyLivability },
     });
+    if (isDev) {
+      const finalSourceLabel = (fr as any)?.property_result?.street_average_message ?? null;
+      const producedStep =
+        finalSourceLabel === "Similar properties on same street"
+          ? "street_fallback"
+          : finalSourceLabel === "Commune fallback"
+            ? "commune_fallback"
+            : fr.resultType === "exact_apartment"
+              ? "exact"
+              : fr.resultType === "building_level"
+                ? "building_level"
+                : fr.resultType === "nearby_comparable"
+                  ? "street_fallback"
+                  : "no_data";
+      console.log("[FR_UI_DEBUG] final_value_produced", {
+        detectClass: frDetect,
+        hasSubmittedLot: hasSubmittedLotSearch,
+        producedStep,
+        sourceLabel: finalSourceLabel,
+        resultType: fr.resultType,
+      });
+    }
     if (isDev) {
       console.log("[FR_UI] final_response_type", {
         resultType: fr.resultType,
@@ -459,7 +487,28 @@ export function FranceApartmentSheet({
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
-    if (!hasSubmittedLotSearch) return null;
+    if (!hasSubmittedLotSearch) {
+      if (frDetect === "apartment" && isDev) {
+        console.log("[FR_UI_DEBUG] result_card_blocked", {
+          detectClass: frDetect,
+          hasSubmittedLot: hasSubmittedLotSearch,
+          blocked: true,
+        });
+      }
+      return null;
+    }
+    // Extra safety: apartment-first should never render without a submitted lot value.
+    if (frDetect === "apartment" && !(requestedLot ?? "").trim()) {
+      if (isDev) {
+        console.log("[FR_UI_DEBUG] result_card_blocked_missing_lot_value", {
+          detectClass: frDetect,
+          hasSubmittedLot: hasSubmittedLotSearch,
+          blocked: true,
+          requestedLot,
+        });
+      }
+      return null;
+    }
 
     const isLoadingNow = isLoading || resolvedForDisplay == null;
     const fr = resolvedForDisplay?.fr ?? null;

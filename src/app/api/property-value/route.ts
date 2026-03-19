@@ -779,7 +779,13 @@ export async function GET(request: NextRequest) {
       }
 
       if (fallback) {
-        const avgPrice = Number(fallback.avg_price_per_m2 ?? 0);
+        const rawAvgPriceAny = fallback.avg_price_per_m2 as any;
+        let avgPrice = Number(rawAvgPriceAny ?? 0);
+        // BigQuery numeric/decimal can sometimes come back as string; handle comma decimals safely.
+        if (!Number.isFinite(avgPrice) && typeof rawAvgPriceAny === "string") {
+          const cleaned = rawAvgPriceAny.replace(",", ".").replace(/[^\d.-]/g, "");
+          avgPrice = Number(cleaned);
+        }
         const usableAvg = Number.isFinite(avgPrice) && avgPrice > 0;
         // Frontend doesn't send surface_m2 for FR lot search; if it's missing, still show an estimated value
         // using avg_price_per_m2 directly (so we don't incorrectly return no-data).
