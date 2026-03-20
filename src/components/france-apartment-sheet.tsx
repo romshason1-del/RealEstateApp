@@ -54,7 +54,9 @@ export function FranceApartmentSheet({
   const { data, isLoading, refetch } = usePropertyValueInsights(addressForApi, "FR", {
     latitude: position.lat,
     longitude: position.lng,
-    aptNumber: requestedLot,
+    // Ensure the exact typed lot is used immediately after submit, even if state batching
+    // delays `requestedLot` by one render.
+    aptNumber: requestedLot ?? (hasSubmittedLotSearch ? lotInput : undefined),
     postcode,
     refetchTrigger: trigger,
     countryCode: "FR",
@@ -447,6 +449,17 @@ export function FranceApartmentSheet({
 
   const submit = React.useCallback((source: "enter" | "button") => {
     const lot = lotInput.trim();
+    if (isDev) {
+      console.log("[FR_DEBUG_UI] submit_pressed", {
+        lot_input_ui_value: lotInput,
+        lot_value_sent_in_request: lot || null,
+        effectiveDetectClass,
+        requestedLot_current: requestedLot,
+        hasSubmittedLotSearch,
+        isLoading,
+        source,
+      });
+    }
     // Hard block: apartment-first flow requires a lot before any final card can render.
     if (effectiveDetectClass === "apartment" && !lot) {
       if (isDev)
@@ -576,6 +589,14 @@ export function FranceApartmentSheet({
       legacy: { averageBuildingValue, livabilityRating: legacyLivability },
       fr_runtime_debug: runtimeDebug,
     });
+
+    if (isDev) {
+      console.log("[FR_DEBUG_UI] lot_value_received_in_api", {
+        lot_value_received_in_api: (runtimeDebug as any)?.submitted_lot ?? null,
+        normalized_submitted_lot: (runtimeDebug as any)?.submitted_lot ?? null,
+        requestedLot_from_fr: (fr as any)?.requestedLot ?? null,
+      });
+    }
 
     // TEMP: Investigation logging once per resolved request (France only).
     const showFranceDebug = true;

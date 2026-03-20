@@ -375,8 +375,13 @@ export async function GET(request: NextRequest) {
         chosen_surface_value: null,
         no_data_reason: null,
       };
-
-      frRuntimeDebug.submitted_lot = aptNumber?.trim() || null;
+      // Normalize the received lot/apartment number for stable matching + runtime debug.
+      // (normalizedRequestedLot is computed above from `aptNumber`.)
+      frRuntimeDebug.submitted_lot = normalizedRequestedLot ?? null;
+      console.log("[FR_DEBUG] lot_value_received_in_api", {
+        aptNumberRaw: aptNumber?.trim() || null,
+        normalized_submitted_lot: normalizedRequestedLot,
+      });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
