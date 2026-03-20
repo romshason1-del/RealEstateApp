@@ -347,10 +347,26 @@ export async function GET(request: NextRequest) {
       const validInputSurfaceM2 = Number.isFinite(inputSurfaceM2) && inputSurfaceM2 > 0 ? inputSurfaceM2 : null;
       const queryWithTimeout = async <T,>(opts: Parameters<typeof bq.query>[0], label: string): Promise<T> => {
         const timeoutMs = 10000;
-        return (await Promise.race([
-          bq.query(opts),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout:${label}`)), timeoutMs)),
-        ])) as T;
+        try {
+          return (await Promise.race([
+            bq.query(opts),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout:${label}`)), timeoutMs)),
+          ])) as T;
+        } catch (err) {
+          const sql = typeof (opts as any)?.query === "string" ? (opts as any).query : "";
+          const tableMatch = sql.match(/FROM\s+`([^`]+)`/i);
+          const tableName = tableMatch?.[1] ?? null;
+          const saleDateColumnUsed = sql.includes("latest_sale_date")
+            ? "latest_sale_date"
+            : sql.includes("newest_sale_date")
+              ? "newest_sale_date"
+              : null;
+          console.error("[FR_SQL] failing_query_name", label);
+          console.error("[FR_SQL] failing_table", tableName);
+          console.error("[FR_SQL] sale_date_column_used", saleDateColumnUsed);
+          console.error("[FR_SQL] failing_sql_text", sql);
+          throw err;
+        }
       };
 
       // Temporary runtime diagnostics for France (debug-only; do not treat as stable API contract).
@@ -404,7 +420,7 @@ export async function GET(request: NextRequest) {
       });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
-        console.log("[FR_LOT_API] response tag", tag);
+        console.log("[FR_LOT_API] response_tag", tag);
         console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         console.log("[FR_BAN] returning_response", {
@@ -843,7 +859,8 @@ export async function GET(request: NextRequest) {
       `;
       const aptRawTrimmed = (aptNumber ?? "").trim();
       const hasSubmittedLot = aptRawTrimmed.length > 0 || unitNumberNorm.length > 0;
-      const shouldPromptLotFirst = detectClass === "apartment" && !hasSubmittedLot;
+      const shouldPromptLotFirst = detectClass === "apartment" && !normalizedRequestedLot;
+      console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
       console.log("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);
       if (shouldPromptLotFirst) {
         if (detectClass === "apartment") {
@@ -1173,10 +1190,41 @@ export async function GET(request: NextRequest) {
       // Use the gold-table driven apartment-vs-house decision for the valuation ladder.
       const frDetectToUse: "apartment" | "house" | "unclear" = detectClass;
 
+      // Runtime schema inspection (no guessing): detect real sale-date column per fallback table.
+      const detectSaleDateColumn = async (tableName: string, queryName: string): Promise<"latest_sale_date" | "newest_sale_date"> => {
+        const schemaQuery = `
+          SELECT column_name
+          FROM \`streetiq-bigquery.streetiq_gold.INFORMATION_SCHEMA.COLUMNS\`
+          WHERE table_name = @table_name
+            AND column_name IN ('latest_sale_date', 'newest_sale_date')
+        `;
+        const schemaParams = { table_name: tableName };
+        console.log("[FR_PARAMS]", { query: `${queryName}_schema_probe`, ...schemaParams });
+        const [rows] = await queryWithTimeout<[Array<{ column_name?: string }> ]>(
+          {
+            query: schemaQuery,
+            params: schemaParams,
+          },
+          `${queryName}_schema_probe`
+        );
+        const cols = (rows ?? []).map((r) => String(r?.column_name ?? "").trim()).filter(Boolean);
+        const selected: "latest_sale_date" | "newest_sale_date" = cols.includes("latest_sale_date")
+          ? "latest_sale_date"
+          : "newest_sale_date";
+        const fullTable = `streetiq-bigquery.streetiq_gold.${tableName}`;
+        console.log("[FR_SQL] failing_query_name", queryName);
+        console.log("[FR_SQL] failing_table", fullTable);
+        console.log("[FR_SQL] sale_date_column_used", selected);
+        return selected;
+      };
+
+      const streetSaleDateColumn = await detectSaleDateColumn("property_area_fallback", "fallback_street_query");
+      const communeSaleDateColumn = await detectSaleDateColumn("france_commune_property_stats", "fallback_commune_stats_query");
+
       const fallbackStreetQuery = `
         SELECT
           avg_price_per_m2,
-          newest_sale_date
+          ${streetSaleDateColumn}
         FROM \`streetiq-bigquery.streetiq_gold.property_area_fallback\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -1189,7 +1237,7 @@ export async function GET(request: NextRequest) {
       const fallbackCommuneStatsQuery = `
         SELECT
           avg_price_per_m2,
-          newest_sale_date
+          ${communeSaleDateColumn}
         FROM \`streetiq-bigquery.streetiq_gold.france_commune_property_stats\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -1208,7 +1256,7 @@ export async function GET(request: NextRequest) {
         property_type: propertyType || "",
       };
       console.log("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
-      const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+      const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null }> ]>(
         {
           query: fallbackStreetQuery,
           params: streetParams,
@@ -1219,7 +1267,7 @@ export async function GET(request: NextRequest) {
       const fallbackSourceStreet = "Similar properties on same street";
       const fallbackSourceCommune = "Commune fallback";
 
-      const streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>;
+      const streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null }>;
       const streetFallbackRowsCount = streetRows.length;
       const streetUsableAvgRows = streetRows.filter((r) => {
         const v = parseMaybeDecimal(r.avg_price_per_m2);
@@ -1252,7 +1300,9 @@ export async function GET(request: NextRequest) {
         return {
           avgPricePerM2: medianAvgPricePerM2,
           estimated,
-          newestSaleDate: streetUsableAvgRows[0]?.newest_sale_date ?? null,
+          newestSaleDate: streetSaleDateColumn === "latest_sale_date"
+            ? (streetUsableAvgRows[0]?.latest_sale_date ?? null)
+            : (streetUsableAvgRows[0]?.newest_sale_date ?? null),
         };
       };
 
@@ -1327,7 +1377,7 @@ export async function GET(request: NextRequest) {
         postcode: postcodeNorm || "",
       };
       console.log("[FR_PARAMS]", { query: "fallback_commune_stats_query", ...communeParams });
-      const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+      const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null }> ]>(
         {
           query: fallbackCommuneStatsQuery,
           params: communeParams,
@@ -1336,7 +1386,7 @@ export async function GET(request: NextRequest) {
       );
       console.log("[FR_GOLD] after_fallback_query", { level: "commune_stats", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
 
-      const communeRows = fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>;
+      const communeRows = fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null }>;
       const communeFallbackRowsCount = communeRows.length;
       const communeUsableAvgRows = communeRows.filter((r) => {
         const v = parseMaybeDecimal(r.avg_price_per_m2);
