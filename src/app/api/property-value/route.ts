@@ -343,6 +343,11 @@ export async function GET(request: NextRequest) {
 
       // Temporary runtime diagnostics for France (debug-only; do not treat as stable API contract).
       const frRuntimeDebug: Record<string, unknown> = {
+        // BAN integration diagnostics (France-only)
+        ban_match_found: null,
+        ban_match_quality: null,
+        ban_lat: null,
+        ban_lon: null,
         ban_city: null,
         ban_postcode: null,
         ban_street: null,
@@ -393,21 +398,63 @@ export async function GET(request: NextRequest) {
 
       let streetNormalizedDet = normalizeStreetForDetection(streetNorm);
 
-      // BAN normalization first (FR only) to make downstream matching deterministic.
+      // BAN resolution first (FR only) so downstream detection + valuation use deterministic inputs.
       // If BAN lookup fails or returns no row, we fall back to the original parsed values.
       let ban_city: string | null = null;
       let ban_postcode: string | null = null;
       let ban_street: string | null = null;
       let ban_house_number: string | null = null;
+      let ban_lat: number | null = null;
+      let ban_lon: number | null = null;
+
+      const normalizeForBanText = (s: string): string => {
+        const unified = s
+          .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
+          .replace(/[’‘]/g, "'")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toUpperCase()
+          .normalize("NFD")
+          .replace(/\p{M}/gu, "")
+          .replace(/[^A-Z0-9 ]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        return unified;
+      };
+
+      const normalizeHouseNumberForBan = (hn: string): string => {
+        // BAN house numbers can contain letter suffixes; keep digits + A-Z only.
+        return hn
+          .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
+          .replace(/[’‘]/g, "'")
+          .trim()
+          .toUpperCase()
+          .replace(/\s+/g, "")
+          .replace(/[^0-9A-Z]/g, "");
+      };
+
+      const banInputPostcode = postcodeNorm.replace(/\s+/g, "").trim();
+      const banInputCity = normalizeForBanText(cityNorm);
+      const banInputStreetNorm = streetNormalizedDet; // already unaccented, uppercased, prefix-stripped
+      const banInputHouseNumber = normalizeHouseNumberForBan(houseNumberNorm);
+
       try {
+        // Match against the normalized BAN dataset.
+        // Ranking preference:
+        // exact postcode > exact city_norm > exact street_norm > exact house_number_norm
+        // House-number is NOT required for selection, so if house-number match fails we still return a same-street fallback.
         const banLookupQuery = `
           SELECT
             *
-          FROM \`streetiq-bigquery.streetiq_gold.france_ban_lookup\`
-          WHERE TRIM(postcode) = TRIM(@postcode)
-            AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-            AND normalized_street = @street_normalized
-            AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          FROM \`streetiq-bigquery.streetiq_gold.france_ban_normalized\`
+          WHERE street_norm = @street_norm
+            AND (@postcode = "" OR TRIM(postcode) = TRIM(@postcode))
+            AND (@city_norm = "" OR LOWER(TRIM(city_norm)) = LOWER(TRIM(@city_norm)))
+          ORDER BY
+            (TRIM(postcode) = TRIM(@postcode)) DESC,
+            (LOWER(TRIM(city_norm)) = LOWER(TRIM(@city_norm))) DESC,
+            (street_norm = @street_norm) DESC,
+            (TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number_norm AS STRING))) DESC
           LIMIT 1
         `;
 
@@ -415,13 +462,13 @@ export async function GET(request: NextRequest) {
           {
             query: banLookupQuery,
             params: {
-              postcode: postcodeNorm,
-              city: cityNorm,
-              street_normalized: streetNormalizedDet,
-              house_number: houseNumberNorm,
+              postcode: banInputPostcode,
+              city_norm: banInputCity,
+              street_norm: banInputStreetNorm,
+              house_number_norm: banInputHouseNumber,
             },
           },
-          "ban_lookup_query"
+          "ban_normalized_lookup_query"
         );
 
         const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
@@ -442,11 +489,26 @@ export async function GET(request: NextRequest) {
             return null;
           };
 
-          const banCity = pickString(["city", "normalized_city", "city_norm"]);
+          const banCity = pickString(["city_norm", "normalized_city", "city"]);
           const banPostcode = pickString(["postcode", "postal_code", "postcode_norm", "code_postal"]);
-          const banStreetNorm = pickString(["normalized_street", "street_norm", "street_norm_clean"]);
-          const banHouse = pickString(["house_number_norm", "house_number", "houseNumber"]);
+          const banStreetNorm = pickString(["street_norm", "normalized_street", "street_norm_clean"]);
+          const banHouse = pickString(["house_number_norm", "house_number"]);
+          ban_lat = pickNumber(["lat", "latitude", "ban_lat"]);
+          ban_lon = pickNumber(["lon", "lng", "longitude", "ban_lon"]);
 
+          const postcodeExact = banPostcode ? banPostcode.trim() === banInputPostcode.trim() : false;
+          const cityExact = banCity ? banCity.trim().toUpperCase() === banInputCity.trim().toUpperCase() : false;
+          const streetExact = banStreetNorm ? banStreetNorm.trim() === banInputStreetNorm.trim() : false;
+          const houseExact = banHouse ? banHouse.trim().toUpperCase() === banInputHouseNumber.trim().toUpperCase() : false;
+
+          let banQuality: string;
+          if (postcodeExact && cityExact && streetExact && houseExact) banQuality = "exact_postcode_city_street_house";
+          else if (postcodeExact && cityExact && streetExact && !houseExact) banQuality = "exact_postcode_city_street_same_street_no_house";
+          else if (postcodeExact && streetExact && !cityExact) banQuality = "exact_postcode_street_same_street_no_house";
+          else if (streetExact && !postcodeExact) banQuality = "street_same_no_exact_postcode_or_city";
+          else banQuality = "ban_match_found";
+
+          // Source of truth: overwrite inputs for the rest of the FR pipeline.
           if (banCity) {
             cityNorm = banCity;
             ban_city = banCity;
@@ -467,22 +529,43 @@ export async function GET(request: NextRequest) {
           // Recompute normalized street used by intelligence_v2 detection.
           streetNormalizedDet = normalizeStreetForDetection(streetNorm);
 
-          // lat/lon returned by BAN are not currently used by this France flow,
-          // but we still compute them as a sanity check for future use.
-          pickNumber(["lat", "latitude"]);
-          pickNumber(["lon", "lng", "longitude"]);
+          frRuntimeDebug.ban_match_found = true;
+          frRuntimeDebug.ban_match_quality = banQuality;
+          frRuntimeDebug.ban_lat = ban_lat;
+          frRuntimeDebug.ban_lon = ban_lon;
+
+          frRuntimeDebug.ban_city = ban_city;
+          frRuntimeDebug.ban_postcode = ban_postcode;
+          frRuntimeDebug.ban_street = ban_street;
+          frRuntimeDebug.ban_house_number = ban_house_number;
+        } else {
+          frRuntimeDebug.ban_match_found = false;
+          frRuntimeDebug.ban_match_quality = "no_ban_row";
         }
       } catch (err) {
-        console.error("[FR_ERROR] BAN lookup failed", err);
+        console.error("[FR_ERROR] BAN normalized lookup failed", err);
+        frRuntimeDebug.ban_match_found = false;
+        frRuntimeDebug.ban_match_quality = "ban_normalized_lookup_error";
       }
 
-      frRuntimeDebug.ban_city = ban_city;
-      frRuntimeDebug.ban_postcode = ban_postcode;
-      frRuntimeDebug.ban_street = ban_street;
-      frRuntimeDebug.ban_house_number = ban_house_number;
+      // Ensure debug values are always populated even when BAN lookup fails.
+      if (frRuntimeDebug.ban_city == null) frRuntimeDebug.ban_city = ban_city;
+      if (frRuntimeDebug.ban_postcode == null) frRuntimeDebug.ban_postcode = ban_postcode;
+      if (frRuntimeDebug.ban_street == null) frRuntimeDebug.ban_street = ban_street;
+      if (frRuntimeDebug.ban_house_number == null) frRuntimeDebug.ban_house_number = ban_house_number;
+      if (frRuntimeDebug.ban_lat == null) frRuntimeDebug.ban_lat = ban_lat;
+      if (frRuntimeDebug.ban_lon == null) frRuntimeDebug.ban_lon = ban_lon;
 
       // Diagnostic: final BAN-normalized inputs used by detection + valuation.
       console.log("[FR_DEBUG] normalized_ban_output", {
+        ban_match_found: frRuntimeDebug.ban_match_found,
+        ban_match_quality: frRuntimeDebug.ban_match_quality,
+        ban_city: frRuntimeDebug.ban_city,
+        ban_postcode: frRuntimeDebug.ban_postcode,
+        ban_street: frRuntimeDebug.ban_street,
+        ban_house_number: frRuntimeDebug.ban_house_number,
+        ban_lat: frRuntimeDebug.ban_lat,
+        ban_lon: frRuntimeDebug.ban_lon,
         cityNorm,
         postcodeNorm,
         streetNorm,
