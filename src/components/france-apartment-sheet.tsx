@@ -963,9 +963,13 @@ export function FranceApartmentSheet({
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {isLoadingNow
                     ? "—"
-                    : (!isNoResult && fr?.property?.transactionValue && fr.property.transactionValue > 0 && fr?.property?.transactionDate
-                    ? `${formatCurrency(fr.property.transactionValue, currencySymbol)} • ${formatDisplayDate(fr?.property?.transactionDate ?? null)}`
-                    : "No recent transaction available")}
+                    : fr?.resultType === "exact_apartment" &&
+                        !isNoResult &&
+                        fr?.property?.transactionValue &&
+                        fr.property.transactionValue > 0 &&
+                        fr?.property?.transactionDate
+                      ? `${formatCurrency(fr.property.transactionValue, currencySymbol)} • ${formatDisplayDate(fr?.property?.transactionDate ?? null)}`
+                      : "No exact recent transaction available"}
                 </div>
               </div>
 

@@ -322,7 +322,8 @@ export async function GET(request: NextRequest) {
       let streetNorm = street.trim();
       let postcodeNorm = (postcode || zip || "").trim();
       let houseNumberNorm = houseNumber.trim();
-      const unitNumberNorm = (aptNumber ?? "").trim();
+      // Use the normalized lot token for exact matching (avoid leading-zero mismatches).
+      const unitNumberNorm = normalizedRequestedLot ?? "";
       const propertyType = (searchParams.get("property_type") ?? searchParams.get("propertyType") ?? "").trim() || null;
       const inputSurfaceRaw = searchParams.get("surface_m2") ?? searchParams.get("surfaceM2");
       const inputSurfaceM2 = inputSurfaceRaw ? Number(inputSurfaceRaw) : NaN;
@@ -574,6 +575,25 @@ export async function GET(request: NextRequest) {
         candidateLotsCount: candidateLots.length,
       });
 
+      // Canonical lot tokens used for exact apartment matching fallback.
+      // Keeps strict "normalized token" semantics (trim + strip leading zeros).
+      const canonicalCandidateLots = candidateLots
+        .map((l) => normalizeLot(l))
+        .map((l) => (l ? l.replace(/^0+/, "") : ""))
+        .filter((l) => Boolean(l));
+
+      const medianNumber = (values: number[]): number | null => {
+        const cleaned = values.filter((v) => Number.isFinite(v));
+        if (cleaned.length === 0) return null;
+        const sorted = [...cleaned].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        if (sorted.length % 2 === 1) return sorted[mid] ?? null;
+        const a = sorted[mid - 1];
+        const b = sorted[mid];
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        return (a + b) / 2;
+      };
+
       const exactQuery = `
         SELECT
           surface_m2,
@@ -584,9 +604,14 @@ export async function GET(request: NextRequest) {
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = @postcode
-          AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+          AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
-          AND (@unit_number = '' OR TRIM(COALESCE(CAST(unit_number AS STRING), '')) = TRIM(CAST(@unit_number AS STRING)))
+          AND (
+            @unit_number = ''
+            OR REGEXP_REPLACE(TRIM(COALESCE(CAST(unit_number AS STRING), '')), r'^0+', '') =
+              REGEXP_REPLACE(TRIM(CAST(@unit_number AS STRING)), r'^0+', '')
+            OR REGEXP_REPLACE(TRIM(COALESCE(CAST(unit_number AS STRING), '')), r'^0+', '') IN UNNEST(@canonical_candidate_lots)
+          )
         LIMIT 1
       `;
       if (!unitNumberNorm) {
@@ -639,13 +664,26 @@ export async function GET(request: NextRequest) {
             city: cityNorm,
             postcode: postcodeNorm,
             street: streetNorm,
+            street_normalized: streetNormalizedDet,
             house_number: houseNumberNorm,
             unit_number: unitNumberNorm,
+            canonical_candidate_lots: canonicalCandidateLots,
           },
         },
         "exact_query"
       );
       console.log("[FR_GOLD] after_exact_query", { rows: (exactRows as any[])?.length ?? 0 });
+
+      const exactApartmentRowsCount = (exactRows as any[])?.length ?? 0;
+      const exactUsableRowsCount = (exactRows as Array<{ surface_m2?: number; price_per_m2?: number }>).filter(
+        (r) => Number.isFinite(Number(r.surface_m2 ?? 0)) && Number(r.surface_m2 ?? 0) > 0 && Number.isFinite(Number(r.price_per_m2 ?? 0)) && Number(r.price_per_m2 ?? 0) > 0
+      ).length;
+      console.log("[FR_DEBUG] exact_apartment_matching", {
+        submittedLot: aptNumber?.trim() || null,
+        normalizedLot: normalizedRequestedLot,
+        exactApartmentRowsCount,
+        exactUsableRowsCount,
+      });
 
       const exact = (exactRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>)[0];
       if (exact) {
@@ -656,6 +694,11 @@ export async function GET(request: NextRequest) {
           : null;
         const hasEstimated = estimated != null;
         if (hasEstimated) {
+          const winningSourceLabel = detectClass === "apartment" ? "Exact apartment" : "Exact property";
+          console.log("[FR_DEBUG] winning_valuation_step", {
+            winningValuationStep: "exact",
+            winningSourceLabel,
+          });
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -701,6 +744,10 @@ export async function GET(request: NextRequest) {
 
       // Same building fallback (when unit/lot was provided but exact unit match is missing):
       // Uses property_latest_facts with the same address key but without unit_number filtering.
+      const MIN_SAME_BUILDING_USABLE_ROWS = 2;
+      let medianSurfaceM2ForFallback: number | null = null;
+      let sameBuildingRowsCount = 0;
+      let sameBuildingUsableRowsCount = 0;
       if (houseNumberNorm) {
         const buildingQuery = `
           SELECT
@@ -712,9 +759,9 @@ export async function GET(request: NextRequest) {
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
             AND TRIM(postcode) = @postcode
-            AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+            AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
             AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
-          LIMIT 1
+          LIMIT 50
         `;
         console.log("[FR_GOLD] before_building_query");
         const [buildingRows] = await queryWithTimeout<
@@ -727,21 +774,46 @@ export async function GET(request: NextRequest) {
               city: cityNorm,
               postcode: postcodeNorm,
               street: streetNorm,
+              street_normalized: streetNormalizedDet,
               house_number: houseNumberNorm,
             },
           },
           "building_same_address_query"
         );
         console.log("[FR_GOLD] after_building_query", { rows: (buildingRows as any[])?.length ?? 0 });
-        const buildingRow = (buildingRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>)[0];
-        if (buildingRow) {
-          const surface = Number(buildingRow.surface_m2 ?? 0);
-          const pricePerM2 = Number(buildingRow.price_per_m2 ?? 0);
-          const estimated = Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2) && pricePerM2 > 0
-            ? Math.round(surface * pricePerM2)
-            : null;
-          const hasEstimated = estimated != null;
-          if (hasEstimated) {
+
+        const sameBuildingRows = buildingRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>;
+        sameBuildingRowsCount = sameBuildingRows.length;
+        const usablePriceRows = sameBuildingRows.filter((r) => {
+          const surf = Number(r.surface_m2 ?? 0);
+          const ppm2 = Number(r.price_per_m2 ?? 0);
+          return Number.isFinite(surf) && surf > 0 && Number.isFinite(ppm2) && ppm2 > 0;
+        });
+        sameBuildingUsableRowsCount = usablePriceRows.length;
+
+        const surfacesForMedian = sameBuildingRows
+          .map((r) => Number(r.surface_m2 ?? 0))
+          .filter((v) => Number.isFinite(v) && v > 0);
+        medianSurfaceM2ForFallback = surfacesForMedian.length > 0 ? medianNumber(surfacesForMedian) : null;
+
+        console.log("[FR_DEBUG] same_building_matching", {
+          submittedLot: aptNumber?.trim() || null,
+          normalizedLot: normalizedRequestedLot,
+          sameBuildingRowsCount,
+          sameBuildingUsableRowsCount,
+          sameBuildingMinUsableThreshold: MIN_SAME_BUILDING_USABLE_ROWS,
+          medianSurfaceM2ForFallback,
+        });
+
+        if (sameBuildingUsableRowsCount >= MIN_SAME_BUILDING_USABLE_ROWS && medianSurfaceM2ForFallback != null) {
+          const pricePerM2Values = usablePriceRows.map((r) => Number(r.price_per_m2 ?? 0)).filter((v) => Number.isFinite(v) && v > 0);
+          const medianPricePerM2 = medianNumber(pricePerM2Values);
+          if (medianPricePerM2 != null && medianPricePerM2 > 0) {
+            const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2);
+            console.log("[FR_DEBUG] winning_valuation_step", {
+              winningValuationStep: "building_level",
+              winningSourceLabel: "Building-level estimate",
+            });
             return frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -752,9 +824,9 @@ export async function GET(request: NextRequest) {
                   exact_value_message: null,
                   value_level: "building-level",
                   last_transaction: {
-                    amount: Number(buildingRow.last_sale_price ?? 0) || 0,
-                    date: buildingRow.last_sale_date ?? null,
-                    message: Number(buildingRow.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+                    amount: 0,
+                    date: null,
+                    message: "No exact recent transaction available",
                   },
                   street_average: null,
                   street_average_message: "Building-level estimate",
@@ -767,16 +839,16 @@ export async function GET(request: NextRequest) {
                   requestedLot: requestedLotNorm,
                   normalizedLot: normalizedRequestedLot,
                   property: null,
-                  buildingStats: { transactionCount: 1, avgPricePerSqm: null, avgTransactionValue: null },
+                  buildingStats: { transactionCount: sameBuildingUsableRowsCount, avgPricePerSqm: medianPricePerM2, avgTransactionValue: null },
                   comparables: [],
-                  matchExplanation: "Building-level estimate (no exact unit match found).",
+                  matchExplanation: "Building-level estimate (median/average from same building rows).",
                 }),
               },
               "building_same_address_match"
             );
           }
-          // If the row exists but we couldn't compute an estimated value, continue the ladder.
         }
+        // If building-level estimate can't be computed, continue the ladder to street/commune fallback.
       }
 
       // Use the gold-table driven apartment-vs-house decision for the valuation ladder.
@@ -790,9 +862,9 @@ export async function GET(request: NextRequest) {
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = @postcode
-          AND LOWER(TRIM(street)) = LOWER(TRIM(@street))
+          AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
           AND (@property_type IS NULL OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
-        LIMIT 1
+        LIMIT 20
       `;
 
       const fallbackCommuneStatsQuery = `
@@ -803,7 +875,7 @@ export async function GET(request: NextRequest) {
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = @postcode
-        LIMIT 1
+        LIMIT 20
       `;
 
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
@@ -815,98 +887,185 @@ export async function GET(request: NextRequest) {
             city: cityNorm,
             postcode: postcodeNorm,
             street: streetNorm,
+            street_normalized: streetNormalizedDet,
             property_type: propertyType,
           },
         },
         "fallback_street_query"
       );
       console.log("[FR_GOLD] after_fallback_query", { level: "same_street", rows: (fallbackStreetRows as any[])?.length ?? 0 });
-
-      let fallback = (fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0] ?? null;
       const fallbackSourceStreet = "Similar properties on same street";
       const fallbackSourceCommune = "Commune fallback";
-      let fallbackSource = fallbackSourceStreet;
 
-      if (!fallback) {
-        console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
-        const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
-          {
-            query: fallbackCommuneStatsQuery,
-            params: {
-              country,
-              city: cityNorm,
-              postcode: postcodeNorm,
-            },
-          },
-          "fallback_commune_stats_query"
-        );
-        console.log("[FR_GOLD] after_fallback_query", { level: "commune_stats", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
-        fallback = (fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>)[0] ?? null;
-        fallbackSource = fallback ? fallbackSourceCommune : fallbackSource;
-      }
+      const streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>;
+      const streetFallbackRowsCount = streetRows.length;
+      const streetUsableAvgRows = streetRows.filter((r) => {
+        const v = Number(r.avg_price_per_m2 ?? 0);
+        return Number.isFinite(v) && v > 0;
+      });
+      const streetUsableAvgRowsCount = streetUsableAvgRows.length;
 
-      if (fallback) {
-        const rawAvgPriceAny = fallback.avg_price_per_m2 as any;
-        let avgPrice = Number(rawAvgPriceAny ?? 0);
-        // BigQuery numeric/decimal can sometimes come back as string; handle comma decimals safely.
-        if (!Number.isFinite(avgPrice) && typeof rawAvgPriceAny === "string") {
-          const cleaned = rawAvgPriceAny.replace(",", ".").replace(/[^\d.-]/g, "");
-          avgPrice = Number(cleaned);
-        }
-        const usableAvg = Number.isFinite(avgPrice) && avgPrice > 0;
-        // Frontend doesn't send surface_m2 for FR lot search; if it's missing, still show an estimated value
-        // using avg_price_per_m2 directly (so we don't incorrectly return no-data).
-        const estimated = usableAvg
-          ? validInputSurfaceM2 != null
-            ? Math.round(validInputSurfaceM2 * avgPrice)
-            : Math.round(avgPrice)
-          : null;
-        const hasEstimated = estimated != null;
-        const resolvedSourceLabel = hasEstimated ? fallbackSource : "No reliable data found";
-        const frResultType = resolvedSourceLabel === fallbackSourceStreet ? "nearby_comparable" : "building_level";
-        const frConfidence = resolvedSourceLabel === fallbackSourceStreet ? "low_medium" : "low";
+      const surfaceForEstimation = validInputSurfaceM2 ?? medianSurfaceM2ForFallback;
+
+      console.log("[FR_DEBUG] street_fallback_matching", {
+        submittedLot: aptNumber?.trim() || null,
+        normalizedLot: normalizedRequestedLot,
+        streetFallbackRowsCount,
+        streetUsableAvgRowsCount,
+        surfaceForEstimation,
+      });
+
+      const tryStreetFallback = () => {
+        if (surfaceForEstimation == null) return null;
+        if (streetUsableAvgRowsCount <= 0) return null;
+        const avgPriceValues = streetUsableAvgRows.map((r) => Number(r.avg_price_per_m2 ?? 0)).filter((v) => Number.isFinite(v) && v > 0);
+        const medianAvgPricePerM2 = medianNumber(avgPriceValues);
+        if (medianAvgPricePerM2 == null || !Number.isFinite(medianAvgPricePerM2) || medianAvgPricePerM2 <= 0) return null;
+        return {
+          avgPricePerM2: medianAvgPricePerM2,
+          estimated: Math.round(surfaceForEstimation * medianAvgPricePerM2),
+          newestSaleDate: streetUsableAvgRows[0]?.newest_sale_date ?? null,
+        };
+      };
+
+      const streetEstimate = tryStreetFallback();
+      if (streetEstimate) {
+        console.log("[FR_DEBUG] winning_valuation_step", {
+          winningValuationStep: "street_fallback",
+          winningSourceLabel: fallbackSourceStreet,
+        });
         return frReturn({
           address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
           data_source: "properties_france",
           fr_detect: frDetectToUse,
           property_result: {
-            exact_value: estimated,
-            exact_value_message: estimated == null ? "No reliable data found" : null,
-            value_level: resolvedSourceLabel === "No reliable data found" ? "no_match" : "street-level",
+            exact_value: streetEstimate.estimated,
+            exact_value_message: null,
+            value_level: "street-level",
             last_transaction: {
               amount: 0,
-              date: fallback.newest_sale_date ?? null,
-              message: "No recent transaction available",
+              date: null,
+              message: "No exact recent transaction available",
             },
             street_average: null,
-            street_average_message: resolvedSourceLabel,
+            street_average_message: fallbackSourceStreet,
             livability_rating: "FAIR",
           },
           fr: emptyFranceResponse({
-            success: hasEstimated,
-            resultType: hasEstimated ? frResultType : "no_reliable_data",
-            confidence: hasEstimated ? frConfidence : "low",
+            success: true,
+            resultType: "nearby_comparable",
+            confidence: "low_medium",
             requestedLot: requestedLotNorm,
             normalizedLot: normalizedRequestedLot,
-            property: estimated != null
-              ? {
-                  transactionDate: fallback.newest_sale_date ?? null,
-                  transactionValue: estimated,
-                  pricePerSqm: Number.isFinite(avgPrice) && avgPrice > 0 ? avgPrice : null,
-                  surfaceArea: validInputSurfaceM2,
-                  rooms: null,
-                  propertyType: propertyType,
-                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
-                  postalCode: postcodeNorm || null,
-                  commune: cityNorm || null,
-                }
-              : null,
+            property: {
+              // Estimated market value must not be treated as an exact recent transaction.
+              transactionDate: null,
+              transactionValue: streetEstimate.estimated,
+              pricePerSqm: streetEstimate.avgPricePerM2,
+              surfaceArea: surfaceForEstimation,
+              rooms: null,
+              propertyType: propertyType,
+              building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+              postalCode: postcodeNorm || null,
+              commune: cityNorm || null,
+            },
             buildingStats: null,
             comparables: [],
-            matchExplanation: hasEstimated ? fallbackSource : "No reliable data found",
+            matchExplanation: fallbackSourceStreet,
           }),
         }, "fallback_match");
       }
+
+      // Street fallback wasn't usable; try commune fallback next.
+      console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
+      const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+        {
+          query: fallbackCommuneStatsQuery,
+          params: {
+            country,
+            city: cityNorm,
+            postcode: postcodeNorm,
+          },
+        },
+        "fallback_commune_stats_query"
+      );
+      console.log("[FR_GOLD] after_fallback_query", { level: "commune_stats", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
+
+      const communeRows = fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>;
+      const communeFallbackRowsCount = communeRows.length;
+      const communeUsableAvgRows = communeRows.filter((r) => {
+        const v = Number(r.avg_price_per_m2 ?? 0);
+        return Number.isFinite(v) && v > 0;
+      });
+      const communeUsableAvgRowsCount = communeUsableAvgRows.length;
+
+      console.log("[FR_DEBUG] commune_fallback_matching", {
+        submittedLot: aptNumber?.trim() || null,
+        normalizedLot: normalizedRequestedLot,
+        communeFallbackRowsCount,
+        communeUsableAvgRowsCount,
+        surfaceForEstimation,
+      });
+
+      if (surfaceForEstimation != null && communeUsableAvgRowsCount > 0) {
+        const avgPriceValues = communeUsableAvgRows.map((r) => Number(r.avg_price_per_m2 ?? 0)).filter((v) => Number.isFinite(v) && v > 0);
+        const medianAvgPricePerM2 = medianNumber(avgPriceValues);
+        if (medianAvgPricePerM2 != null && Number.isFinite(medianAvgPricePerM2) && medianAvgPricePerM2 > 0) {
+          const estimated = Math.round(surfaceForEstimation * medianAvgPricePerM2);
+          console.log("[FR_DEBUG] winning_valuation_step", {
+            winningValuationStep: "commune_fallback",
+            winningSourceLabel: fallbackSourceCommune,
+          });
+          return frReturn({
+            address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+            data_source: "properties_france",
+            fr_detect: frDetectToUse,
+            property_result: {
+              exact_value: estimated,
+              exact_value_message: null,
+              value_level: "street-level",
+              last_transaction: {
+                amount: 0,
+                date: null,
+                message: "No exact recent transaction available",
+              },
+              street_average: null,
+              street_average_message: fallbackSourceCommune,
+              livability_rating: "FAIR",
+            },
+            fr: emptyFranceResponse({
+              success: true,
+              resultType: "building_level",
+              confidence: "low",
+              requestedLot: requestedLotNorm,
+              normalizedLot: normalizedRequestedLot,
+              property: {
+                transactionDate: null,
+                transactionValue: estimated,
+                pricePerSqm: medianAvgPricePerM2,
+                surfaceArea: surfaceForEstimation,
+                rooms: null,
+                propertyType: propertyType,
+                building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                postalCode: postcodeNorm || null,
+                commune: cityNorm || null,
+              },
+              buildingStats: null,
+              comparables: [],
+              matchExplanation: fallbackSourceCommune,
+            }),
+          }, "fallback_match");
+        }
+      }
+
+      console.log("[FR_DEBUG] no_data_why", {
+        exactApartmentRowsCount,
+        sameBuildingUsableRowsCount,
+        streetFallbackRowsCount,
+        streetUsableAvgRowsCount,
+        communeFallbackRowsCount: communeRows?.length ?? 0,
+        surfaceForEstimation,
+      });
 
       return frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
