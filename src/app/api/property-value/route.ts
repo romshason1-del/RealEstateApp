@@ -296,6 +296,11 @@ export async function GET(request: NextRequest) {
         });
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
+      console.log("[FR_DEBUG] submitted_lot_and_normalized_lot", {
+        submittedLot: aptNumber?.trim() || null,
+        requestedLotNorm,
+        normalizedLot: normalizedRequestedLot,
+      });
       console.log("[FR_GOLD] request_start", {
         city: city.trim(),
         street: street.trim(),
@@ -428,6 +433,14 @@ export async function GET(request: NextRequest) {
       } catch (err) {
         console.error("[FR_ERROR] BAN lookup failed", err);
       }
+
+      // Diagnostic: final BAN-normalized inputs used by detection + valuation.
+      console.log("[FR_DEBUG] normalized_ban_output", {
+        cityNorm,
+        postcodeNorm,
+        streetNorm,
+        houseNumberNorm,
+      });
 
       const getBool = (obj: Record<string, unknown>, keys: string[]): boolean => {
         for (const k of keys) {
@@ -596,23 +609,14 @@ export async function GET(request: NextRequest) {
 
       const exactQuery = `
         SELECT
-          surface_m2,
-          price_per_m2,
-          last_sale_price,
-          last_sale_date
+          *
         FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(postcode) = @postcode
           AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
-          AND (
-            @unit_number = ''
-            OR REGEXP_REPLACE(TRIM(COALESCE(CAST(unit_number AS STRING), '')), r'^0+', '') =
-              REGEXP_REPLACE(TRIM(CAST(@unit_number AS STRING)), r'^0+', '')
-            OR REGEXP_REPLACE(TRIM(COALESCE(CAST(unit_number AS STRING), '')), r'^0+', '') IN UNNEST(@canonical_candidate_lots)
-          )
-        LIMIT 1
+        LIMIT 50
       `;
       if (!unitNumberNorm) {
         if (detectClass === "apartment") {
@@ -656,7 +660,7 @@ export async function GET(request: NextRequest) {
       }
 
       console.log("[FR_GOLD] before_exact_query");
-      const [exactRows] = await queryWithTimeout<[Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }> ]>(
+      const [exactRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
         {
           query: exactQuery,
           params: {
@@ -666,29 +670,93 @@ export async function GET(request: NextRequest) {
             street: streetNorm,
             street_normalized: streetNormalizedDet,
             house_number: houseNumberNorm,
-            unit_number: unitNumberNorm,
-            canonical_candidate_lots: canonicalCandidateLots,
           },
         },
         "exact_query"
       );
       console.log("[FR_GOLD] after_exact_query", { rows: (exactRows as any[])?.length ?? 0 });
 
-      const exactApartmentRowsCount = (exactRows as any[])?.length ?? 0;
-      const exactUsableRowsCount = (exactRows as Array<{ surface_m2?: number; price_per_m2?: number }>).filter(
-        (r) => Number.isFinite(Number(r.surface_m2 ?? 0)) && Number(r.surface_m2 ?? 0) > 0 && Number.isFinite(Number(r.price_per_m2 ?? 0)) && Number(r.price_per_m2 ?? 0) > 0
-      ).length;
-      console.log("[FR_DEBUG] exact_apartment_matching", {
+      const normalizeLotToken = (v: unknown): string | null => {
+        if (v === null || v === undefined) return null;
+        const raw = typeof v === "number" ? String(v) : typeof v === "string" ? v : String(v);
+        const trimmed = raw.trim();
+        if (!trimmed) return null;
+        const n = normalizeLot(trimmed).toUpperCase().replace(/\s+/g, " ").trim();
+        if (!n) return null;
+        return n.replace(/^0+/, "") || n;
+      };
+
+      const exactLotToken = normalizedRequestedLot;
+
+      const extractLotTokensFromRow = (row: Record<string, unknown>): string[] => {
+        const tokens: string[] = [];
+        const pushIf = (val: unknown) => {
+          const t = normalizeLotToken(val);
+          if (t) tokens.push(t);
+        };
+
+        // unit_number
+        pushIf((row as any).unit_number);
+
+        // local_id / Identifiant local
+        pushIf((row as any).local_id);
+        pushIf((row as any).identifiant_local);
+        pushIf((row as any)["Identifiant local"]);
+
+        // lot1..lot5
+        for (let i = 1; i <= 5; i++) {
+          pushIf((row as any)[`lot${i}`]);
+          pushIf((row as any)[`lot_${i}`]);
+        }
+
+        // candidate_lots / available_lots if present
+        for (const k of ["candidate_lots", "available_lots", "lots"]) {
+          const v = (row as any)[k];
+          if (Array.isArray(v)) for (const item of v) pushIf(item);
+          else pushIf(v);
+        }
+
+        return tokens;
+      };
+
+      const exactMatchingRows = !exactLotToken
+        ? []
+        : (exactRows as Array<Record<string, unknown>>).filter((r) =>
+            extractLotTokensFromRow(r).some((t) => t === exactLotToken)
+          );
+
+      const exactApartmentRowsCount = exactMatchingRows.length;
+      const exactUsableRowsCount = exactMatchingRows.filter((r) => {
+        const surf = Number((r as any).surface_m2 ?? 0);
+        const ppm2 = Number((r as any).price_per_m2 ?? 0);
+        return Number.isFinite(surf) && surf > 0 && Number.isFinite(ppm2) && ppm2 > 0;
+      }).length;
+
+      console.log("[FR_DEBUG] exact_apartment_query_counts", {
         submittedLot: aptNumber?.trim() || null,
         normalizedLot: normalizedRequestedLot,
         exactApartmentRowsCount,
         exactUsableRowsCount,
       });
 
-      const exact = (exactRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>)[0];
-      if (exact) {
-        const surface = Number(exact.surface_m2 ?? 0);
-        const pricePerM2 = Number(exact.price_per_m2 ?? 0);
+      const usableExactRows = exactMatchingRows.filter((r) => {
+        const surf = Number((r as any).surface_m2 ?? 0);
+        const ppm2 = Number((r as any).price_per_m2 ?? 0);
+        return Number.isFinite(surf) && surf > 0 && Number.isFinite(ppm2) && ppm2 > 0;
+      });
+
+      const exactBest = usableExactRows.sort((a, b) => {
+        const pa = Number((a as any).price_per_m2 ?? 0);
+        const pb = Number((b as any).price_per_m2 ?? 0);
+        if (pb !== pa) return pb - pa;
+        const da = String((a as any).last_sale_date ?? "");
+        const db = String((b as any).last_sale_date ?? "");
+        return db.localeCompare(da);
+      })[0];
+
+      if (exactBest) {
+        const surface = Number((exactBest as any).surface_m2 ?? 0);
+        const pricePerM2 = Number((exactBest as any).price_per_m2 ?? 0);
         const estimated = Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2) && pricePerM2 > 0
           ? Math.round(surface * pricePerM2)
           : null;
@@ -708,9 +776,9 @@ export async function GET(request: NextRequest) {
               exact_value_message: null,
               value_level: "property-level",
               last_transaction: {
-                amount: Number(exact.last_sale_price ?? 0) || 0,
-                date: exact.last_sale_date ?? null,
-                message: Number(exact.last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+                amount: Number((exactBest as any).last_sale_price ?? 0) || 0,
+                date: (exactBest as any).last_sale_date ?? null,
+                message: Number((exactBest as any).last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
               },
               street_average: null,
               street_average_message: detectClass === "apartment" ? "Exact apartment" : "Exact property",
@@ -723,8 +791,8 @@ export async function GET(request: NextRequest) {
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
-                transactionDate: exact.last_sale_date ?? null,
-                transactionValue: Number(exact.last_sale_price ?? 0) || null,
+                transactionDate: (exactBest as any).last_sale_date ?? null,
+                transactionValue: Number((exactBest as any).last_sale_price ?? 0) || null,
                 pricePerSqm: Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null,
                 surfaceArea: Number.isFinite(surface) && surface > 0 ? surface : null,
                 rooms: null,
@@ -1058,13 +1126,26 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      const noDataReasonParts: string[] = [];
+      if (exactApartmentRowsCount <= 0) noDataReasonParts.push("no_exact_lot_rows");
+      if (exactApartmentRowsCount > 0 && exactUsableRowsCount <= 0) noDataReasonParts.push("exact_lot_rows_not_usable");
+      if (sameBuildingUsableRowsCount < MIN_SAME_BUILDING_USABLE_ROWS) noDataReasonParts.push("same_building_insufficient_usable_rows");
+      if (surfaceForEstimation == null) noDataReasonParts.push("missing_surface_for_fallback_estimation");
+      if (streetUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_street_avg_price");
+      if (communeUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_commune_avg_price");
+
       console.log("[FR_DEBUG] no_data_why", {
         exactApartmentRowsCount,
+        exactUsableRowsCount,
         sameBuildingUsableRowsCount,
         streetFallbackRowsCount,
         streetUsableAvgRowsCount,
         communeFallbackRowsCount: communeRows?.length ?? 0,
+        communeUsableAvgRowsCount,
         surfaceForEstimation,
+        winningValuationStep: null,
+        winningSourceLabel: null,
+        noDataReason: noDataReasonParts.join(" | ") || "unknown",
       });
 
       return frReturn({
