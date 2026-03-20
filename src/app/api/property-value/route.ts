@@ -488,14 +488,14 @@ export async function GET(request: NextRequest) {
             *
           FROM \`streetiq-bigquery.streetiq_gold.france_ban_normalized\`
           WHERE
-            (@postcode = "" OR TRIM(postcode) = TRIM(@postcode))
+            (@postcode = "" OR TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING)))
             AND (
               street_norm LIKE CONCAT('%', @street_norm, '%')
               OR @street_norm LIKE CONCAT('%', street_norm, '%')
             )
             AND (@city_norm = "" OR LOWER(TRIM(city)) = LOWER(TRIM(@city_norm)))
           ORDER BY
-            (TRIM(postcode) = TRIM(@postcode)) DESC,
+            (TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))) DESC,
             (LOWER(TRIM(city)) = LOWER(TRIM(@city_norm))) DESC,
             (street_norm = @street_norm) DESC,
             (TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number_norm AS STRING))) DESC
@@ -696,7 +696,7 @@ export async function GET(request: NextRequest) {
           *
         FROM candidates
         WHERE LOWER(TRIM(city)) = LOWER(TRIM(@city))
-          AND TRIM(postcode) = TRIM(@postcode)
+          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
           AND TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number AS STRING))
           AND (
             street_norm_clean LIKE CONCAT('%', @normalizedStreet, '%')
@@ -826,7 +826,7 @@ export async function GET(request: NextRequest) {
         FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-          AND TRIM(postcode) = @postcode
+          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
           AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         LIMIT 50
@@ -1049,7 +1049,7 @@ export async function GET(request: NextRequest) {
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-            AND TRIM(postcode) = @postcode
+            AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
             AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
             AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
           LIMIT 50
@@ -1161,7 +1161,7 @@ export async function GET(request: NextRequest) {
         FROM \`streetiq-bigquery.streetiq_gold.property_area_fallback\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-          AND TRIM(postcode) = @postcode
+          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
           AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
           AND (@property_type IS NULL OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
         LIMIT 20
@@ -1174,7 +1174,7 @@ export async function GET(request: NextRequest) {
         FROM \`streetiq-bigquery.streetiq_gold.france_commune_property_stats\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-          AND TRIM(postcode) = @postcode
+          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
         LIMIT 20
       `;
 
