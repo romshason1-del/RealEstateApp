@@ -449,6 +449,11 @@ export function FranceApartmentSheet({
 
   const submit = React.useCallback((source: "enter" | "button") => {
     const lot = lotInput.trim();
+    const finalAptNumberSent = lot || undefined;
+    console.log("[FR_LOT_UI] lotInput", lotInput);
+    console.log("[FR_LOT_UI] requestedLot", requestedLot);
+    console.log("[FR_LOT_UI] hasSubmittedLotSearch", hasSubmittedLotSearch);
+    console.log("[FR_LOT_UI] final aptNumber sent", finalAptNumberSent ?? null);
     if (isDev) {
       console.log("[FR_DEBUG_UI] submit_pressed", {
         lot_input_ui_value: lotInput,
@@ -515,7 +520,7 @@ export function FranceApartmentSheet({
         source,
       });
     }
-  }, [lotInput, effectiveDetectClass, isDev, isLoading, normalized]);
+  }, [lotInput, requestedLot, hasSubmittedLotSearch, effectiveDetectClass, isDev, isLoading, normalized]);
 
   const prevIsLoadingRef = React.useRef<boolean>(false);
   const lastLoggedFranceKeyRef = React.useRef<string | null>(null);

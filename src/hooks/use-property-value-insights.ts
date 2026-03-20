@@ -53,6 +53,14 @@ export function usePropertyValueInsights(
       ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),
       signal: abortRef.current.signal,
     };
+    if ((countryCode ?? "").toUpperCase() === "FR") {
+      console.log("[FR_LOT_FETCH] starting_new_request", {
+        requestId: thisRequestId,
+        aptNumber: (opts?.aptNumber ?? "").toString().trim() || null,
+        refetchTrigger: opts?.refetchTrigger ?? null,
+        address,
+      });
+    }
     fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
         if (thisRequestId === requestIdRef.current) setData(res);

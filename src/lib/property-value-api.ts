@@ -271,6 +271,14 @@ export async function fetchPropertyValueInsights(
     if (isUK && options?.selectedFormattedAddress) params.set("selectedFormattedAddress", options.selectedFormattedAddress);
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
+    if (isFR) {
+      const requestUrl = `/api/property-value?${params.toString()}`;
+      console.log("[FR_LOT_REQUEST_URL]", {
+        apt_from_options: options?.aptNumber ?? null,
+        apt_trimmed: apt || null,
+        final_url: requestUrl,
+      });
+    }
     const res = await fetch(`/api/property-value?${params.toString()}`, {
       signal: options?.signal ?? AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });

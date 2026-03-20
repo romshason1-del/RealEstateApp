@@ -359,6 +359,9 @@ export async function GET(request: NextRequest) {
         ban_postcode: null,
         ban_street: null,
         ban_house_number: null,
+        raw_apt_number_param: null,
+        raw_aptNumber_param: null,
+        request_url_seen_by_api: null,
         submitted_lot: null,
         detect_class: null,
         exact_rows_count: null,
@@ -375,6 +378,16 @@ export async function GET(request: NextRequest) {
         chosen_surface_value: null,
         no_data_reason: null,
       };
+
+      frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
+      frRuntimeDebug.raw_aptNumber_param = searchParams.get("aptNumber");
+      frRuntimeDebug.request_url_seen_by_api = request.url;
+      console.log("[FR_LOT_API] incoming_request", {
+        requestUrl: request.url,
+        queryString: searchParams.toString(),
+        apt_number: searchParams.get("apt_number"),
+        aptNumber: searchParams.get("aptNumber"),
+      });
       // Normalize the received lot/apartment number for stable matching + runtime debug.
       // (normalizedRequestedLot is computed above from `aptNumber`.)
       frRuntimeDebug.submitted_lot = normalizedRequestedLot ?? null;
