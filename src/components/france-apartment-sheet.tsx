@@ -42,9 +42,12 @@ export function FranceApartmentSheet({
   const [resolvedForDisplay, setResolvedForDisplay] = React.useState<{
     fr: FrancePropertyResponse | null;
     legacy: { averageBuildingValue: number | null; livabilityRating?: string | null } | null;
+    fr_runtime_debug?: Record<string, unknown> | null;
   } | null>(null);
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [showOptionalAptInput, setShowOptionalAptInput] = React.useState(false);
+  // TEMP: default-open in non-production to make this investigation obvious.
+  const [isFranceDebugOpen, setIsFranceDebugOpen] = React.useState(isDev);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
@@ -83,6 +86,7 @@ export function FranceApartmentSheet({
     setHasSubmittedLotSearch(false);
     setIsResultCardOpen(false);
     setIsMoreDetailsOpen(false);
+    setIsFranceDebugOpen(isDev);
     setShowOptionalAptInput(false);
     setResolvedForDisplay(null);
     setIsExpanded(false);
@@ -501,6 +505,7 @@ export function FranceApartmentSheet({
   }, [lotInput, effectiveDetectClass, isDev, isLoading, normalized]);
 
   const prevIsLoadingRef = React.useRef<boolean>(false);
+  const lastLoggedFranceKeyRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (!hasSubmittedLotSearch) {
       prevIsLoadingRef.current = isLoading;
@@ -565,10 +570,24 @@ export function FranceApartmentSheet({
     const reqLot = (requestedLot ?? "").trim();
     const frReqLot = (fr.requestedLot ?? "").trim();
     if (reqLot !== frReqLot) return;
+    const runtimeDebug = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
     setResolvedForDisplay({
       fr,
       legacy: { averageBuildingValue, livabilityRating: legacyLivability },
+      fr_runtime_debug: runtimeDebug,
     });
+
+    // TEMP: Investigation logging once per resolved request (France only).
+    const showFranceDebug = true;
+    if (showFranceDebug) {
+      const resultKey = `${addressKey}|lot:${reqLot}|result:${String(fr?.resultType ?? "")}|t:${trigger}`;
+      if (lastLoggedFranceKeyRef.current !== resultKey) {
+        lastLoggedFranceKeyRef.current = resultKey;
+        // eslint-disable-next-line no-console
+        console.log("[FR_UI_DEBUG] full_fr_api_response", data);
+      }
+    }
+
     if (isDev) {
       const finalSourceLabel = (fr as any)?.property_result?.street_average_message ?? null;
       const valuationStepReached =
@@ -599,7 +618,20 @@ export function FranceApartmentSheet({
         confidence: fr.confidence,
       });
     }
-  }, [isResultCardOpen, hasSubmittedLotSearch, isLoading, normalized, requestedLot, averageBuildingValue, legacyLivability, isDev]);
+  }, [
+    isResultCardOpen,
+    hasSubmittedLotSearch,
+    isLoading,
+    normalized,
+    requestedLot,
+    averageBuildingValue,
+    legacyLivability,
+    isDev,
+    parsed,
+    data,
+    addressKey,
+    trigger,
+  ]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -666,6 +698,19 @@ export function FranceApartmentSheet({
     const isLoadingNow = isLoading;
     const fr = resolvedForDisplay?.fr ?? normalized ?? null;
     const legacy = resolvedForDisplay?.legacy ?? { averageBuildingValue, livabilityRating: legacyLivability };
+    const frRuntimeDebug =
+      resolvedForDisplay?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? (parsed as any)?.fr_runtime_debug ?? null;
+    const rd: any = frRuntimeDebug ?? null;
+    const toDebugStr = (v: any) => {
+      if (v === null || v === undefined) return "—";
+      if (typeof v === "string") return v;
+      if (typeof v === "number" || typeof v === "boolean") return String(v);
+      try {
+        return JSON.stringify(v);
+      } catch {
+        return String(v);
+      }
+    };
 
     const title = isLoadingNow
       ? "Searching DVF…"
@@ -985,6 +1030,45 @@ export function FranceApartmentSheet({
                   Livability
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
+              </div>
+
+              {/* TEMP: France runtime diagnostics (investigation only) */}
+              <div className="mt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsFranceDebugOpen((v) => !v)}
+                  className="flex w-full items-center justify-between rounded-[10px] border border-white/10 bg-white/5 px-2.5 py-2 text-left"
+                  aria-expanded={isFranceDebugOpen}
+                >
+                  <span className="text-xs font-semibold text-white/85">France Debug</span>
+                  <span className="text-xs font-semibold text-white/60">{isFranceDebugOpen ? "Hide" : "Show"}</span>
+                </button>
+                {isFranceDebugOpen ? (
+                  <div className="mt-1 rounded-[10px] border border-white/10 bg-black/15 px-2.5 py-2 overflow-hidden">
+                    <div className="text-[10px] uppercase tracking-wider text-zinc-400/90 font-medium">fr_runtime_debug</div>
+                    <div className="mt-2 font-mono text-[10px] leading-tight text-zinc-200/80 space-y-0.5">
+                      <div>ban_city: {toDebugStr(rd?.ban_city)}</div>
+                      <div>ban_postcode: {toDebugStr(rd?.ban_postcode)}</div>
+                      <div>ban_street: {toDebugStr(rd?.ban_street)}</div>
+                      <div>ban_house_number: {toDebugStr(rd?.ban_house_number)}</div>
+                      <div>submitted_lot: {toDebugStr(rd?.submitted_lot)}</div>
+                      <div>detect_class: {toDebugStr(rd?.detect_class)}</div>
+                      <div>exact_rows_count: {toDebugStr(rd?.exact_rows_count)}</div>
+                      <div>exact_usable_rows_count: {toDebugStr(rd?.exact_usable_rows_count)}</div>
+                      <div>building_rows_count: {toDebugStr(rd?.building_rows_count)}</div>
+                      <div>building_usable_rows_count: {toDebugStr(rd?.building_usable_rows_count)}</div>
+                      <div>street_rows_count: {toDebugStr(rd?.street_rows_count)}</div>
+                      <div>street_usable_rows_count: {toDebugStr(rd?.street_usable_rows_count)}</div>
+                      <div>commune_rows_count: {toDebugStr(rd?.commune_rows_count)}</div>
+                      <div>commune_usable_rows_count: {toDebugStr(rd?.commune_usable_rows_count)}</div>
+                      <div>winning_step: {toDebugStr(rd?.winning_step)}</div>
+                      <div>winning_source_label: {toDebugStr(rd?.winning_source_label)}</div>
+                      <div>has_surface_for_estimate: {toDebugStr(rd?.has_surface_for_estimate)}</div>
+                      <div>chosen_surface_value: {toDebugStr(rd?.chosen_surface_value)}</div>
+                      <div>no_data_reason: {toDebugStr(rd?.no_data_reason)}</div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
