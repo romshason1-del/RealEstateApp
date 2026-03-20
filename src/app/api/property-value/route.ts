@@ -318,10 +318,10 @@ export async function GET(request: NextRequest) {
         return new Response(JSON.stringify({ success: false, error: "BigQuery init failed" }), { status: 200 });
       }
       const country = "FR";
-      const cityNorm = city.trim();
-      const streetNorm = street.trim();
-      const postcodeNorm = (postcode || zip || "").trim();
-      const houseNumberNorm = houseNumber.trim();
+      let cityNorm = city.trim();
+      let streetNorm = street.trim();
+      let postcodeNorm = (postcode || zip || "").trim();
+      let houseNumberNorm = houseNumber.trim();
       const unitNumberNorm = (aptNumber ?? "").trim();
       const propertyType = (searchParams.get("property_type") ?? searchParams.get("propertyType") ?? "").trim() || null;
       const inputSurfaceRaw = searchParams.get("surface_m2") ?? searchParams.get("surfaceM2");
@@ -359,7 +359,74 @@ export async function GET(request: NextRequest) {
         return cleaned;
       };
 
-      const streetNormalizedDet = normalizeStreetForDetection(streetNorm);
+      let streetNormalizedDet = normalizeStreetForDetection(streetNorm);
+
+      // BAN normalization first (FR only) to make downstream matching deterministic.
+      // If BAN lookup fails or returns no row, we fall back to the original parsed values.
+      try {
+        const banLookupQuery = `
+          SELECT
+            *
+          FROM \`streetiq-bigquery.streetiq_gold.france_ban_lookup\`
+          WHERE TRIM(postcode) = TRIM(@postcode)
+            AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+            AND normalized_street = @street_normalized
+            AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          LIMIT 1
+        `;
+
+        const [banRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          {
+            query: banLookupQuery,
+            params: {
+              postcode: postcodeNorm,
+              city: cityNorm,
+              street_normalized: streetNormalizedDet,
+              house_number: houseNumberNorm,
+            },
+          },
+          "ban_lookup_query"
+        );
+
+        const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
+        if (banRow) {
+          const pickString = (keys: string[]): string | null => {
+            for (const k of keys) {
+              const v = banRow?.[k];
+              if (typeof v === "string" && v.trim()) return v.trim();
+            }
+            return null;
+          };
+          const pickNumber = (keys: string[]): number | null => {
+            for (const k of keys) {
+              const v = banRow?.[k];
+              const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+              if (Number.isFinite(n)) return n;
+            }
+            return null;
+          };
+
+          const banCity = pickString(["city", "normalized_city", "city_norm"]);
+          const banPostcode = pickString(["postcode", "postal_code", "postcode_norm", "code_postal"]);
+          const banStreetNorm = pickString(["normalized_street", "street_norm", "street_norm_clean"]);
+          const banHouse = pickString(["house_number_norm", "house_number", "houseNumber"]);
+
+          if (banCity) cityNorm = banCity;
+          if (banPostcode) postcodeNorm = banPostcode;
+          if (banStreetNorm) streetNorm = banStreetNorm;
+          if (banHouse) houseNumberNorm = banHouse;
+
+          // Recompute normalized street used by intelligence_v2 detection.
+          streetNormalizedDet = normalizeStreetForDetection(streetNorm);
+
+          // lat/lon returned by BAN are not currently used by this France flow,
+          // but we still compute them as a sanity check for future use.
+          pickNumber(["lat", "latitude"]);
+          pickNumber(["lon", "lng", "longitude"]);
+        }
+      } catch (err) {
+        console.error("[FR_ERROR] BAN lookup failed", err);
+      }
 
       const getBool = (obj: Record<string, unknown>, keys: string[]): boolean => {
         for (const k of keys) {
