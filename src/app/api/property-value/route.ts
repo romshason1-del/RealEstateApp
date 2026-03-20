@@ -308,6 +308,11 @@ export async function GET(request: NextRequest) {
         postcode: (postcode || zip || "").trim(),
         aptNumber: (aptNumber ?? "").trim(),
       });
+      console.log("[FR_BAN] entered_france_flow", {
+        hasBigQueryKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
+        // projectId is printed inside [FR_INIT] too, but log here to correlate request->query quickly.
+        // (We keep it best-effort: it may be undefined if init throws.)
+      });
       console.log("[FR_INIT] creating BigQuery client");
       let bq: BigQuery;
       try {
@@ -345,7 +350,9 @@ export async function GET(request: NextRequest) {
       const frRuntimeDebug: Record<string, unknown> = {
         // BAN integration diagnostics (France-only)
         ban_match_found: null,
+        ban_rows_count: null,
         ban_match_quality: null,
+        ban_query_error: null,
         ban_lat: null,
         ban_lon: null,
         ban_city: null,
@@ -373,6 +380,11 @@ export async function GET(request: NextRequest) {
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
+        console.log("[FR_BAN] returning_response", {
+          tag,
+          ban_match_found: frRuntimeDebug.ban_match_found,
+          ban_rows_count: frRuntimeDebug.ban_rows_count,
+        });
         return NextResponse.json({ ...payload, fr_runtime_debug: frRuntimeDebug }, status ? { status } : undefined);
       };
       const normalizeStreetForDetection = (s: string): string => {
@@ -439,12 +451,11 @@ export async function GET(request: NextRequest) {
       const banInputHouseNumber = normalizeHouseNumberForBan(houseNumberNorm);
 
       try {
-        console.log("[FR_DEBUG] ban_normalized_input", {
+        console.log("[FR_BAN] before_ban_query", {
           banInputPostcode,
           banInputCity,
           banInputStreetNorm,
           banInputHouseNumber,
-          original: { cityNorm, postcodeNorm, streetNorm, houseNumberNorm },
         });
 
         // Match against the normalized BAN dataset.
@@ -483,9 +494,11 @@ export async function GET(request: NextRequest) {
           "ban_normalized_lookup_query"
         );
 
-        console.log("[FR_DEBUG] ban_normalized_query_result", {
-          rows: (banRows as any[])?.length ?? 0,
-        });
+        console.log("[FR_BAN] after_ban_query");
+        const banRowsCount = (banRows as any[])?.length ?? 0;
+        console.log("[FR_BAN] ban_rows_count", { banRowsCount });
+        console.log("[FR_BAN] first_ban_row", { first: (banRows as any[])?.[0] ?? null });
+        frRuntimeDebug.ban_rows_count = banRowsCount;
 
         const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
         if (banRow) {
@@ -554,12 +567,31 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.ban_postcode = ban_postcode;
           frRuntimeDebug.ban_street = ban_street;
           frRuntimeDebug.ban_house_number = ban_house_number;
+          console.log("[FR_BAN] populated_debug_fields", {
+            ban_match_found: frRuntimeDebug.ban_match_found,
+            ban_rows_count: frRuntimeDebug.ban_rows_count,
+            ban_city: frRuntimeDebug.ban_city,
+            ban_postcode: frRuntimeDebug.ban_postcode,
+            ban_street: frRuntimeDebug.ban_street,
+            ban_house_number: frRuntimeDebug.ban_house_number,
+            ban_match_quality: frRuntimeDebug.ban_match_quality,
+          });
         } else {
           frRuntimeDebug.ban_match_found = false;
           frRuntimeDebug.ban_match_quality = "no_ban_row";
+          console.log("[FR_BAN] populated_debug_fields", {
+            ban_match_found: frRuntimeDebug.ban_match_found,
+            ban_rows_count: frRuntimeDebug.ban_rows_count,
+            ban_city: frRuntimeDebug.ban_city,
+            ban_postcode: frRuntimeDebug.ban_postcode,
+            ban_street: frRuntimeDebug.ban_street,
+            ban_house_number: frRuntimeDebug.ban_house_number,
+            ban_match_quality: frRuntimeDebug.ban_match_quality,
+          });
         }
       } catch (err) {
         console.error("[FR_ERROR] BAN normalized lookup failed", err);
+        frRuntimeDebug.ban_query_error = err instanceof Error ? err.message : String(err);
         frRuntimeDebug.ban_match_found = false;
         frRuntimeDebug.ban_match_quality = "ban_normalized_lookup_error";
       }
