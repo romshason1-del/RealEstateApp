@@ -508,15 +508,17 @@ export async function GET(request: NextRequest) {
           LIMIT 1
         `;
 
+        const banParams = {
+          postcode: banInputPostcode || "",
+          city_norm: banInputCity || "",
+          street_norm: banInputStreetNorm || "",
+          house_number_norm: banInputHouseNumber || "",
+        };
+        console.log("[FR_PARAMS]", { query: "ban_normalized_lookup_query", ...banParams });
         const [banRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
           {
             query: banLookupQuery,
-            params: {
-              postcode: banInputPostcode,
-              city_norm: banInputCity,
-              street_norm: banInputStreetNorm,
-              house_number_norm: banInputHouseNumber,
-            },
+            params: banParams,
           },
           "ban_normalized_lookup_query"
         );
@@ -716,15 +718,17 @@ export async function GET(request: NextRequest) {
       let detectRows: Array<Record<string, unknown>> = [];
       try {
         console.log("[FR_GOLD] before_intelligence_detection_query");
+        const detectParams = {
+          city: cityNorm || "",
+          postcode: postcodeNorm || "",
+          normalizedStreet: streetNormalizedDet || "",
+          house_number: houseNumberNorm || "",
+        };
+        console.log("[FR_PARAMS]", { query: "intelligence_detection_query", ...detectParams });
         [detectRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
           {
             query: detectionQuery,
-            params: {
-              city: cityNorm,
-              postcode: postcodeNorm,
-              normalizedStreet: streetNormalizedDet,
-              house_number: houseNumberNorm,
-            },
+            params: detectParams,
           },
           "intelligence_detection_query"
         );
@@ -883,17 +887,19 @@ export async function GET(request: NextRequest) {
 
       console.log("[FR_STEP] exact_lookup_start");
       console.log("[FR_GOLD] before_exact_query");
+      const exactParams = {
+        country: country || "",
+        city: cityNorm || "",
+        postcode: postcodeNorm || "",
+        street: streetNorm || "",
+        street_normalized: streetNormalizedDet || "",
+        house_number: houseNumberNorm || "",
+      };
+      console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
       const [exactRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
         {
           query: exactQuery,
-          params: {
-            country,
-            city: cityNorm,
-            postcode: postcodeNorm,
-            street: streetNorm,
-            street_normalized: streetNormalizedDet,
-            house_number: houseNumberNorm,
-          },
+          params: exactParams,
         },
         "exact_query"
       );
@@ -1064,19 +1070,21 @@ export async function GET(request: NextRequest) {
           LIMIT 50
         `;
         console.log("[FR_GOLD] before_building_query");
+        const buildingParams = {
+          country: country || "",
+          city: cityNorm || "",
+          postcode: postcodeNorm || "",
+          street: streetNorm || "",
+          street_normalized: streetNormalizedDet || "",
+          house_number: houseNumberNorm || "",
+        };
+        console.log("[FR_PARAMS]", { query: "building_same_address_query", ...buildingParams });
         const [buildingRows] = await queryWithTimeout<
           Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>
         >(
           {
             query: buildingQuery,
-            params: {
-              country,
-              city: cityNorm,
-              postcode: postcodeNorm,
-              street: streetNorm,
-              street_normalized: streetNormalizedDet,
-              house_number: houseNumberNorm,
-            },
+            params: buildingParams,
           },
           "building_same_address_query"
         );
@@ -1172,7 +1180,7 @@ export async function GET(request: NextRequest) {
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
           AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
-          AND (@property_type IS NULL OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
+          AND (@property_type = "" OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
         LIMIT 20
       `;
 
@@ -1189,17 +1197,19 @@ export async function GET(request: NextRequest) {
 
       console.log("[FR_STEP] street_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
+      const streetParams = {
+        country: country || "",
+        city: cityNorm || "",
+        postcode: postcodeNorm || "",
+        street: streetNorm || "",
+        street_normalized: streetNormalizedDet || "",
+        property_type: propertyType || "",
+      };
+      console.log("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
       const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
         {
           query: fallbackStreetQuery,
-          params: {
-            country,
-            city: cityNorm,
-            postcode: postcodeNorm,
-            street: streetNorm,
-            street_normalized: streetNormalizedDet,
-            property_type: propertyType,
-          },
+          params: streetParams,
         },
         "fallback_street_query"
       );
@@ -1309,14 +1319,16 @@ export async function GET(request: NextRequest) {
       // Street fallback wasn't usable; try commune fallback next.
       console.log("[FR_STEP] commune_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
+      const communeParams = {
+        country: country || "",
+        city: cityNorm || "",
+        postcode: postcodeNorm || "",
+      };
+      console.log("[FR_PARAMS]", { query: "fallback_commune_stats_query", ...communeParams });
       const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
         {
           query: fallbackCommuneStatsQuery,
-          params: {
-            country,
-            city: cityNorm,
-            postcode: postcodeNorm,
-          },
+          params: communeParams,
         },
         "fallback_commune_stats_query"
       );
