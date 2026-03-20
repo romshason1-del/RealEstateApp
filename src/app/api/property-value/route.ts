@@ -664,6 +664,7 @@ export async function GET(request: NextRequest) {
         streetNorm,
         houseNumberNorm,
       });
+      console.log("[FR_FLOW] ban_matched=" + String(Boolean(frRuntimeDebug.ban_match_found)));
       console.log("[FR_STEP] ban_lookup_done");
 
       const getBool = (obj: Record<string, unknown>, keys: string[]): boolean => {
@@ -790,6 +791,8 @@ export async function GET(request: NextRequest) {
       // - Else if multi-unit / apartment-like evidence exists, ask for apartment/lot.
       const detectClass: "apartment" | "house" | "unclear" = detectedHouse ? "house" : detectedApartment ? "apartment" : "unclear";
       frRuntimeDebug.detect_class = detectClass;
+      const flowPropertyType = detectClass === "house" ? "house" : detectClass === "apartment" ? "apartment" : "unknown";
+      console.log("[FR_FLOW] property_type=" + flowPropertyType);
       console.log("[FR_STEP] apartment_detection_done");
 
       console.log("[FR_GOLD] intelligence_detection_computed", {
@@ -894,11 +897,12 @@ export async function GET(request: NextRequest) {
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         LIMIT 50
       `;
-      const aptRawTrimmed = (aptNumber ?? "").trim();
-      const hasSubmittedLot = aptRawTrimmed.length > 0 || unitNumberNorm.length > 0;
       const shouldPromptLotFirst = detectClass === "apartment" && !normalizedRequestedLot;
       console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
       console.log("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);
+      console.log("[FR_FLOW] submitted_lot=" + String(normalizedRequestedLot ?? ""));
+      console.log("[FR_FLOW] should_prompt_lot=" + String(shouldPromptLotFirst));
+      console.log("[FR_FLOW] continue_to_valuation=" + String(!shouldPromptLotFirst));
       if (shouldPromptLotFirst) {
         if (detectClass === "apartment") {
           console.log("[FR_GOLD] apartment_lot_prompt_triggered");
@@ -941,6 +945,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      console.log("[FR_FLOW] ladder_step_started=EXACT");
       console.log("[FR_STEP] exact_lookup_start");
       console.log("[FR_GOLD] before_exact_query");
       const exactParams = {
@@ -1113,6 +1118,7 @@ export async function GET(request: NextRequest) {
       let sameBuildingRowsCount = 0;
       let sameBuildingUsableRowsCount = 0;
       if (houseNumberNorm) {
+        console.log("[FR_FLOW] ladder_step_started=BUILDING");
         const buildingTable = "property_latest_facts";
         const buildingTableInspection = await inspectFranceTable("BUILDING", buildingTable);
         console.log("[FR_STEP] building_lookup_start");
@@ -1279,6 +1285,7 @@ export async function GET(request: NextRequest) {
         LIMIT 20
       `;
 
+      console.log("[FR_FLOW] ladder_step_started=STREET");
       console.log("[FR_STEP] street_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
       const streetParams = {
@@ -1409,6 +1416,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Street fallback wasn't usable; try commune fallback next.
+      console.log("[FR_FLOW] ladder_step_started=COMMUNE");
       console.log("[FR_STEP] commune_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
       const communeParams = {
