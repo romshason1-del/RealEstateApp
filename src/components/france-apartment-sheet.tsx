@@ -65,6 +65,7 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     if (!isDev) return;
     const d: any = data;
+    console.log("[FR_LOT_UI] response tag received", d?.fr?.resultType ?? d?.result_level ?? d?.message ?? null);
     if (d?.data_source === "properties_france") {
       const fr = d?.fr as FrancePropertyResponse | undefined;
       console.log("[FranceSheet] response", {
@@ -450,6 +451,7 @@ export function FranceApartmentSheet({
   const submit = React.useCallback((source: "enter" | "button") => {
     const lot = lotInput.trim();
     const finalAptNumberSent = lot || undefined;
+    console.log("[FR_LOT_UI] before_submit");
     console.log("[FR_LOT_UI] lotInput", lotInput);
     console.log("[FR_LOT_UI] requestedLot", requestedLot);
     console.log("[FR_LOT_UI] hasSubmittedLotSearch", hasSubmittedLotSearch);
@@ -504,9 +506,10 @@ export function FranceApartmentSheet({
     // Hard guarantee: never show any previous result while a new lot search is in flight.
     // We only render a final result once the latest request resolves and matches the requested lot.
     setResolvedForDisplay(null);
-    setTrigger((t) => t + 1);
     setHasSubmittedLotSearch(true);
+    setTrigger((t) => t + 1);
     setIsResultCardOpen(true);
+    console.log("[FR_LOT_UI] new request started");
 
     if (isDev) {
       console.log("[FR_UI_DEBUG]", {

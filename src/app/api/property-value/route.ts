@@ -298,6 +298,11 @@ export async function GET(request: NextRequest) {
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
       console.log("[FR_STEP] lot_received");
+      console.log("[FR_LOT_API] apt_number raw", {
+        apt_number: searchParams.get("apt_number"),
+        aptNumber: searchParams.get("aptNumber"),
+      });
+      console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
       console.log("[FR_DEBUG] submitted_lot_and_normalized_lot", {
         submittedLot: aptNumber?.trim() || null,
         requestedLotNorm,
@@ -399,6 +404,7 @@ export async function GET(request: NextRequest) {
       });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
+        console.log("[FR_LOT_API] response tag", tag);
         console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         console.log("[FR_BAN] returning_response", {
@@ -831,9 +837,12 @@ export async function GET(request: NextRequest) {
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         LIMIT 50
       `;
-      if (!unitNumberNorm) {
+      const shouldPromptLotFirst = detectClass === "apartment" && !unitNumberNorm;
+      console.log("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);
+      if (shouldPromptLotFirst) {
         if (detectClass === "apartment") {
           console.log("[FR_GOLD] apartment_lot_prompt_triggered");
+          console.log("[FR_LOT_API] response tag", "prompt_lot_first");
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
