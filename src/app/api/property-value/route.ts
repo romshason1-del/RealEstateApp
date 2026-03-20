@@ -1174,7 +1174,7 @@ export async function GET(request: NextRequest) {
       const fallbackStreetQuery = `
         SELECT
           avg_price_per_m2,
-          newest_sale_date
+          latest_sale_date
         FROM \`streetiq-bigquery.streetiq_gold.property_area_fallback\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -1187,7 +1187,7 @@ export async function GET(request: NextRequest) {
       const fallbackCommuneStatsQuery = `
         SELECT
           avg_price_per_m2,
-          newest_sale_date
+          latest_sale_date
         FROM \`streetiq-bigquery.streetiq_gold.france_commune_property_stats\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -1206,7 +1206,7 @@ export async function GET(request: NextRequest) {
         property_type: propertyType || "",
       };
       console.log("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
-      const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+      const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; latest_sale_date?: string | null }> ]>(
         {
           query: fallbackStreetQuery,
           params: streetParams,
@@ -1217,7 +1217,7 @@ export async function GET(request: NextRequest) {
       const fallbackSourceStreet = "Similar properties on same street";
       const fallbackSourceCommune = "Commune fallback";
 
-      const streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>;
+      const streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; latest_sale_date?: string | null }>;
       const streetFallbackRowsCount = streetRows.length;
       const streetUsableAvgRows = streetRows.filter((r) => {
         const v = parseMaybeDecimal(r.avg_price_per_m2);
@@ -1250,7 +1250,7 @@ export async function GET(request: NextRequest) {
         return {
           avgPricePerM2: medianAvgPricePerM2,
           estimated,
-          newestSaleDate: streetUsableAvgRows[0]?.newest_sale_date ?? null,
+          newestSaleDate: streetUsableAvgRows[0]?.latest_sale_date ?? null,
         };
       };
 
@@ -1325,7 +1325,7 @@ export async function GET(request: NextRequest) {
         postcode: postcodeNorm || "",
       };
       console.log("[FR_PARAMS]", { query: "fallback_commune_stats_query", ...communeParams });
-      const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
+      const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; latest_sale_date?: string | null }> ]>(
         {
           query: fallbackCommuneStatsQuery,
           params: communeParams,
@@ -1334,7 +1334,7 @@ export async function GET(request: NextRequest) {
       );
       console.log("[FR_GOLD] after_fallback_query", { level: "commune_stats", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
 
-      const communeRows = fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }>;
+      const communeRows = fallbackCommuneRows as Array<{ avg_price_per_m2?: number; latest_sale_date?: string | null }>;
       const communeFallbackRowsCount = communeRows.length;
       const communeUsableAvgRows = communeRows.filter((r) => {
         const v = parseMaybeDecimal(r.avg_price_per_m2);
