@@ -88,6 +88,21 @@ export function FranceApartmentSheet({
     setIsExpanded(false);
   }, [addressKey]);
 
+  // Prevent any "house-direct" result-card auto-open until we have resolved the initial
+  // address detection request for the current address selection.
+  const [frAddressFetchStarted, setFrAddressFetchStarted] = React.useState(false);
+  const [frAddressFetchDone, setFrAddressFetchDone] = React.useState(false);
+  React.useEffect(() => {
+    setFrAddressFetchStarted(false);
+    setFrAddressFetchDone(false);
+  }, [addressKey]);
+  React.useEffect(() => {
+    if (isLoading) setFrAddressFetchStarted(true);
+  }, [isLoading]);
+  React.useEffect(() => {
+    if (frAddressFetchStarted && !isLoading) setFrAddressFetchDone(true);
+  }, [frAddressFetchStarted, isLoading]);
+
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
     const r = d as {
@@ -201,13 +216,15 @@ export function FranceApartmentSheet({
 
   // Effective detect class as seen by the UI (uses the same fallback logic as the debug marker).
   const effectiveDetectClass: "apartment" | "house" | "unclear" =
-    frDetect === "apartment" || frDetect === "house" || frDetect === "unclear"
-      ? frDetect
-      : shouldForceLotFirstFlow
-        ? "apartment"
-        : isHouseLikeUI
-          ? "house"
-          : "unclear";
+    backendMultiUnitFlag
+      ? "apartment"
+      : frDetect === "apartment" || frDetect === "house" || frDetect === "unclear"
+        ? frDetect
+        : shouldForceLotFirstFlow
+          ? "apartment"
+          : isHouseLikeUI
+            ? "house"
+            : "unclear";
   React.useEffect(() => {
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
@@ -341,6 +358,7 @@ export function FranceApartmentSheet({
     // If backend indicates a multi-unit building (apartment/lot-first), never auto-open results.
     // This guarantees we don't show a final result/no-data card before the user submits a lot.
     if (parsed?.multiple_units === true || parsed?.prompt_for_apartment === true) return;
+    if (!frAddressFetchDone) return;
     if (effectiveDetectClass === "apartment") return;
     if (shouldShowApartmentInput) return;
     if (hasSubmittedLotSearch) return;
@@ -348,7 +366,7 @@ export function FranceApartmentSheet({
     if (isDev) console.log("[FR_UI] direct_house_flow_chosen");
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, isDev, frDetect]);
+  }, [shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, isDev, frDetect, frAddressFetchDone, effectiveDetectClass, parsed?.multiple_units, parsed?.prompt_for_apartment]);
 
   React.useEffect(() => {
     if (!isDev) return;
@@ -428,7 +446,36 @@ export function FranceApartmentSheet({
     // Hard block: apartment-first flow requires a lot before any final card can render.
     if (effectiveDetectClass === "apartment" && !lot) {
       if (isDev)
-        console.log("[FR_UI_DEBUG] lot_submit_blocked_no_value", { detectClass: effectiveDetectClass, hasSubmittedLot: false, source });
+        console.log("[FR_UI_DEBUG]", {
+          detectClass: effectiveDetectClass,
+          lotSubmitted: false,
+          blockedBeforeLot: true,
+          franceRequestStarted: false,
+          franceRequestFinished: false,
+          franceRequestFailed: false,
+          loadingStateBefore: isLoading,
+          loadingStateAfter: isLoading,
+          responseStatus: null,
+          responsePayloadTag: (normalized as any)?.resultType ?? null,
+          source,
+        });
+      return;
+    }
+    if (effectiveDetectClass === "apartment" && isLoading) {
+      if (isDev)
+        console.log("[FR_UI_DEBUG]", {
+          detectClass: effectiveDetectClass,
+          lotSubmitted: !!lot,
+          blockedBeforeLot: false,
+          franceRequestStarted: false,
+          franceRequestFinished: false,
+          franceRequestFailed: false,
+          loadingStateBefore: true,
+          loadingStateAfter: true,
+          responseStatus: null,
+          responsePayloadTag: (normalized as any)?.resultType ?? null,
+          source,
+        });
       return;
     }
     setRequestedLot(lot || undefined);
@@ -438,7 +485,74 @@ export function FranceApartmentSheet({
     setTrigger((t) => t + 1);
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [lotInput, effectiveDetectClass, isDev]);
+
+    if (isDev) {
+      console.log("[FR_UI_DEBUG]", {
+        detectClass: effectiveDetectClass,
+        lotSubmitted: !!lot,
+        blockedBeforeLot: false,
+        franceRequestStarted: true,
+        loadingStateBefore: isLoading,
+        responseStatus: null,
+        responsePayloadTag: null,
+        source,
+      });
+    }
+  }, [lotInput, effectiveDetectClass, isDev, isLoading, normalized]);
+
+  const prevIsLoadingRef = React.useRef<boolean>(false);
+  React.useEffect(() => {
+    if (!hasSubmittedLotSearch) {
+      prevIsLoadingRef.current = isLoading;
+      return;
+    }
+    // Detect transition: lot-search request was in-flight -> now resolved.
+    if (prevIsLoadingRef.current && !isLoading) {
+      const lotSubmitted = !!(requestedLot ?? "").trim();
+      const resultCardBlocked = effectiveDetectClass === "apartment" && !lotSubmitted;
+      const responsePayloadTag = (normalized as any)?.resultType ?? (data as any)?.message ?? null;
+      const responseStatus = (normalized as any)?.success ?? null;
+
+      const requestFailed = !normalized;
+      const finalStreetAvgMessage = (normalized as any)?.property_result?.street_average_message ?? null;
+      const winningSourceLabel =
+        finalStreetAvgMessage === "Similar properties on same street"
+          ? "Similar properties on same street"
+          : finalStreetAvgMessage === "Commune fallback"
+            ? "Commune fallback"
+            : (normalized as any)?.resultType === "exact_apartment"
+              ? "Exact apartment"
+              : (normalized as any)?.resultType === "building_level"
+                ? "Building-level estimate"
+                : finalStreetAvgMessage ?? "No reliable data found";
+
+      const valuationStepReached =
+        (normalized as any)?.resultType === "exact_apartment"
+          ? "exact"
+          : finalStreetAvgMessage === "Similar properties on same street"
+            ? "street_fallback"
+            : finalStreetAvgMessage === "Commune fallback"
+              ? "commune_fallback"
+              : "no_data";
+
+      if (isDev) {
+        console.log("[FR_UI_DEBUG]", {
+          detectClass: effectiveDetectClass,
+          lotSubmitted,
+          blockedBeforeLot: resultCardBlocked,
+          franceRequestFinished: !requestFailed,
+          franceRequestFailed: requestFailed,
+          loadingStateBefore: true,
+          loadingStateAfter: false,
+          responseStatus,
+          responsePayloadTag,
+          valuationStepReached,
+          winningSourceLabel,
+        });
+      }
+    }
+    prevIsLoadingRef.current = isLoading;
+  }, [hasSubmittedLotSearch, isLoading, requestedLot, effectiveDetectClass, normalized, isDev, data]);
 
   // Capture ONLY the final resolved result for the active lot request.
   // This prevents intermediate flashes from stale building-only payloads.
@@ -549,11 +663,18 @@ export function FranceApartmentSheet({
       return null;
     }
 
-    const isLoadingNow = isLoading || resolvedForDisplay == null;
-    const fr = resolvedForDisplay?.fr ?? null;
-    const legacy = resolvedForDisplay?.legacy ?? null;
+    const isLoadingNow = isLoading;
+    const fr = resolvedForDisplay?.fr ?? normalized ?? null;
+    const legacy = resolvedForDisplay?.legacy ?? { averageBuildingValue, livabilityRating: legacyLivability };
 
-    const title = isLoadingNow ? "Searching DVF…" : (badge?.label ?? (fr?.success === false ? "No result" : "Result"));
+    const title = isLoadingNow
+      ? "Searching DVF…"
+      : badge?.label ??
+        (!fr
+          ? "No result"
+          : fr?.success === false
+            ? "No result"
+            : "Result");
     const explanation = isLoadingNow
       ? ((requestedLot ?? "").trim() ? `Searching lot ${(requestedLot ?? "").trim()} for this address` : "Searching building data for this address")
       : (subtitle || fr?.matchExplanation || null);
@@ -564,7 +685,7 @@ export function FranceApartmentSheet({
     const hasValue = typeof rawValue === "number" && rawValue > 0;
     const isNoResult =
       !isLoadingNow &&
-      (fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
+      (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
 
     const isSuspiciousFallback =
       !isLoadingNow &&
