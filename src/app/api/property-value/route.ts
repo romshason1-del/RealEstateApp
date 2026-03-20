@@ -439,16 +439,28 @@ export async function GET(request: NextRequest) {
       const banInputHouseNumber = normalizeHouseNumberForBan(houseNumberNorm);
 
       try {
+        console.log("[FR_DEBUG] ban_normalized_input", {
+          banInputPostcode,
+          banInputCity,
+          banInputStreetNorm,
+          banInputHouseNumber,
+          original: { cityNorm, postcodeNorm, streetNorm, houseNumberNorm },
+        });
+
         // Match against the normalized BAN dataset.
         // Ranking preference:
         // exact postcode > exact city_norm > exact street_norm > exact house_number_norm
-        // House-number is NOT required for selection, so if house-number match fails we still return a same-street fallback.
+        // House-number is NOT required for selection; it's only used for ranking.
         const banLookupQuery = `
           SELECT
             *
           FROM \`streetiq-bigquery.streetiq_gold.france_ban_normalized\`
-          WHERE street_norm = @street_norm
-            AND (@postcode = "" OR TRIM(postcode) = TRIM(@postcode))
+          WHERE
+            (@postcode = "" OR TRIM(postcode) = TRIM(@postcode))
+            AND (
+              street_norm LIKE CONCAT('%', @street_norm, '%')
+              OR @street_norm LIKE CONCAT('%', street_norm, '%')
+            )
             AND (@city_norm = "" OR LOWER(TRIM(city_norm)) = LOWER(TRIM(@city_norm)))
           ORDER BY
             (TRIM(postcode) = TRIM(@postcode)) DESC,
@@ -470,6 +482,10 @@ export async function GET(request: NextRequest) {
           },
           "ban_normalized_lookup_query"
         );
+
+        console.log("[FR_DEBUG] ban_normalized_query_result", {
+          rows: (banRows as any[])?.length ?? 0,
+        });
 
         const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
         if (banRow) {
