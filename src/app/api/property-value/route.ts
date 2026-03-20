@@ -984,14 +984,14 @@ export async function GET(request: NextRequest) {
       });
 
       const tryStreetFallback = () => {
-        if (surfaceForEstimation == null) return null;
         if (streetUsableAvgRowsCount <= 0) return null;
         const avgPriceValues = streetUsableAvgRows.map((r) => Number(r.avg_price_per_m2 ?? 0)).filter((v) => Number.isFinite(v) && v > 0);
         const medianAvgPricePerM2 = medianNumber(avgPriceValues);
         if (medianAvgPricePerM2 == null || !Number.isFinite(medianAvgPricePerM2) || medianAvgPricePerM2 <= 0) return null;
+        const estimated = surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2) : null;
         return {
           avgPricePerM2: medianAvgPricePerM2,
-          estimated: Math.round(surfaceForEstimation * medianAvgPricePerM2),
+          estimated,
           newestSaleDate: streetUsableAvgRows[0]?.newest_sale_date ?? null,
         };
       };
@@ -1020,6 +1020,7 @@ export async function GET(request: NextRequest) {
             livability_rating: "FAIR",
           },
           fr: emptyFranceResponse({
+            // success=true so the UI does not go to "No reliable data found"
             success: true,
             resultType: "nearby_comparable",
             confidence: "low_medium",
@@ -1030,7 +1031,7 @@ export async function GET(request: NextRequest) {
               transactionDate: null,
               transactionValue: streetEstimate.estimated,
               pricePerSqm: streetEstimate.avgPricePerM2,
-              surfaceArea: surfaceForEstimation,
+              surfaceArea: surfaceForEstimation ?? null,
               rooms: null,
               propertyType: propertyType,
               building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
@@ -1075,11 +1076,14 @@ export async function GET(request: NextRequest) {
         surfaceForEstimation,
       });
 
-      if (surfaceForEstimation != null && communeUsableAvgRowsCount > 0) {
+      if (communeUsableAvgRowsCount > 0) {
         const avgPriceValues = communeUsableAvgRows.map((r) => Number(r.avg_price_per_m2 ?? 0)).filter((v) => Number.isFinite(v) && v > 0);
         const medianAvgPricePerM2 = medianNumber(avgPriceValues);
         if (medianAvgPricePerM2 != null && Number.isFinite(medianAvgPricePerM2) && medianAvgPricePerM2 > 0) {
-          const estimated = Math.round(surfaceForEstimation * medianAvgPricePerM2);
+          const estimated = surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2) : null;
+          // Avoid forcing "No reliable building value available" when we do not have surface.
+          const frResultType = estimated == null ? "nearby_comparable" : "building_level";
+          const frConfidence = estimated == null ? "low_medium" : "low";
           console.log("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "commune_fallback",
             winningSourceLabel: fallbackSourceCommune,
@@ -1103,15 +1107,15 @@ export async function GET(request: NextRequest) {
             },
             fr: emptyFranceResponse({
               success: true,
-              resultType: "building_level",
-              confidence: "low",
+              resultType: frResultType as any,
+              confidence: frConfidence as any,
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
                 transactionDate: null,
                 transactionValue: estimated,
                 pricePerSqm: medianAvgPricePerM2,
-                surfaceArea: surfaceForEstimation,
+                surfaceArea: surfaceForEstimation ?? null,
                 rooms: null,
                 propertyType: propertyType,
                 building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
@@ -1130,7 +1134,6 @@ export async function GET(request: NextRequest) {
       if (exactApartmentRowsCount <= 0) noDataReasonParts.push("no_exact_lot_rows");
       if (exactApartmentRowsCount > 0 && exactUsableRowsCount <= 0) noDataReasonParts.push("exact_lot_rows_not_usable");
       if (sameBuildingUsableRowsCount < MIN_SAME_BUILDING_USABLE_ROWS) noDataReasonParts.push("same_building_insufficient_usable_rows");
-      if (surfaceForEstimation == null) noDataReasonParts.push("missing_surface_for_fallback_estimation");
       if (streetUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_street_avg_price");
       if (communeUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_commune_avg_price");
 
