@@ -472,12 +472,12 @@ export async function GET(request: NextRequest) {
               street_norm LIKE CONCAT('%', @street_norm, '%')
               OR @street_norm LIKE CONCAT('%', street_norm, '%')
             )
-            AND (@city_norm = "" OR LOWER(TRIM(city_norm)) = LOWER(TRIM(@city_norm)))
+            AND (@city_norm = "" OR LOWER(TRIM(city)) = LOWER(TRIM(@city_norm)))
           ORDER BY
             (TRIM(postcode) = TRIM(@postcode)) DESC,
-            (LOWER(TRIM(city_norm)) = LOWER(TRIM(@city_norm))) DESC,
+            (LOWER(TRIM(city)) = LOWER(TRIM(@city_norm))) DESC,
             (street_norm = @street_norm) DESC,
-            (TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number_norm AS STRING))) DESC
+            (TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number_norm AS STRING))) DESC
           LIMIT 1
         `;
 
