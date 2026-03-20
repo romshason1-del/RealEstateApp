@@ -198,6 +198,16 @@ export function FranceApartmentSheet({
   const isHouseLikeUI = isHouseDetected || (isHouseLikeOverride && !isApartmentLikeForLotFirst);
   const shouldForceLotFirstFlow = isApartmentLikeForLotFirst && !isHouseLikeUI;
   const shouldShowApartmentInput = !isHouseLikeUI && hasMultiUnitEvidence;
+
+  // Effective detect class as seen by the UI (uses the same fallback logic as the debug marker).
+  const effectiveDetectClass: "apartment" | "house" | "unclear" =
+    frDetect === "apartment" || frDetect === "house" || frDetect === "unclear"
+      ? frDetect
+      : shouldForceLotFirstFlow
+        ? "apartment"
+        : isHouseLikeUI
+          ? "house"
+          : "unclear";
   React.useEffect(() => {
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
@@ -227,6 +237,30 @@ export function FranceApartmentSheet({
     if (!isDev) return;
     console.log("[FR_UI_STATE]", { uiState });
   }, [isDev, uiState]);
+
+  const resultCardBlocked = effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim();
+
+  // Strict UI gate for apartment-first flow:
+  // if apartment is detected and user hasn't submitted a lot yet,
+  // keep the result card closed and never allow "searched" phases to render.
+  React.useEffect(() => {
+    if (effectiveDetectClass !== "apartment") return;
+    if (!resultCardBlocked) return;
+
+    if (isDev) {
+      console.log("[FR_UI_DEBUG]", {
+        detectClass: effectiveDetectClass,
+        hasSubmittedLot: hasSubmittedLotSearch,
+        resultCardBlocked: true,
+      });
+    }
+
+    if (hasSubmittedLotSearch) setHasSubmittedLotSearch(false);
+    if (isResultCardOpen) setIsResultCardOpen(false);
+    if (resolvedForDisplay != null) setResolvedForDisplay(null);
+    if (isMoreDetailsOpen) setIsMoreDetailsOpen(false);
+    if (isExpanded) setIsExpanded(false);
+  }, [effectiveDetectClass, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded, isDev]);
 
   const displayConfidence = React.useMemo(() => {
     const c = normalized?.confidence;
@@ -288,13 +322,16 @@ export function FranceApartmentSheet({
     | "searched_no_exact_match_but_building_exists_state"
     | "no_result_state";
 
+  const apartmentLotGateActive = effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim();
+
   const phase: Phase = React.useMemo(() => {
+    if (apartmentLotGateActive) return "initial_building_state";
     if (isExactApartment(effectiveData)) return "exact_apartment_match_state";
     if (!hasSubmittedLotSearch) {
       return hasUsefulBuildingData ? "initial_building_state" : "no_result_state";
     }
     return hasUsefulBuildingData ? "searched_no_exact_match_but_building_exists_state" : "no_result_state";
-  }, [effectiveData, hasSubmittedLotSearch, hasUsefulBuildingData]);
+  }, [effectiveData, hasSubmittedLotSearch, hasUsefulBuildingData, apartmentLotGateActive]);
 
   // Houses/single-unit properties should not require apartment/lot input.
   // As soon as we have enough data to infer "house", open the results directly from the address.
@@ -304,7 +341,7 @@ export function FranceApartmentSheet({
     // If backend indicates a multi-unit building (apartment/lot-first), never auto-open results.
     // This guarantees we don't show a final result/no-data card before the user submits a lot.
     if (parsed?.multiple_units === true || parsed?.prompt_for_apartment === true) return;
-    if (frDetect === "apartment") return;
+    if (effectiveDetectClass === "apartment") return;
     if (shouldShowApartmentInput) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;
@@ -389,8 +426,9 @@ export function FranceApartmentSheet({
   const submit = React.useCallback((source: "enter" | "button") => {
     const lot = lotInput.trim();
     // Hard block: apartment-first flow requires a lot before any final card can render.
-    if (frDetect === "apartment" && !lot) {
-      if (isDev) console.log("[FR_UI_DEBUG] lot_submit_blocked_no_value", { detectClass: frDetect, hasSubmittedLot: false, source });
+    if (effectiveDetectClass === "apartment" && !lot) {
+      if (isDev)
+        console.log("[FR_UI_DEBUG] lot_submit_blocked_no_value", { detectClass: effectiveDetectClass, hasSubmittedLot: false, source });
       return;
     }
     setRequestedLot(lot || undefined);
@@ -400,7 +438,7 @@ export function FranceApartmentSheet({
     setTrigger((t) => t + 1);
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [lotInput, frDetect, isDev]);
+  }, [lotInput, effectiveDetectClass, isDev]);
 
   // Capture ONLY the final resolved result for the active lot request.
   // This prevents intermediate flashes from stale building-only payloads.
@@ -419,7 +457,7 @@ export function FranceApartmentSheet({
     });
     if (isDev) {
       const finalSourceLabel = (fr as any)?.property_result?.street_average_message ?? null;
-      const producedStep =
+      const valuationStepReached =
         finalSourceLabel === "Similar properties on same street"
           ? "street_fallback"
           : finalSourceLabel === "Commune fallback"
@@ -432,11 +470,12 @@ export function FranceApartmentSheet({
                   ? "street_fallback"
                   : "no_data";
       console.log("[FR_UI_DEBUG] final_value_produced", {
-        detectClass: frDetect,
+        detectClass: effectiveDetectClass,
         hasSubmittedLot: hasSubmittedLotSearch,
-        producedStep,
+        valuationStepReached,
         sourceLabel: finalSourceLabel,
         resultType: fr.resultType,
+        winningSourceLabel: finalSourceLabel,
       });
     }
     if (isDev) {
@@ -488,9 +527,9 @@ export function FranceApartmentSheet({
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
     if (!hasSubmittedLotSearch) {
-      if (frDetect === "apartment" && isDev) {
+      if (effectiveDetectClass === "apartment" && isDev) {
         console.log("[FR_UI_DEBUG] result_card_blocked", {
-          detectClass: frDetect,
+          detectClass: effectiveDetectClass,
           hasSubmittedLot: hasSubmittedLotSearch,
           blocked: true,
         });
@@ -498,10 +537,10 @@ export function FranceApartmentSheet({
       return null;
     }
     // Extra safety: apartment-first should never render without a submitted lot value.
-    if (frDetect === "apartment" && !(requestedLot ?? "").trim()) {
+    if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim()) {
       if (isDev) {
         console.log("[FR_UI_DEBUG] result_card_blocked_missing_lot_value", {
-          detectClass: frDetect,
+          detectClass: effectiveDetectClass,
           hasSubmittedLot: hasSubmittedLotSearch,
           blocked: true,
           requestedLot,
