@@ -290,12 +290,14 @@ export async function GET(request: NextRequest) {
   if (isFR) {
     // Minimal France gold-table path (exact -> area fallback -> no data).
     try {
+      console.log("[FR_STEP] entered");
       const frStartTs = Date.now();
         console.log("[ENV_CHECK]", {
           hasKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
         });
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
+      console.log("[FR_STEP] lot_received");
       console.log("[FR_DEBUG] submitted_lot_and_normalized_lot", {
         submittedLot: aptNumber?.trim() || null,
         requestedLotNorm,
@@ -397,6 +399,7 @@ export async function GET(request: NextRequest) {
       });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
+        console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         console.log("[FR_BAN] returning_response", {
           tag,
@@ -637,6 +640,7 @@ export async function GET(request: NextRequest) {
         streetNorm,
         houseNumberNorm,
       });
+      console.log("[FR_STEP] ban_lookup_done");
 
       const getBool = (obj: Record<string, unknown>, keys: string[]): boolean => {
         for (const k of keys) {
@@ -760,6 +764,7 @@ export async function GET(request: NextRequest) {
       // - Else if multi-unit / apartment-like evidence exists, ask for apartment/lot.
       const detectClass: "apartment" | "house" | "unclear" = detectedHouse ? "house" : detectedApartment ? "apartment" : "unclear";
       frRuntimeDebug.detect_class = detectClass;
+      console.log("[FR_STEP] apartment_detection_done");
 
       console.log("[FR_GOLD] intelligence_detection_computed", {
         isMultiUnitDetected,
@@ -867,6 +872,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      console.log("[FR_STEP] exact_lookup_start");
       console.log("[FR_GOLD] before_exact_query");
       const [exactRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
         {
@@ -946,6 +952,7 @@ export async function GET(request: NextRequest) {
         exactApartmentRowsCount,
         exactUsableRowsCount,
       });
+      console.log("[FR_STEP] exact_lookup_done");
 
       frRuntimeDebug.exact_rows_count = exactApartmentRowsCount;
       frRuntimeDebug.exact_usable_rows_count = exactUsableRowsCount;
@@ -1032,6 +1039,7 @@ export async function GET(request: NextRequest) {
       let sameBuildingRowsCount = 0;
       let sameBuildingUsableRowsCount = 0;
       if (houseNumberNorm) {
+        console.log("[FR_STEP] building_lookup_start");
         const buildingQuery = `
           SELECT
             surface_m2,
@@ -1090,6 +1098,7 @@ export async function GET(request: NextRequest) {
 
         frRuntimeDebug.building_rows_count = sameBuildingRowsCount;
         frRuntimeDebug.building_usable_rows_count = sameBuildingUsableRowsCount;
+        console.log("[FR_STEP] building_lookup_done");
 
         if (sameBuildingUsableRowsCount >= MIN_SAME_BUILDING_USABLE_ROWS && medianSurfaceM2ForFallback != null) {
           const pricePerM2Values = usablePriceRows.map((r) => parseMaybeDecimal(r.price_per_m2)).filter((v): v is number => v != null && v > 0);
@@ -1140,6 +1149,7 @@ export async function GET(request: NextRequest) {
         }
         // If building-level estimate can't be computed, continue the ladder to street/commune fallback.
       }
+      if (!houseNumberNorm) console.log("[FR_STEP] building_lookup_done");
 
       // Use the gold-table driven apartment-vs-house decision for the valuation ladder.
       const frDetectToUse: "apartment" | "house" | "unclear" = detectClass;
@@ -1168,6 +1178,7 @@ export async function GET(request: NextRequest) {
         LIMIT 20
       `;
 
+      console.log("[FR_STEP] street_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
       const [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
         {
@@ -1204,6 +1215,7 @@ export async function GET(request: NextRequest) {
         streetUsableAvgRowsCount,
         surfaceForEstimation,
       });
+      console.log("[FR_STEP] street_lookup_done");
 
       frRuntimeDebug.street_rows_count = streetFallbackRowsCount;
       frRuntimeDebug.street_usable_rows_count = streetUsableAvgRowsCount;
@@ -1286,6 +1298,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Street fallback wasn't usable; try commune fallback next.
+      console.log("[FR_STEP] commune_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
       const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null }> ]>(
         {
@@ -1315,6 +1328,7 @@ export async function GET(request: NextRequest) {
         communeUsableAvgRowsCount,
         surfaceForEstimation,
       });
+      console.log("[FR_STEP] commune_lookup_done");
 
       frRuntimeDebug.commune_rows_count = communeFallbackRowsCount;
       frRuntimeDebug.commune_usable_rows_count = communeUsableAvgRowsCount;
@@ -1490,11 +1504,33 @@ export async function GET(request: NextRequest) {
         }),
       }, "no_data");
     } catch (err) {
+      console.log("[FR_STEP] returning_error");
+      console.error("[FR_FATAL]", err);
       console.log("[FR_GOLD] catch_error", { message: err instanceof Error ? err.message : "Unknown error" });
+      const fatalMessage = err instanceof Error ? err.message : "Unknown error";
+      const fatalStackFirstLine =
+        err instanceof Error && typeof err.stack === "string"
+          ? (err.stack.split("\n")[0] ?? null)
+          : null;
       const payload = {
         message: "Failed to fetch France property value",
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: fatalMessage,
         fr_detect: "unclear",
+        fr_runtime_debug: {
+          fatal_error_message: fatalMessage,
+          fatal_error_stack_first_line: fatalStackFirstLine,
+          request_url_seen_by_api: request.url,
+          raw_apt_number_param: searchParams.get("apt_number"),
+          raw_aptNumber_param: searchParams.get("aptNumber"),
+          submitted_lot: (() => {
+            const l = normalizeLot(aptNumber) || null;
+            return l ? (l.replace(/^0+/, "") || l) : null;
+          })(),
+          ban_city: null,
+          ban_postcode: null,
+          ban_street: null,
+          ban_house_number: null,
+        },
         fr: emptyFranceResponse({
           success: false,
           resultType: "no_result",
