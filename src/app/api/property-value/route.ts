@@ -1198,6 +1198,11 @@ export async function GET(request: NextRequest) {
         TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         OR REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(CAST(house_number AS STRING))), r'\\s+', ''), r'[^0-9A-Z]', '') = @house_number_norm
       )`;
+      const extractHouseNumberNumeric = (hn: string): number | null => {
+        const m = /^\d+/.exec(String(hn ?? "").replace(/\s+/g, ""));
+        return m ? parseInt(m[0], 10) : null;
+      };
+      const houseNumberNumericTarget = houseNumberNorm ? extractHouseNumberNumeric(houseNumberNorm) : null;
 
       const exactQuery = `
         SELECT
@@ -1618,6 +1623,12 @@ export async function GET(request: NextRequest) {
 
       const FR_LABEL_BUILDING_SIMILAR_UNIT = "Based on similar apartments in this building";
 
+      const frBqHouseNumberNearbySql = houseNumberNumericTarget != null
+        ? `(
+            COALESCE(SAFE_CAST(REGEXP_EXTRACT(TRIM(CAST(house_number AS STRING)), r'^(\\d+)') AS INT64), 999999) BETWEEN @house_number_numeric_target - 2 AND @house_number_numeric_target + 2
+          )`
+        : "TRUE";
+
       const tryFranceBuildingSimilarUnit = async (p: {
         medianSurfaceM2ForFallback: number | null;
         /** Prefer surfaces closest to this (input > exact row > building median). */
@@ -1638,7 +1649,8 @@ export async function GET(request: NextRequest) {
             price_per_m2,
             last_sale_price,
             last_sale_date,
-            property_type
+            property_type,
+            house_number
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -1657,12 +1669,43 @@ export async function GET(request: NextRequest) {
             house_number: houseNumberNorm || "",
             house_number_norm: houseNumberNormForMatch || "",
           };
-          const [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          let [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
             { query: similarUnitQuery, params: similarParams },
             "building_similar_unit_query"
           );
-          const similarRows = similarRowsRaw ?? [];
-          const rawCount = similarRows.length;
+          let similarRows = similarRowsRaw ?? [];
+          let rawCount = similarRows.length;
+
+          if (rawCount < 2 && houseNumberNumericTarget != null) {
+            const nearbyUnitQuery = `
+            SELECT
+              surface_m2,
+              price_per_m2,
+              last_sale_price,
+              last_sale_date,
+              property_type,
+              house_number
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+              AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+              AND ${frBqStreetMatchSql}
+              AND ${frBqHouseNumberNearbySql}
+              AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+            LIMIT 300
+            `;
+            const nearbyParams = {
+              ...similarParams,
+              house_number_numeric_target: houseNumberNumericTarget,
+            };
+            const [nearbyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: nearbyUnitQuery, params: nearbyParams },
+              "building_similar_unit_nearby_query"
+            );
+            similarRows = nearbyRows ?? [];
+            rawCount = similarRows.length;
+            if (rawCount > 0) console.log("[FR_BUILDING] expanded_with_nearby_house_numbers rows=" + String(rawCount));
+          }
           frRuntimeDebug.building_similar_unit_candidates_count = rawCount;
           console.log("[FR_GOLD] after_building_similar_unit_query", { rows: rawCount });
           console.log("[FR_BUILDING] candidates_count=" + String(rawCount));
@@ -1673,10 +1716,10 @@ export async function GET(request: NextRequest) {
             ppmEuro: number;
             lastSaleEuro: number;
             dateStr: string | null;
+            houseDistance: number;
           };
 
           const enriched: SimilarEnriched[] = [];
-          // Do not over-filter: with few raw rows, allow older-than-5y rows so one reasonable same-building apartment can still win.
           const allowRelaxedFiveYearWindow = rawCount <= 4;
           for (const row of similarRows) {
             const surf = parseMaybeDecimal((row as any).surface_m2);
@@ -1690,11 +1733,17 @@ export async function GET(request: NextRequest) {
                 : String(dateRaw).trim() === ""
                   ? null
                   : String(dateRaw);
+            const rowHn = (row as any).house_number;
+            const rowNum = extractHouseNumberNumeric(String(rowHn ?? ""));
+            const houseDistance =
+              houseNumberNumericTarget != null && rowNum != null
+                ? Math.abs(rowNum - houseNumberNumericTarget)
+                : 0;
 
             if (surf == null || surf <= 0) continue;
             if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
             if (!allowRelaxedFiveYearWindow && !frSaleDateWithinFiveYears(dateRaw)) continue;
-            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr });
+            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr, houseDistance });
           }
 
           const afterFilters = enriched.length;
@@ -1730,6 +1779,7 @@ export async function GET(request: NextRequest) {
               const db = Math.abs(b.surf - targetSurface);
               if (da !== db) return da - db;
             }
+            if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
             const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
             const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
             if (tb !== ta) return tb - ta;
@@ -1773,6 +1823,7 @@ export async function GET(request: NextRequest) {
 
           console.log("[FR_BUILDING] selected_surface=" + String(estSurf));
           console.log("[FR_BUILDING] selected_surface_diff=" + String(selectedSurfaceDiff ?? "null"));
+          console.log("[FR_BUILDING] selected_house_distance=" + String(best.houseDistance));
           console.log("[FR_BUILDING] selected_sale_date=" + String(best.dateStr ?? "null"));
           console.log("[FR_BUILDING] selected_price_per_m2=" + String(best.ppmEuro));
 
@@ -2165,7 +2216,7 @@ export async function GET(request: NextRequest) {
         cityNorm
       ) {
         const sameStreetHouseQuery = `
-          SELECT price_per_m2, last_sale_date
+          SELECT price_per_m2, last_sale_date, house_number
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -2178,8 +2229,8 @@ export async function GET(request: NextRequest) {
                  OR TRIM(CAST(property_type AS STRING)) = '')
           LIMIT 100
         `;
-        try {
-          const [sameStreetRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null }>]>(
+          try {
+          const [sameStreetRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null; house_number?: unknown }>]>(
             {
               query: sameStreetHouseQuery,
               params: {
@@ -2192,15 +2243,25 @@ export async function GET(request: NextRequest) {
             },
             "same_street_house_fallback"
           );
-          const houseRows = (sameStreetRows ?? []).filter((r) => {
+          const withPpmAndDist = (sameStreetRows ?? []).map((r) => {
             const ppm = frPropertyLatestFactsMoneyToEuros(r.price_per_m2);
-            return ppm != null && ppm > 0;
-          });
-          if (houseRows.length >= 1) {
-            const ppmValues = houseRows
-              .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-              .filter((v): v is number => v != null && v > 0);
-            const medianPpm = medianNumber(ppmValues);
+            const hn = r.house_number;
+            const dist =
+              houseNumberNumericTarget != null && hn != null
+                ? Math.abs((extractHouseNumberNumeric(String(hn)) ?? 999999) - houseNumberNumericTarget)
+                : 0;
+            return { ppm, dist };
+          }).filter((x): x is { ppm: number; dist: number } => x.ppm != null && x.ppm > 0);
+          if (withPpmAndDist.length >= 1) {
+            withPpmAndDist.sort((a, b) => a.dist - b.dist);
+            let pool = withPpmAndDist.filter((x) => x.dist <= 0);
+            if (pool.length < 2) pool = withPpmAndDist.filter((x) => x.dist <= 1);
+            if (pool.length < 2) pool = withPpmAndDist.filter((x) => x.dist <= 2);
+            if (pool.length < 2) pool = withPpmAndDist.filter((x) => x.dist <= 5);
+            if (pool.length < 2) pool = withPpmAndDist;
+            const ppmValues = pool.map((x) => x.ppm);
+            const trimmedPpm = ppmValues.length >= 5 ? frTrimFractionExtremes(ppmValues.map((p) => ({ p })), (x) => x.p, 0.1).map((x) => x.p) : ppmValues;
+            const medianPpm = medianNumber(trimmedPpm);
             if (medianPpm != null && medianPpm > 0) {
               const surfEst = validInputSurfaceM2 ?? medianSurfaceM2ForFallback;
               const surfaceForEst = surfEst ?? null;
@@ -2346,11 +2407,12 @@ export async function GET(request: NextRequest) {
         return v != null && v > 0;
       });
       let streetUsableAvgRowsCount = streetUsableAvgRows.length;
+      let streetClosestHouseDistance: number | null = null;
 
       if (streetFallbackRowsCount === 0 && streetNorm && postcodeNorm && cityNorm) {
         try {
           const factsStreetQuery = `
-            SELECT price_per_m2
+            SELECT price_per_m2, house_number
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -2358,7 +2420,7 @@ export async function GET(request: NextRequest) {
               AND ${frBqStreetMatchSql}
             LIMIT 200
           `;
-          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>(
+          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; house_number?: unknown }>]>(
             {
               query: factsStreetQuery,
               params: {
@@ -2371,16 +2433,35 @@ export async function GET(request: NextRequest) {
             },
             "street_from_facts_fallback"
           );
-          const ppmEuros = (factsRows ?? [])
-            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-            .filter((v): v is number => v != null && v > 0);
-          if (ppmEuros.length >= 1) {
-            const medianPpmEuro = medianNumber(ppmEuros) ?? 0;
+          const withPpm = (factsRows ?? []).map((r) => {
+            const ppm = frPropertyLatestFactsMoneyToEuros(r.price_per_m2);
+            const hn = r.house_number;
+            const dist =
+              houseNumberNumericTarget != null && hn != null
+                ? Math.abs((extractHouseNumberNumeric(String(hn)) ?? 999999) - houseNumberNumericTarget)
+                : 0;
+            return { ppm, dist };
+          }).filter((x): x is { ppm: number; dist: number } => x.ppm != null && x.ppm > 0);
+          if (withPpm.length >= 1) {
+            withPpm.sort((a, b) => a.dist - b.dist);
+            const closestDist = withPpm[0]?.dist ?? 0;
+            let pool = withPpm.filter((x) => x.dist <= 0);
+            if (pool.length < 3) pool = withPpm.filter((x) => x.dist <= 1);
+            if (pool.length < 3) pool = withPpm.filter((x) => x.dist <= 2);
+            if (pool.length < 3) pool = withPpm.filter((x) => x.dist <= 5);
+            if (pool.length < 3) pool = withPpm;
+            const ppmPool = pool.map((x) => x.ppm);
+            const trimmedPpm =
+              ppmPool.length >= 5
+                ? frTrimFractionExtremes(ppmPool.map((p) => ({ p })), (x) => x.p, 0.1).map((x) => x.p)
+                : ppmPool;
+            const medianPpmEuro = medianNumber(trimmedPpm) ?? ppmPool[0] ?? 0;
             streetRows = [{ avg_price_per_m2: medianPpmEuro * 100 }];
             streetFallbackRowsCount = 1;
             streetUsableAvgRows = streetRows;
             streetUsableAvgRowsCount = 1;
-            console.log("[FR_FLOW] street_from_facts_fallback rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpmEuro));
+            console.log("[FR_FLOW] street_from_facts_fallback rows=" + String(withPpm.length) + " pool=" + String(pool.length) + " median_ppm=" + String(medianPpmEuro));
+            streetClosestHouseDistance = closestDist;
           }
         } catch (e) {
           console.log("[FR_FLOW] street_from_facts_fallback_error", (e as Error)?.message);
@@ -2428,6 +2509,10 @@ export async function GET(request: NextRequest) {
       const streetFallbackDecision = streetEstimate ? "street" : "commune";
       console.log("[FR_STREET] rows_found=" + String(streetFallbackRowsCount));
       console.log("[FR_STREET] rows_used=" + String(streetUsableAvgRowsCount));
+      if (streetEstimate) {
+        console.log("[FR_STREET] median_price_per_m2=" + String(streetEstimate.avgPricePerM2));
+        if (streetClosestHouseDistance != null) console.log("[FR_STREET] closest_house_distance=" + String(streetClosestHouseDistance));
+      }
       if (!streetEstimate) {
         console.log("[FR_STREET] rejected_reason=" + (streetUsableAvgRowsCount <= 0 ? "no_usable_rows" : "median_invalid"));
       }
