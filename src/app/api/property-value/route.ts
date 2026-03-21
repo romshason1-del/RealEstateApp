@@ -1526,21 +1526,36 @@ export async function GET(request: NextRequest) {
           };
 
           const enriched: SimilarEnriched[] = [];
+          const allowRelaxedSmallCohort = rawCount <= 1;
           for (const row of similarRows) {
             const surf = parseMaybeDecimal((row as any).surface_m2);
             const ppmRaw = parseMaybeDecimal((row as any).price_per_m2);
             const ppmEuro = frPropertyLatestFactsMoneyToEuros((row as any).price_per_m2) ?? 0;
             const lastSaleEuro = frPropertyLatestFactsMoneyToEuros((row as any).last_sale_price) ?? 0;
             const dateRaw = (row as any).last_sale_date;
-            if (surf == null || surf <= 0) continue;
-            if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
-            if (!frSaleDateWithinFiveYears(dateRaw)) continue;
             const dateStr =
               dateRaw === null || dateRaw === undefined
                 ? null
                 : String(dateRaw).trim() === ""
                   ? null
                   : String(dateRaw);
+
+            console.log("[FR_BUILDING] candidate_surface=" + String(surf ?? "null"));
+            console.log("[FR_BUILDING] candidate_last_sale_date=" + String(dateStr ?? "null"));
+            console.log("[FR_BUILDING] candidate_price_per_m2=" + String(ppmEuro > 0 ? ppmEuro : "null"));
+
+            if (surf == null || surf <= 0) {
+              console.log("[FR_BUILDING] reject_reason=invalid_surface");
+              continue;
+            }
+            if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) {
+              console.log("[FR_BUILDING] reject_reason=invalid_price_per_m2");
+              continue;
+            }
+            if (!allowRelaxedSmallCohort && !frSaleDateWithinFiveYears(dateRaw)) {
+              console.log("[FR_BUILDING] reject_reason=sale_date_older_than_5y");
+              continue;
+            }
             enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr });
           }
 
@@ -1548,10 +1563,19 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.building_similar_unit_after_filters_count = afterFilters;
           console.log("[FR_BUILDING] after_filters_count=" + String(afterFilters));
 
-          if (afterFilters === 0) return null;
+          if (afterFilters === 0) {
+            console.log("[FR_BUILDING] reject_reason=no_candidates_after_quality_filters");
+            return null;
+          }
 
-          let trimmed = frTrimFractionExtremes(enriched, (x) => x.ppmEuro, 0.1);
-          if (trimmed.length === 0) trimmed = enriched;
+          let trimmed = enriched;
+          if (enriched.length >= 5) {
+            trimmed = frTrimFractionExtremes(enriched, (x) => x.ppmEuro, 0.1);
+          }
+          if (trimmed.length === 0) {
+            console.log("[FR_BUILDING] reject_reason=outlier_trim_removed_all_fallback_to_untrimmed");
+            trimmed = enriched;
+          }
 
           const medSurfCohort = medianNumber(trimmed.map((x) => x.surf));
           const targetSurface =
