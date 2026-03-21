@@ -11,6 +11,7 @@ import {
   coerceFiniteNumber,
   coerceNullableString,
   coercePositiveNumber,
+  formatFranceDateLabelFromUnknown,
   formatFranceEuroPerSqmFromUnknown,
   formatFranceEuroTotal,
   normalizeFrancePricePerSqmForDisplay,
@@ -1053,21 +1054,14 @@ export function FranceApartmentSheet({
               ? "No reliable building value available"
               : "—";
 
-    const formatDisplayDate = (raw: string | null | undefined): string => {
-      if (!raw) return "—";
-      // Expecting ISO-like YYYY-MM-DD; normalize via Date but keep YYYY-MM-DD order.
-      const d = new Date(raw);
-      if (Number.isNaN(d.getTime())) return raw;
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    };
+    const lastTxAmountPositive = !isLoadingNow
+      ? coercePositiveNumber(fr?.property?.transactionValue as unknown)
+      : null;
+    const lastTxDateLabel = !isLoadingNow
+      ? formatFranceDateLabelFromUnknown(fr?.property?.transactionDate as unknown)
+      : null;
 
-    const dateRaw = unwrapScalar(fr?.property?.transactionDate as unknown);
-    const dateText = isLoadingNow
-      ? "—"
-      : formatDisplayDate(dateRaw != null ? String(dateRaw) : null);
+    const dateText = isLoadingNow ? "—" : lastTxDateLabel ?? "—";
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
@@ -1212,14 +1206,13 @@ export function FranceApartmentSheet({
                     ? "—"
                     : (fr?.resultType === "exact_apartment" || fr?.resultType === "exact_address") &&
                         !isNoResult &&
-                        coercePositiveNumber(fr?.property?.transactionValue as unknown) != null &&
-                        unwrapScalar(fr?.property?.transactionDate as unknown) != null
-                      ? `${formatFranceEuroTotal(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))}`
-                      : fr?.resultType === "building_similar_unit" &&
-                          !isNoResult &&
-                          coercePositiveNumber(fr?.property?.transactionValue as unknown) != null &&
-                          unwrapScalar(fr?.property?.transactionDate as unknown) != null
-                        ? `${formatFranceEuroTotal(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))} (reference sale)`
+                        lastTxAmountPositive != null &&
+                        lastTxDateLabel
+                      ? `${formatFranceEuroTotal(lastTxAmountPositive)} • ${lastTxDateLabel}`
+                      : fr?.resultType === "building_similar_unit" && !isNoResult && lastTxAmountPositive != null
+                        ? lastTxDateLabel
+                          ? `${formatFranceEuroTotal(lastTxAmountPositive)} • ${lastTxDateLabel} reference sale`
+                          : `${formatFranceEuroTotal(lastTxAmountPositive)} • reference sale`
                         : "No exact recent transaction available"}
                 </div>
               </div>

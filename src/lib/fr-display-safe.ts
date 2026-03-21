@@ -15,6 +15,66 @@ export function unwrapScalar(raw: unknown): unknown {
   return v !== undefined ? v : raw;
 }
 
+/**
+ * Reduce France API / BigQuery `last_sale_date` / `transactionDate` payloads to a single ISO date
+ * string (`YYYY-MM-DD`) or null. Handles nested `{ value }`, `{ date }`, `{ text }`, and simple
+ * `{ year, month, day }` shapes. Never returns a non-primitive.
+ */
+export function coerceFranceDisplayDateString(raw: unknown): string | null {
+  let v: unknown = raw;
+  for (let depth = 0; depth < 8; depth++) {
+    v = unwrapScalar(v);
+    if (v === null || v === undefined) return null;
+    if (typeof v === "string") {
+      const t = v.trim();
+      return t.length ? t : null;
+    }
+    if (typeof v === "number" && Number.isFinite(v)) {
+      const ms = v > 1e12 ? v : v > 1e9 ? v * 1000 : NaN;
+      const d = new Date(ms);
+      return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    }
+    if (v instanceof Date) {
+      return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+    }
+    if (!isPlainObject(v)) return null;
+    const o = v as Record<string, unknown>;
+    if ("date" in o && o.date != null) {
+      v = o.date;
+      continue;
+    }
+    if ("text" in o && o.text != null) {
+      v = o.text;
+      continue;
+    }
+    if ("day" in o && "month" in o && "year" in o) {
+      const y = Number(o.year);
+      const mo = Number(o.month);
+      const day = Number(o.day);
+      if ([y, mo, day].every((n) => Number.isFinite(n))) {
+        return `${Math.trunc(y)}-${String(Math.trunc(mo)).padStart(2, "0")}-${String(Math.trunc(day)).padStart(2, "0")}`;
+      }
+    }
+    if ("value" in o) {
+      v = o.value;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Human-readable date for France UI (e.g. `13 Dec 2024`), or null if missing / unparseable. */
+export function formatFranceDateLabelFromUnknown(raw: unknown): string | null {
+  const iso = coerceFranceDisplayDateString(raw);
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isNaN(d.getTime())) {
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  }
+  return iso.trim().length ? iso.trim() : null;
+}
+
 /** Coerce to a finite number, or null. Handles `{ value: n | "n" }`. */
 export function coerceFiniteNumber(raw: unknown): number | null {
   const u = unwrapScalar(raw);
