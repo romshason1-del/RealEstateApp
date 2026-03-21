@@ -8,6 +8,11 @@ import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString } from "@/lib/address-parse";
 import { toCanonicalAddress } from "@/lib/address-canonical";
 import { toEnglishDisplay, sanitizeForDisplay } from "@/lib/display-utils";
+import {
+  coercePositiveNumber,
+  sanitizeFrancePropertyResultForDisplay,
+  type FrancePropertyResultLike,
+} from "@/lib/fr-display-safe";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -593,6 +598,25 @@ export function PropertyValueCard({
     };
   }).property_result : undefined;
 
+  const frPropertyResultForDisplay = React.useMemo(() => {
+    if (!propertyResult || !isFranceData) return propertyResult;
+    return sanitizeFrancePropertyResultForDisplay(propertyResult as FrancePropertyResultLike);
+  }, [propertyResult, isFranceData]);
+
+  const surfaceReelleBatiFrance = React.useMemo(() => {
+    if (!isFranceData) return surfaceReelleBati;
+    const c = coercePositiveNumber(surfaceReelleBati as unknown);
+    if (c != null) return c;
+    return typeof surfaceReelleBati === "number" && surfaceReelleBati > 0 ? surfaceReelleBati : undefined;
+  }, [isFranceData, surfaceReelleBati]);
+
+  const averageBuildingValueFrance = React.useMemo(() => {
+    if (!isFranceData) return averageBuildingValue;
+    const c = coercePositiveNumber(averageBuildingValue as unknown);
+    if (c != null) return c;
+    return typeof averageBuildingValue === "number" && averageBuildingValue > 0 ? averageBuildingValue : undefined;
+  }, [isFranceData, averageBuildingValue]);
+
   React.useEffect(() => {
     if (!isFR) return;
     if (!activeInsightsData || typeof activeInsightsData !== "object") return;
@@ -855,8 +879,8 @@ export function PropertyValueCard({
                 <div className="mt-0.5 text-sm font-semibold text-zinc-200">
                   {isLoading ? (
                     <span className="inline-block h-5 w-24 animate-pulse rounded bg-zinc-600/40" aria-hidden />
-                  ) : averageBuildingValue != null && averageBuildingValue > 0 ? (
-                    formatCurrency(averageBuildingValue, currencySymbol)
+                  ) : averageBuildingValueFrance != null && averageBuildingValueFrance > 0 ? (
+                    formatCurrency(averageBuildingValueFrance, currencySymbol)
                   ) : (
                     "—"
                   )}
@@ -897,7 +921,10 @@ export function PropertyValueCard({
                 </div>
               )}
             </div>
-          ) : isFranceData && propertyResult && hasFranceBuildingOrAreaData ? (
+          ) : isFranceData && propertyResult && hasFranceBuildingOrAreaData ? (() => {
+            const frRow = frPropertyResultForDisplay ?? propertyResult;
+            if (!frRow) return null;
+            return (
             <div className="space-y-1">
               {promptForApartment && (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1">
@@ -947,25 +974,25 @@ export function PropertyValueCard({
               )}
               <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-2 py-1">
                 <div className="text-[8px] uppercase tracking-wider text-violet-400/90">
-                  {propertyResult.value_level === "building-level" ? "Building-level estimate" : propertyResult.value_level === "area-level" ? "Area-level estimate" : "Estimated value"}
+                  {frRow.value_level === "building-level" ? "Building-level estimate" : frRow.value_level === "area-level" ? "Area-level estimate" : "Estimated value"}
                 </div>
                 {lotNumber && (
-                  <div className="mt-0.5 text-[9px] text-zinc-400">Lot: {lotNumber}</div>
+                  <div className="mt-0.5 text-[9px] text-zinc-400">Lot: {String(lotNumber)}</div>
                 )}
                 <div className="mt-0.5 text-sm font-semibold text-violet-300">
-                  {propertyResult.exact_value != null && propertyResult.exact_value > 0
-                    ? formatCurrency(propertyResult.exact_value, currencySymbol)
-                    : (propertyResult.value_level === "building-level" || propertyResult.value_level === "area-level") &&
-                      (propertyResult.street_average != null && propertyResult.street_average > 0)
-                    ? formatCurrency(propertyResult.street_average, currencySymbol)
-                    : (propertyResult.exact_value_message ?? "No DVF data for this area")}
+                  {frRow.exact_value != null && frRow.exact_value > 0
+                    ? formatCurrency(frRow.exact_value, currencySymbol)
+                    : (frRow.value_level === "building-level" || frRow.value_level === "area-level") &&
+                      (frRow.street_average != null && frRow.street_average > 0)
+                    ? formatCurrency(frRow.street_average, currencySymbol)
+                    : (frRow.exact_value_message ?? "No DVF data for this area")}
                 </div>
-                {apartmentNotMatched && propertyResult.exact_value_message && (
-                  <div className="mt-0.5 text-[9px] text-amber-400/90">{propertyResult.exact_value_message}</div>
+                {apartmentNotMatched && frRow.exact_value_message && (
+                  <div className="mt-0.5 text-[9px] text-amber-400/90">{frRow.exact_value_message}</div>
                 )}
-                {surfaceReelleBati != null && surfaceReelleBati > 0 && propertyResult.exact_value != null && propertyResult.exact_value > 0 && (
+                {surfaceReelleBatiFrance != null && surfaceReelleBatiFrance > 0 && frRow.exact_value != null && frRow.exact_value > 0 && (
                   <div className="mt-0.5 text-[9px] text-zinc-400">
-                    Estimated €/m²: {formatCurrency(Math.round(propertyResult.exact_value / surfaceReelleBati), currencySymbol)}/m²
+                    Estimated €/m²: {formatCurrency(Math.round(frRow.exact_value / surfaceReelleBatiFrance), currencySymbol)}/m²
                   </div>
                 )}
                 <div className="mt-0.5 text-[9px] text-zinc-500">DVF government data</div>
@@ -973,34 +1000,34 @@ export function PropertyValueCard({
               <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
                 <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Last transaction</div>
                 <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
-                  {propertyResult.last_transaction.amount > 0
-                    ? `${formatCurrency(propertyResult.last_transaction.amount, currencySymbol)}${propertyResult.last_transaction.date ? ` · Sold in: ${formatSaleDate(propertyResult.last_transaction.date)}` : ""}`
-                    : (propertyResult.last_transaction.message ?? "No recorded transaction")}
+                  {frRow.last_transaction.amount > 0
+                    ? `${formatCurrency(frRow.last_transaction.amount, currencySymbol)}${frRow.last_transaction.date ? ` · Sold in: ${formatSaleDate(frRow.last_transaction.date)}` : ""}`
+                    : (frRow.last_transaction.message ?? "No recorded transaction")}
                 </div>
-                {surfaceReelleBati != null && surfaceReelleBati > 0 && propertyResult.last_transaction.amount > 0 && (
+                {surfaceReelleBatiFrance != null && surfaceReelleBatiFrance > 0 && frRow.last_transaction.amount > 0 && (
                   <div className="mt-0.5 text-[9px] text-zinc-400">
-                    Last transaction €/m²: {formatCurrency(Math.round(propertyResult.last_transaction.amount / surfaceReelleBati), currencySymbol)}/m²
+                    Last transaction €/m²: {formatCurrency(Math.round(frRow.last_transaction.amount / surfaceReelleBatiFrance), currencySymbol)}/m²
                   </div>
                 )}
               </div>
               <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
                 <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Area average</div>
                 <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
-                  {propertyResult.street_average != null && propertyResult.street_average > 0
-                    ? formatCurrency(propertyResult.street_average, currencySymbol)
-                    : (propertyResult.street_average_message ?? "No DVF data for this area")}
+                  {frRow.street_average != null && frRow.street_average > 0
+                    ? formatCurrency(frRow.street_average, currencySymbol)
+                    : (frRow.street_average_message ?? "No DVF data for this area")}
                 </div>
               </div>
               <div className="rounded-lg border border-zinc-500/20 bg-zinc-500/5 px-2 py-1">
                 <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Livability</div>
                 <div className={`mt-0.5 text-[11px] font-medium ${
-                  propertyResult.livability_rating === "EXCELLENT" ? "text-emerald-400" :
-                  propertyResult.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
-                  propertyResult.livability_rating === "GOOD" ? "text-amber-400" :
-                  propertyResult.livability_rating === "FAIR" ? "text-amber-500/90" :
+                  frRow.livability_rating === "EXCELLENT" ? "text-emerald-400" :
+                  frRow.livability_rating === "VERY GOOD" ? "text-emerald-500/90" :
+                  frRow.livability_rating === "GOOD" ? "text-amber-400" :
+                  frRow.livability_rating === "FAIR" ? "text-amber-500/90" :
                   "text-zinc-400"
                 }`}>
-                  {propertyResult.livability_rating}
+                  {frRow.livability_rating}
                 </div>
               </div>
               {Array.isArray(buildingSales) && buildingSales.length > 0 && (
@@ -1050,7 +1077,8 @@ export function PropertyValueCard({
                 </CollapsibleSection>
               )}
             </div>
-          ) : isIsrael && propertyResult ? (
+            );
+          })() : isIsrael && propertyResult ? (
             <div className="space-y-1.5" dir="rtl">
               <div className="rounded-full border border-zinc-600/50 bg-zinc-900/80 px-3 py-2">
                 <div className="text-[9px] font-medium uppercase tracking-wider text-amber-400/90">שווי נכס כיום</div>

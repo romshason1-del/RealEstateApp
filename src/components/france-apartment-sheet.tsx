@@ -5,6 +5,14 @@ import { Calendar, Database, Star, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
 import type { FrancePropertyResponse } from "@/lib/france-response-contract";
+import {
+  coerceConfidenceLabel,
+  coerceDisplayString,
+  coerceFiniteNumber,
+  coerceNullableString,
+  coercePositiveNumber,
+  unwrapScalar,
+} from "@/lib/fr-display-safe";
 
 type FranceSheetProps = {
   address: string;
@@ -45,9 +53,11 @@ function normalizePricePerSqmEuros(raw: number): number {
   return raw;
 }
 
-/** €/m² from API raw (centimes heuristic) + fr-FR grouping. */
-function formatPricePerSqmFromApi(rawPerM2: number, symbol: string, withMedianSuffix = true): string {
-  const n = Math.round(normalizePricePerSqmEuros(rawPerM2));
+/** €/m² from API raw (centimes heuristic) + fr-FR grouping. Accepts `{ value: n }` from some serializers. */
+function formatPricePerSqmFromApi(rawPerM2: unknown, symbol: string, withMedianSuffix = true): string {
+  const coerced = coerceFiniteNumber(rawPerM2);
+  if (coerced == null || coerced <= 0) return `—\u00a0${symbol}/m²`;
+  const n = Math.round(normalizePricePerSqmEuros(coerced));
   const base = `${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}\u00a0${symbol}/m²`;
   return withMedianSuffix ? `${base} (median)` : base;
 }
@@ -319,14 +329,7 @@ export function FranceApartmentSheet({
   }, [effectiveDetectClass, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded, isDev]);
 
   const displayConfidence = React.useMemo(() => {
-    const c = normalized?.confidence;
-    if (!c) return null;
-    const s = String(c).replace(/_/g, "-");
-    // Capitalize
-    return s
-      .split("-")
-      .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : p))
-      .join("-");
+    return coerceConfidenceLabel(normalized?.confidence as unknown);
   }, [normalized?.confidence]);
 
   const sourceLabel = React.useMemo(() => {
@@ -357,8 +360,8 @@ export function FranceApartmentSheet({
   }, [normalized?.resultType]);
 
   const matchDetails = React.useMemo(() => {
-    const requested = normalized?.requestedLot;
-    const matched = normalized?.matchedLot;
+    const requested = coerceNullableString(normalized?.requestedLot as unknown);
+    const matched = coerceNullableString(normalized?.matchedLot as unknown);
     if (!requested && !matched) return null;
     if (requested && matched && requested !== matched) {
       return { requested, matched, differs: true };
@@ -802,36 +805,34 @@ export function FranceApartmentSheet({
       : (subtitle || fr?.matchExplanation || null);
 
     const fv = (parsed as any)?.fr_valuation_display as FranceValuationDisplay | undefined;
-    const topEstimated = (parsed as any)?.estimated_value as number | null | undefined;
-    const topPricePerM2 = (parsed as any)?.price_per_m2 as number | null | undefined;
-    const topDisplayValue = (parsed as any)?.display_value as number | null | undefined;
-    const topDisplayValueType = (parsed as any)?.display_value_type as string | null | undefined;
+    const topEstimated = coercePositiveNumber((parsed as any)?.estimated_value);
+    const topPricePerM2 = coercePositiveNumber((parsed as any)?.price_per_m2);
+    const topDisplayValue = coercePositiveNumber((parsed as any)?.display_value);
+    const topDisplayValueType = coerceNullableString((parsed as any)?.display_value_type);
+    const fvEst = coercePositiveNumber(fv?.estimated_value as unknown);
+    const fvPpm = coercePositiveNumber(fv?.price_per_m2 as unknown);
+    const fvDisp = coercePositiveNumber(fv?.display_value as unknown);
+    const fvDispType = coerceNullableString(fv?.display_value_type as unknown);
 
+    const txFromProp = coercePositiveNumber(fr?.property?.transactionValue as unknown);
     const rawValue =
-      fr?.property?.transactionValue ??
-      (typeof fv?.estimated_value === "number" && fv.estimated_value > 0 ? fv.estimated_value : null) ??
-      (typeof topEstimated === "number" && topEstimated > 0 ? topEstimated : null) ??
-      (typeof pr?.exact_value === "number" && pr.exact_value > 0 ? pr.exact_value : null) ??
-      (fr?.resultType === "building_level" ? (fr?.buildingStats?.avgTransactionValue ?? legacy?.averageBuildingValue ?? null) : null);
+      txFromProp ??
+      fvEst ??
+      topEstimated ??
+      coercePositiveNumber(pr?.exact_value) ??
+      (fr?.resultType === "building_level"
+        ? coercePositiveNumber(fr?.buildingStats?.avgTransactionValue as unknown) ??
+          coercePositiveNumber(legacy?.averageBuildingValue as unknown)
+        : null);
     const hasValue = typeof rawValue === "number" && rawValue > 0;
     const ppm2FromApi =
-      (typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0 ? fr.property.pricePerSqm : null) ??
-      (typeof fv?.price_per_m2 === "number" && fv.price_per_m2 > 0 ? fv.price_per_m2 : null) ??
-      (typeof topPricePerM2 === "number" && topPricePerM2 > 0 ? topPricePerM2 : null) ??
-      (typeof pr?.street_average === "number" && pr.street_average > 0 ? pr.street_average : null) ??
-      (fv?.display_value_type === "price_per_m2" &&
-      typeof fv?.display_value === "number" &&
-      fv.display_value > 0
-        ? fv.display_value
-        : null) ??
-      (topDisplayValueType === "price_per_m2" &&
-      typeof topDisplayValue === "number" &&
-      topDisplayValue > 0
-        ? topDisplayValue
-        : null) ??
-      (typeof rd?.winning_median_price_per_m2 === "number" && rd.winning_median_price_per_m2 > 0
-        ? rd.winning_median_price_per_m2
-        : null);
+      coercePositiveNumber(fr?.property?.pricePerSqm as unknown) ??
+      fvPpm ??
+      topPricePerM2 ??
+      coercePositiveNumber(pr?.street_average) ??
+      (fvDispType === "price_per_m2" && fvDisp != null && fvDisp > 0 ? fvDisp : null) ??
+      (topDisplayValueType === "price_per_m2" && topDisplayValue != null && topDisplayValue > 0 ? topDisplayValue : null) ??
+      coercePositiveNumber(rd?.winning_median_price_per_m2);
     const ppm2Display =
       ppm2FromApi != null ? normalizePricePerSqmEuros(ppm2FromApi) : null;
     const isNoResult =
@@ -846,17 +847,16 @@ export function FranceApartmentSheet({
     const isSuspiciousFallback =
       isSuspiciousFallbackRaw &&
       !(
-        fv?.display_value_type === "price_per_m2" &&
+        fvDispType === "price_per_m2" &&
         fv?.has_display_value === true &&
-        (typeof fv?.price_per_m2 === "number" || typeof fv?.display_value === "number")
+        (fvPpm != null || fvDisp != null)
       );
 
-    const winningStepStr = String(rd?.winning_step ?? "").trim();
-    const winningSourceFromApi =
-      (typeof (parsed as any)?.winning_source_label === "string" && (parsed as any).winning_source_label.trim()) ||
-      (typeof fv?.winning_source_label === "string" && fv.winning_source_label.trim()) ||
-      (typeof rd?.winning_source_label === "string" && String(rd.winning_source_label).trim()) ||
-      "";
+    const winningStepStr = coerceDisplayString(rd?.winning_step, "").trim();
+    const winningParsed = coerceDisplayString((parsed as any)?.winning_source_label, "").trim();
+    const winningFv = coerceDisplayString(fv?.winning_source_label as unknown, "").trim();
+    const winningRd = coerceDisplayString(rd?.winning_source_label, "").trim();
+    const winningSourceFromApi = winningParsed || winningFv || winningRd || "";
     const hasFranceValuationWin =
       fr != null &&
       fr.success !== false &&
@@ -895,10 +895,10 @@ export function FranceApartmentSheet({
       !isLoadingNow &&
       !isSuspiciousFallback;
 
+    const transactionCountRaw =
+      !isLoadingNow ? coerceFiniteNumber(fr?.buildingStats?.transactionCount as unknown) : null;
     const transactionCount =
-      !isLoadingNow && typeof fr?.buildingStats?.transactionCount === "number" && fr.buildingStats.transactionCount > 0
-        ? fr.buildingStats.transactionCount
-        : null;
+      transactionCountRaw != null && transactionCountRaw > 0 ? Math.round(transactionCountRaw) : null;
 
     const valueRange = (() => {
       if (isLoadingNow) return null;
@@ -906,12 +906,11 @@ export function FranceApartmentSheet({
       if (isSuspiciousFallback) return null;
       // Only show a range when we have enough building comparables to support it.
       if (fr?.resultType !== "building_level" && fr?.resultType !== "similar_apartment_same_building") return null;
-      const displayedSurface =
-        typeof fr?.property?.surfaceArea === "number" && fr.property.surfaceArea > 0 ? fr.property.surfaceArea : null;
+      const displayedSurfaceRaw = coercePositiveNumber(fr?.property?.surfaceArea as unknown);
+      const displayedSurface = displayedSurfaceRaw;
+      const displayedPricePerSqmRaw = coercePositiveNumber(fr?.property?.pricePerSqm as unknown);
       const displayedPricePerSqm =
-        typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0
-          ? normalizePricePerSqmEuros(fr.property.pricePerSqm)
-          : null;
+        displayedPricePerSqmRaw != null ? normalizePricePerSqmEuros(displayedPricePerSqmRaw) : null;
 
       const rangeCandidates = (fr?.comparables ?? [])
         .map((c) => {
@@ -972,9 +971,7 @@ export function FranceApartmentSheet({
     const showEstimatedValueSubLabel = !isPricePerM2OnlyHeadline && (hasValue || valueRange != null);
 
     const lastTxValue =
-      !isLoadingNow && !isNoResult && typeof fr?.property?.transactionValue === "number" && fr.property.transactionValue > 0
-        ? fr.property.transactionValue
-        : null;
+      !isLoadingNow && !isNoResult ? coercePositiveNumber(fr?.property?.transactionValue as unknown) : null;
     const estimatedEqualsLastTx =
       !isLoadingNow &&
       !isNoResult &&
@@ -1015,28 +1012,33 @@ export function FranceApartmentSheet({
       return `${y}-${m}-${day}`;
     };
 
-    const dateText = isLoadingNow ? "—" : formatDisplayDate(fr?.property?.transactionDate ?? null);
+    const dateRaw = unwrapScalar(fr?.property?.transactionDate as unknown);
+    const dateText = isLoadingNow
+      ? "—"
+      : formatDisplayDate(dateRaw != null ? String(dateRaw) : null);
+    const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
       : hasFranceValuationWin && winningSourceFromApi
         ? winningSourceFromApi
-        : typeof pr?.street_average_message === "string" &&
-            pr.street_average_message.trim() &&
-            !/no reliable data found/i.test(pr.street_average_message)
-          ? pr.street_average_message.trim()
+        : streetAvgMsg && !/no reliable data found/i.test(streetAvgMsg)
+          ? streetAvgMsg
           : sourceLabel || (isNoResult ? "No reliable data found" : "—");
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
-    const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
+    const livabilityText = isLoadingNow ? "—" : coerceDisplayString(legacy?.livabilityRating as unknown, "—");
     const flowMarker = shouldForceLotFirstFlow ? "FR Flow: apartment-first" : isHouseLikeUI ? "FR Flow: house-direct" : "FR Flow: fallback";
     const detectMarker = `FR Detect: ${String(parsed?.fr_detect ?? (shouldForceLotFirstFlow ? "apartment" : isHouseLikeUI ? "house" : "unclear"))}`;
     // Reuse the exact gold token used by the Search button and active Explore icon.
     const goldTextClass = "text-amber-400";
+    const frConfNorm = String(unwrapScalar(fr?.confidence as unknown) ?? "")
+      .toLowerCase()
+      .replace(/_/g, "-");
     const confidenceTone =
       isLoadingNow
         ? "border-white/10 bg-white/5 text-zinc-200"
-        : fr?.confidence === "high" || fr?.confidence === "medium_high"
+        : frConfNorm === "high" || frConfNorm === "medium-high" || frConfNorm === "medium_high"
           ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-          : fr?.confidence === "medium" || fr?.confidence === "low_medium"
+          : frConfNorm === "medium" || frConfNorm === "low-medium" || frConfNorm === "low_medium"
             ? "border-amber-400/20 bg-amber-400/10 text-amber-200"
             : "border-rose-400/20 bg-rose-400/10 text-rose-200";
 
@@ -1158,10 +1160,9 @@ export function FranceApartmentSheet({
                     ? "—"
                     : fr?.resultType === "exact_apartment" &&
                         !isNoResult &&
-                        fr?.property?.transactionValue &&
-                        fr.property.transactionValue > 0 &&
-                        fr?.property?.transactionDate
-                      ? `${formatCurrency(fr.property.transactionValue, currencySymbol)} • ${formatDisplayDate(fr?.property?.transactionDate ?? null)}`
+                        coercePositiveNumber(fr?.property?.transactionValue as unknown) != null &&
+                        unwrapScalar(fr?.property?.transactionDate as unknown) != null
+                      ? `${formatCurrency(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0, currencySymbol)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))}`
                       : "No exact recent transaction available"}
                 </div>
               </div>
@@ -1266,22 +1267,32 @@ export function FranceApartmentSheet({
                         {matchDetails?.matched ? (
                           <div>Data taken from lot: <span className="font-medium text-white">{matchDetails.matched}</span></div>
                         ) : null}
-                        {fr?.property?.surfaceArea ? (
-                          <div>Surface: <span className="font-medium text-white">{fr.property.surfaceArea} m²</span></div>
+                        {coercePositiveNumber(fr?.property?.surfaceArea as unknown) != null ? (
+                          <div>
+                            Surface:{" "}
+                            <span className="font-medium text-white">
+                              {coercePositiveNumber(fr?.property?.surfaceArea as unknown)} m²
+                            </span>
+                          </div>
                         ) : null}
-                        {!isSuspiciousFallback && fr?.property?.pricePerSqm ? (
+                        {!isSuspiciousFallback && coercePositiveNumber(fr?.property?.pricePerSqm as unknown) != null ? (
                           <div>
                             Price/m²:{" "}
                             <span className="font-medium text-white">
-                              {formatPricePerSqmFromApi(fr.property.pricePerSqm, currencySymbol, false)}
+                              {formatPricePerSqmFromApi(fr?.property?.pricePerSqm, currencySymbol, false)}
                             </span>
                           </div>
                         ) : null}
                         {isSuspiciousFallback ? (
                           <div>Price/m²: <span className="font-medium text-white">Suppressed (suspicious)</span></div>
                         ) : null}
-                        {fr?.property?.propertyType ? (
-                          <div>Property type: <span className="font-medium text-white">{fr.property.propertyType}</span></div>
+                        {coerceDisplayString(fr?.property?.propertyType as unknown, "").trim() ? (
+                          <div>
+                            Property type:{" "}
+                            <span className="font-medium text-white">
+                              {coerceDisplayString(fr?.property?.propertyType as unknown, "—")}
+                            </span>
+                          </div>
                         ) : null}
                         {/* Secondary rows hidden by default */}
                         <div>Date: <span className="font-medium text-white">{dateText}</span></div>
