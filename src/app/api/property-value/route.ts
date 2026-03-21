@@ -2939,6 +2939,156 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      // NEARBY fallback: same postcode, nearby streets/addresses — before no_data
+      const tryNearbyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
+        if (!postcodeNorm || !cityNorm) return null;
+        const isHouse = detectClass === "house";
+        const isApartment = detectClass === "apartment";
+        const tryBoth = detectClass === "unclear";
+
+        const houseLikeFilter = `(
+          LOWER(TRIM(CAST(property_type AS STRING))) LIKE '%maison%'
+          OR LOWER(TRIM(CAST(property_type AS STRING))) LIKE '%villa%'
+          OR LOWER(TRIM(CAST(property_type AS STRING))) LIKE '%pavillon%'
+          OR LOWER(TRIM(CAST(property_type AS STRING))) = 'local'
+          OR TRIM(CAST(property_type AS STRING)) = ''
+        )`;
+        const apartmentFilter = `LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'`;
+
+        const runNearbyQuery = async (filter: string) => {
+          const q = `
+            SELECT price_per_m2, surface_m2, street, house_number, last_sale_date, city
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode))
+              AND ${filter}
+            LIMIT 400
+          `;
+          return queryWithTimeout<[
+            Array<{ price_per_m2?: unknown; street?: unknown; house_number?: unknown; last_sale_date?: unknown; city?: unknown }>
+          ]>({ query: q, params: { country: country || "", postcode: postcodeNorm } }, "nearby_fallback_query");
+        };
+
+        try {
+          let usedHouseFilter = isHouse || tryBoth;
+          let [nearbyRows] = await runNearbyQuery(usedHouseFilter ? houseLikeFilter : apartmentFilter);
+          if (tryBoth && (nearbyRows ?? []).length === 0) {
+            [nearbyRows] = await runNearbyQuery(apartmentFilter);
+            usedHouseFilter = false;
+          }
+
+          const rows = (nearbyRows ?? []) as Array<{
+            price_per_m2?: unknown;
+            street?: unknown;
+            house_number?: unknown;
+            last_sale_date?: unknown;
+            city?: unknown;
+          }>;
+          const withPpm = rows
+            .map((r) => {
+              const ppm = frPropertyLatestFactsMoneyToEuros(r.price_per_m2);
+              const streetRaw = String(r.street ?? "").trim().toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+              const streetNormRow = streetRaw.replace(/^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i, "").trim();
+              const streetMatch = streetNorm && (streetNormRow.includes(streetNormalizedDet || "") || (streetNormalizedDet || "").includes(streetNormRow) || streetNormRow === streetNormalizedDet);
+              const cityMatch = cityNorm && String(r.city ?? "").trim().toLowerCase() === cityNorm.toLowerCase();
+              const hnRaw = r.house_number;
+              const hnNum = extractHouseNumberNumeric(String(hnRaw ?? ""));
+              const houseDist = houseNumberNumericTarget != null && hnNum != null ? Math.abs(hnNum - houseNumberNumericTarget) : 999;
+              const dateStr = r.last_sale_date != null ? String(r.last_sale_date).trim() || null : null;
+              return { ppm, streetMatch, cityMatch, houseDist, dateStr };
+            })
+            .filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null } => x.ppm != null && x.ppm > 0);
+
+          if (withPpm.length < 1) {
+            console.log("[FR_NEARBY] nearby_rows_found=0");
+            return null;
+          }
+
+          withPpm.sort((a, b) => {
+            if (a.streetMatch !== b.streetMatch) return a.streetMatch ? -1 : 1;
+            if (a.houseDist !== b.houseDist) return a.houseDist - b.houseDist;
+            const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
+            const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
+            return tb - ta;
+          });
+
+          const pool = withPpm.slice(0, Math.min(50, withPpm.length));
+          const ppmValues = pool.map((x) => x.ppm);
+          const ppmForMedian = ppmValues.length >= 5 ? frTrimFractionExtremes(ppmValues.map((p) => ({ p })), (x) => x.p, 0.1).map((x) => x.p) : ppmValues;
+          const medianPpm = medianNumber(ppmForMedian) ?? ppmValues[0];
+          if (medianPpm == null || medianPpm <= 0) return null;
+
+          const sameStreetCount = withPpm.filter((x) => x.streetMatch).length;
+          const nearbyScope =
+            sameStreetCount >= pool.length ? "same_street" : sameStreetCount > 0 ? "nearby_street" : "same_postcode";
+
+          const surfaceForEst = validInputSurfaceM2 ?? medianSurfaceM2ForFallback;
+          const estimated = surfaceForEst != null && surfaceForEst > 0 ? Math.round(surfaceForEst * medianPpm) : null;
+
+          const labelHouse = "Based on nearby similar houses";
+          const labelApt = "Based on nearby similar apartments";
+          const label = (tryBoth ? usedHouseFilter : isHouse) ? labelHouse : labelApt;
+          const propType = (tryBoth ? usedHouseFilter : isHouse) ? "Maison" : "Appartement";
+          const conf: "low" | "medium" = pool.length >= 5 ? "medium" : "low";
+
+          console.log("[FR_NEARBY] detect_class=" + String(detectClass));
+          console.log("[FR_NEARBY] nearby_rows_found=" + String(withPpm.length));
+          console.log("[FR_NEARBY] nearby_rows_used=" + String(pool.length));
+          console.log("[FR_NEARBY] nearby_scope=" + nearbyScope);
+          console.log("[FR_NEARBY] selected_price_per_m2=" + String(medianPpm));
+          console.log("[FR_NEARBY] selected_reason=" + (nearbyScope === "same_street" ? "same_street" : nearbyScope === "nearby_street" ? "nearby_street_with_same_street" : "same_postcode_only"));
+
+          frRuntimeDebug.winning_step = "nearby_fallback";
+          frRuntimeDebug.winning_source_label = label;
+          frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              fr_detect: frDetectToUse,
+              property_result: {
+                exact_value: estimated,
+                exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
+                value_level: "street-level",
+                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                street_average: medianPpm,
+                street_average_message: label,
+                livability_rating: "FAIR",
+              },
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "nearby_comparable",
+                confidence: conf,
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: {
+                  transactionDate: null,
+                  transactionValue: estimated,
+                  pricePerSqm: medianPpm,
+                  surfaceArea: surfaceForEst ?? null,
+                  rooms: null,
+                  propertyType: propType,
+                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                  postalCode: postcodeNorm || null,
+                  commune: cityNorm || null,
+                },
+                buildingStats: null,
+                comparables: [],
+                matchExplanation: label,
+              }),
+            },
+            "valuation_response"
+          );
+        } catch (e) {
+          console.log("[FR_NEARBY] query_error", (e as Error)?.message);
+          return null;
+        }
+      };
+
+      const nearbyWin = await tryNearbyFallback();
+      if (nearbyWin) return nearbyWin;
+
       const noDataReasonParts: string[] = [];
       if (exactApartmentRowsCount <= 0) noDataReasonParts.push("no_exact_lot_rows");
       if (exactApartmentRowsCount > 0 && exactUsableRowsCount <= 0) noDataReasonParts.push("exact_lot_rows_not_usable");
