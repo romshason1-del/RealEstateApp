@@ -15,9 +15,27 @@ type FranceSheetProps = {
   onClose: () => void;
 };
 
+/** Whole euro amounts (totals) — French grouping (narrow no-break space). */
 function formatCurrency(value: number, symbol: string): string {
-  if (!Number.isFinite(value)) return `${symbol}0`;
-  return `${symbol}${Math.round(value).toLocaleString("en-US")}`;
+  if (!Number.isFinite(value)) return `0\u00a0${symbol}`;
+  const n = Math.round(value);
+  return `${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}\u00a0${symbol}`;
+}
+
+/**
+ * Some gold paths store €/m² as centimes/m² (×100). Values > 100k are treated as centimes.
+ */
+function normalizePricePerSqmEuros(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return raw;
+  if (raw > 100_000) return raw / 100;
+  return raw;
+}
+
+/** €/m² from API raw (centimes heuristic) + fr-FR grouping. */
+function formatPricePerSqmFromApi(rawPerM2: number, symbol: string, withMedianSuffix = true): string {
+  const n = Math.round(normalizePricePerSqmEuros(rawPerM2));
+  const base = `${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}\u00a0${symbol}/m²`;
+  return withMedianSuffix ? `${base} (median)` : base;
 }
 
 export function FranceApartmentSheet({
@@ -421,6 +439,22 @@ export function FranceApartmentSheet({
     if (phase === "searched_no_exact_match_but_building_exists_state") {
       const lot = (requestedLot ?? "").trim();
       const rt = normalized?.resultType;
+      const ws = String((parsed as any)?.fr_runtime_debug?.winning_step ?? "").trim();
+      if (ws === "street_fallback") {
+        return lot
+          ? `No exact match for lot ${lot}. Estimates use similar properties on the same street.`
+          : "No exact lot match. Estimates use similar properties on the same street.";
+      }
+      if (ws === "commune_fallback") {
+        return lot
+          ? `No exact match for lot ${lot}. Estimates use similar properties in the same commune.`
+          : "No exact lot match. Estimates use similar properties in the same commune.";
+      }
+      if (ws === "building_level" || ws === "building_fallback") {
+        return lot
+          ? `No exact match for lot ${lot}. Estimates use similar properties in this building.`
+          : "No exact lot match. Estimates use similar properties in this building.";
+      }
       if (isHouseLikeUI) {
         if (rt === "similar_apartment_same_building" || rt === "nearby_comparable") {
           return lot
@@ -446,7 +480,7 @@ export function FranceApartmentSheet({
         : "No exact apartment match — showing building transaction data.";
     }
     return isHouseLikeUI ? "No matching property or building transaction data found." : "No matching apartment or building transaction data found.";
-  }, [phase, requestedLot, lotInput, normalized?.resultType, isHouseLikeUI, isPropertyTypeUnknown]);
+  }, [phase, requestedLot, lotInput, normalized?.resultType, isHouseLikeUI, isPropertyTypeUnknown, parsed?.fr_runtime_debug]);
 
   const submit = React.useCallback((source: "enter" | "button") => {
     const lot = lotInput.trim();
@@ -774,7 +808,7 @@ export function FranceApartmentSheet({
       (typeof pr?.exact_value === "number" && pr.exact_value > 0 ? pr.exact_value : null) ??
       (fr?.resultType === "building_level" ? (fr?.buildingStats?.avgTransactionValue ?? legacy?.averageBuildingValue ?? null) : null);
     const hasValue = typeof rawValue === "number" && rawValue > 0;
-    const ppm2Display =
+    const ppm2FromApi =
       (typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0 ? fr.property.pricePerSqm : null) ??
       (typeof fv?.price_per_m2 === "number" && fv.price_per_m2 > 0 ? fv.price_per_m2 : null) ??
       (typeof topPricePerM2 === "number" && topPricePerM2 > 0 ? topPricePerM2 : null) ??
@@ -792,6 +826,8 @@ export function FranceApartmentSheet({
       (typeof rd?.winning_median_price_per_m2 === "number" && rd.winning_median_price_per_m2 > 0
         ? rd.winning_median_price_per_m2
         : null);
+    const ppm2Display =
+      ppm2FromApi != null ? normalizePricePerSqmEuros(ppm2FromApi) : null;
     const isNoResult =
       !isLoadingNow &&
       (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
@@ -809,9 +845,45 @@ export function FranceApartmentSheet({
         (typeof fv?.price_per_m2 === "number" || typeof fv?.display_value === "number")
       );
 
+    const winningStepStr = String(rd?.winning_step ?? "").trim();
+    const winningSourceFromApi =
+      (typeof (parsed as any)?.winning_source_label === "string" && (parsed as any).winning_source_label.trim()) ||
+      (typeof fv?.winning_source_label === "string" && fv.winning_source_label.trim()) ||
+      (typeof rd?.winning_source_label === "string" && String(rd.winning_source_label).trim()) ||
+      "";
+    const hasFranceValuationWin =
+      fr != null &&
+      fr.success !== false &&
+      winningStepStr.length > 0 &&
+      winningStepStr !== "no_data" &&
+      !isNoResult;
+
+    const basedOnExplainer = (() => {
+      if (isLoadingNow || isNoResult) return null;
+      const ws = winningStepStr;
+      if (ws === "exact") return "Based on exact property match";
+      if (ws === "building_level" || ws === "building_fallback")
+        return "Based on similar properties in this building";
+      if (ws === "street_fallback") return "Based on similar properties on the same street";
+      if (ws === "commune_fallback") return "Based on similar properties in the same commune";
+      if (fr?.resultType === "exact_apartment") return "Based on exact property match";
+      if (fr?.resultType === "building_level" || fr?.resultType === "building_fallback")
+        return "Based on similar properties in this building";
+      if (fr?.resultType === "nearby_comparable")
+        return isHouseLikeUI
+          ? "Based on nearby comparable houses"
+          : "Based on nearby comparable apartments";
+      if (fr?.resultType === "similar_apartment_same_building")
+        return isHouseLikeUI
+          ? "Based on nearby property transactions"
+          : "Based on similar apartments in the same building";
+      return null;
+    })();
+
     // Rule: estimated_value null + price_per_m2 (or display_value) → show €/m² in headline, not "—".
     const hasPricePerM2Headline =
       !hasValue &&
+      ppm2FromApi != null &&
       ppm2Display != null &&
       !isNoResult &&
       !isLoadingNow &&
@@ -831,7 +903,9 @@ export function FranceApartmentSheet({
       const displayedSurface =
         typeof fr?.property?.surfaceArea === "number" && fr.property.surfaceArea > 0 ? fr.property.surfaceArea : null;
       const displayedPricePerSqm =
-        typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0 ? fr.property.pricePerSqm : null;
+        typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0
+          ? normalizePricePerSqmEuros(fr.property.pricePerSqm)
+          : null;
 
       const rangeCandidates = (fr?.comparables ?? [])
         .map((c) => {
@@ -913,8 +987,8 @@ export function FranceApartmentSheet({
           ? "No reliable price available"
           : hasValue
             ? formatCurrency(rawValue, currencySymbol)
-            : hasPricePerM2Headline && ppm2Display != null
-              ? `${Math.round(ppm2Display).toLocaleString("en-US")} ${currencySymbol}/m² (median)`
+            : hasPricePerM2Headline && ppm2FromApi != null
+              ? formatPricePerSqmFromApi(ppm2FromApi, currencySymbol, true)
             : fr?.resultType === "building_level"
               ? "No reliable building value available"
               : "—";
@@ -933,10 +1007,13 @@ export function FranceApartmentSheet({
     const dateText = isLoadingNow ? "—" : formatDisplayDate(fr?.property?.transactionDate ?? null);
     const sourceText = isLoadingNow
       ? "—"
-      : (typeof pr?.street_average_message === "string" && pr.street_average_message.trim()
+      : hasFranceValuationWin && winningSourceFromApi
+        ? winningSourceFromApi
+        : typeof pr?.street_average_message === "string" &&
+            pr.street_average_message.trim() &&
+            !/no reliable data found/i.test(pr.street_average_message)
           ? pr.street_average_message.trim()
-          : (sourceLabel ||
-              (fr?.success === false ? "No reliable data found" : "Area fallback")));
+          : sourceLabel || (isNoResult ? "No reliable data found" : "—");
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : (legacy?.livabilityRating ?? "—");
     const flowMarker = shouldForceLotFirstFlow ? "FR Flow: apartment-first" : isHouseLikeUI ? "FR Flow: house-direct" : "FR Flow: fallback";
@@ -1006,8 +1083,6 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
-              <div className="mt-1 text-[10px] font-semibold text-zinc-400">{flowMarker}</div>
-              <div className="mt-0.5 text-[10px] font-semibold text-zinc-400">{detectMarker}</div>
             </div>
 
             {/* Core summary – 4 primary sections */}
@@ -1055,23 +1130,7 @@ export function FranceApartmentSheet({
                   <div className="mt-1 text-xs font-medium leading-tight text-zinc-300/75">
                     {frDetect === "unclear" && isNoResult
                       ? "Try another address with confirmed France DVF coverage."
-                      : fr?.resultType === "exact_apartment"
-                        ? "Based on an exact transaction for this property"
-                        : fr?.resultType === "similar_apartment_same_building"
-                          ? isHouseLikeUI
-                            ? "Based on nearby property transactions"
-                            : "Based on similar apartments in the same building"
-                          : fr?.resultType === "nearby_comparable"
-                            ? isHouseLikeUI
-                              ? "Based on nearby comparable houses"
-                              : "Based on nearby comparable apartments"
-                            : fr?.resultType === "building_level"
-                              ? isHouseLikeUI
-                                ? "Based on recent house transactions in this building"
-                                : "Based on recent transactions in this building"
-                              : fr?.resultType === "no_reliable_data"
-                                ? "Not enough reliable data to estimate value"
-                                : null}
+                      : basedOnExplainer}
                   </div>
                 ) : null}
               </div>
@@ -1122,6 +1181,10 @@ export function FranceApartmentSheet({
                 {isFranceDebugOpen ? (
                   <div className="mt-1 rounded-[10px] border border-white/10 bg-black/15 px-2.5 py-2 overflow-hidden">
                     <div className="text-[10px] uppercase tracking-wider text-zinc-400/90 font-medium">fr_runtime_debug</div>
+                    <div className="mt-2 space-y-0.5 text-[10px] leading-tight text-zinc-400/90">
+                      <div className="font-mono">{flowMarker}</div>
+                      <div className="font-mono">{detectMarker}</div>
+                    </div>
                     <div className="mt-2 font-mono text-[10px] leading-tight text-zinc-200/80 space-y-0.5">
                       <div>ban_city: {toDebugStr(rd?.ban_city)}</div>
                       <div>ban_postcode: {toDebugStr(rd?.ban_postcode)}</div>
@@ -1197,7 +1260,7 @@ export function FranceApartmentSheet({
                           <div>
                             Price/m²:{" "}
                             <span className="font-medium text-white">
-                              {Math.round(fr.property.pricePerSqm).toLocaleString("en-US")} {currencySymbol}
+                              {formatPricePerSqmFromApi(fr.property.pricePerSqm, currencySymbol, false)}
                             </span>
                           </div>
                         ) : null}
