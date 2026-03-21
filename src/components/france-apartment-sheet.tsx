@@ -753,10 +753,23 @@ export function FranceApartmentSheet({
       ? ((requestedLot ?? "").trim() ? `Searching lot ${(requestedLot ?? "").trim()} for this address` : "Searching building data for this address")
       : (subtitle || fr?.matchExplanation || null);
 
+    const fv = (parsed as any)?.fr_valuation_display as
+      | {
+          estimated_value?: number | null;
+          price_per_m2?: number | null;
+          has_display_value?: boolean;
+        }
+      | undefined;
     const rawValue =
       fr?.property?.transactionValue ??
+      (typeof fv?.estimated_value === "number" && fv.estimated_value > 0 ? fv.estimated_value : null) ??
+      (typeof pr?.exact_value === "number" && pr.exact_value > 0 ? pr.exact_value : null) ??
       (fr?.resultType === "building_level" ? (fr?.buildingStats?.avgTransactionValue ?? legacy?.averageBuildingValue ?? null) : null);
     const hasValue = typeof rawValue === "number" && rawValue > 0;
+    const ppm2Display =
+      (typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0 ? fr.property.pricePerSqm : null) ??
+      (typeof fv?.price_per_m2 === "number" && fv.price_per_m2 > 0 ? fv.price_per_m2 : null) ??
+      (typeof pr?.street_average === "number" && pr.street_average > 0 ? pr.street_average : null);
     const isNoResult =
       !isLoadingNow &&
       (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
@@ -765,6 +778,13 @@ export function FranceApartmentSheet({
       !isLoadingNow &&
       (fr?.resultType === "similar_apartment_same_building" || fr?.resultType === "nearby_comparable") &&
       (fr?.debug?.suspiciousPolicy === "warning" || fr?.debug?.suspiciousPricePerSqm === true);
+
+    const hasPricePerM2Headline =
+      !hasValue &&
+      ppm2Display != null &&
+      !isNoResult &&
+      !isLoadingNow &&
+      !isSuspiciousFallback;
 
     const transactionCount =
       !isLoadingNow && typeof fr?.buildingStats?.transactionCount === "number" && fr.buildingStats.transactionCount > 0
@@ -850,13 +870,7 @@ export function FranceApartmentSheet({
       rawValue === lastTxValue;
 
     const displayPricePerSqm =
-      !isLoadingNow &&
-      !isNoResult &&
-      !isSuspiciousFallback &&
-      typeof fr?.property?.pricePerSqm === "number" &&
-      fr.property.pricePerSqm > 0
-        ? fr.property.pricePerSqm
-        : null;
+      !isLoadingNow && !isNoResult && !isSuspiciousFallback && ppm2Display != null ? ppm2Display : null;
 
     const mainValue = isLoadingNow
       ? "Searching…"
@@ -868,6 +882,8 @@ export function FranceApartmentSheet({
           ? "No reliable price available"
           : hasValue
             ? formatCurrency(rawValue, currencySymbol)
+            : hasPricePerM2Headline
+              ? `${Math.round(ppm2Display!).toLocaleString("en-US")} ${currencySymbol}/m² (median)`
             : fr?.resultType === "building_level"
               ? "No reliable building value available"
               : "—";

@@ -297,6 +297,11 @@ export async function GET(request: NextRequest) {
         });
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
+      // Strict: any non-empty apt param skips lot prompt (avoids normalize edge cases vs raw UI input).
+      const aptNumberRawTrimmed = (aptNumber ?? "").trim();
+      const submittedLotPresent =
+        aptNumberRawTrimmed.length > 0 ||
+        (normalizedRequestedLot != null && String(normalizedRequestedLot).length > 0);
       console.log("[FR_STEP] lot_received");
       console.log("[FR_LOT_API] apt_number raw", {
         apt_number: searchParams.get("apt_number"),
@@ -400,6 +405,9 @@ export async function GET(request: NextRequest) {
         has_surface_for_estimate: null,
         chosen_surface_value: null,
         no_data_reason: null,
+        submitted_lot_present: null,
+        exact_match_reason: null,
+        exact_lot_column_used: null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -420,25 +428,75 @@ export async function GET(request: NextRequest) {
       });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
+        frRuntimeDebug.submitted_lot_present = submittedLotPresent;
+
+        if (tag === "prompt_lot_first" && submittedLotPresent) {
+          console.error(
+            "[FR_RETURN] INVARIANT_VIOLATION prompt_lot_first with submitted_lot_present=true — check client request order"
+          );
+        }
+        if (tag === "valuation_response" && frRuntimeDebug.winning_step == null) {
+          console.error(
+            "[FR_RETURN] INVARIANT_VIOLATION valuation_response without winning_step — check ladder exit path"
+          );
+        }
+
         const pr = payload.property_result as Record<string, unknown> | undefined;
         const frObj = payload.fr as Record<string, unknown> | undefined;
         const prop = frObj?.property as Record<string, unknown> | null | undefined;
         const bs = frObj?.buildingStats as Record<string, unknown> | undefined;
         const exactVal = pr?.exact_value;
         const txVal = prop?.transactionValue;
-        const estimated_value_present =
-          (typeof exactVal === "number" && Number.isFinite(exactVal) && exactVal > 0) ||
-          (typeof txVal === "number" && Number.isFinite(txVal) && txVal > 0);
+        const lt = pr?.last_transaction as Record<string, unknown> | undefined;
+        const lastSaleAmt = lt?.amount;
+        const last_sale_price =
+          typeof lastSaleAmt === "number" && Number.isFinite(lastSaleAmt) && lastSaleAmt > 0 ? lastSaleAmt : null;
+        const last_sale_date =
+          lt?.date != null && String(lt.date).trim().length > 0 ? String(lt.date) : null;
+
         const ppmProp = prop?.pricePerSqm;
         const ppmBs = bs?.avgPricePerSqm;
-        const price_per_m2_present =
-          (typeof ppmProp === "number" && Number.isFinite(ppmProp) && ppmProp > 0) ||
-          (typeof ppmBs === "number" && Number.isFinite(ppmBs) && ppmBs > 0);
+        const price_per_m2 =
+          typeof ppmProp === "number" && Number.isFinite(ppmProp) && ppmProp > 0
+            ? ppmProp
+            : typeof ppmBs === "number" && Number.isFinite(ppmBs) && ppmBs > 0
+              ? ppmBs
+              : null;
+
+        const estimated_value =
+          typeof exactVal === "number" && Number.isFinite(exactVal) && exactVal > 0
+            ? exactVal
+            : typeof txVal === "number" && Number.isFinite(txVal) && txVal > 0
+              ? txVal
+              : null;
+
+        const estimated_value_present = estimated_value != null;
+        const price_per_m2_present = price_per_m2 != null;
+        const has_display_value = estimated_value_present || price_per_m2_present;
+
         const has_winner = tag === "valuation_response";
         const winning_step_str =
           frRuntimeDebug.winning_step == null ? "" : String(frRuntimeDebug.winning_step);
 
+        let outPayload: Record<string, unknown> = { ...payload };
+        if (tag === "valuation_response") {
+          const source_label = String(
+            frRuntimeDebug.winning_source_label ?? pr?.street_average_message ?? pr?.exact_value_message ?? ""
+          );
+          outPayload.fr_valuation_display = {
+            source_label,
+            winning_step: frRuntimeDebug.winning_step,
+            confidence: (frObj?.confidence as string) ?? "low",
+            estimated_value: estimated_value,
+            price_per_m2: price_per_m2,
+            last_sale_price,
+            last_sale_date,
+            has_display_value,
+          };
+        }
+
         console.log("[FR_LOT_API] response_tag", tag);
+        console.log("[FR_RETURN] submitted_lot_present=" + String(submittedLotPresent));
         console.log("[FR_RETURN] has_winner=" + String(has_winner));
         console.log("[FR_RETURN] winning_step=" + winning_step_str);
         console.log("[FR_RETURN] returning_tag=" + tag);
@@ -447,6 +505,7 @@ export async function GET(request: NextRequest) {
         );
         console.log("[FR_RETURN] estimated_value_present=" + String(estimated_value_present));
         console.log("[FR_RETURN] price_per_m2_present=" + String(price_per_m2_present));
+        console.log("[FR_RETURN] has_display_value=" + String(has_display_value));
         console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         // Not BAN-specific: every France exit path uses frReturn (valuation, lot prompt, no_data, etc.).
@@ -455,7 +514,10 @@ export async function GET(request: NextRequest) {
           ban_match_found: frRuntimeDebug.ban_match_found,
           ban_rows_count: frRuntimeDebug.ban_rows_count,
         });
-        return NextResponse.json({ ...payload, fr_runtime_debug: frRuntimeDebug }, status ? { status } : undefined);
+        return NextResponse.json(
+          { ...outPayload, fr_runtime_debug: frRuntimeDebug },
+          status ? { status } : undefined
+        );
       };
       const normalizeStreetForDetection = (s: string): string => {
         // Keep this intentionally strict: only strip voie-type prefixes the UI might include.
@@ -913,6 +975,32 @@ export async function GET(request: NextRequest) {
 
       const exactTable = "property_latest_facts";
       const exactTableInspection = await inspectFranceTable("EXACT", exactTable);
+      const pickExistingColumn = (cols: string[], wanted: string[]): string | null => {
+        const map = new Map(cols.map((c) => [c.toLowerCase(), c]));
+        for (const w of wanted) {
+          const hit = map.get(w.toLowerCase());
+          if (hit) return hit;
+        }
+        return null;
+      };
+      const lotLikeColsFromSchema = exactTableInspection.columns.filter((c) =>
+        /\b(lot|unit|local|ident|appart|porte|cadast|dvf|no_porte|no_lot|numero)/i.test(c)
+      );
+      const exactPrimaryLotColumn = pickExistingColumn(exactTableInspection.columns, [
+        "lot_1er",
+        "lot1er",
+        "unit_number",
+        "identifiant_local",
+        "local_id",
+        "numero_lot",
+        "no_lot",
+        "numero_de_lot",
+        "ref_lot",
+      ]);
+      frRuntimeDebug.exact_lot_column_used = exactPrimaryLotColumn;
+      console.log("[FR_EXACT] lot_column_used=" + String(exactPrimaryLotColumn ?? "none"));
+      console.log("[FR_EXACT] lot_like_schema_columns=" + JSON.stringify(lotLikeColsFromSchema));
+
       const exactQuery = `
         SELECT
           *
@@ -924,8 +1012,9 @@ export async function GET(request: NextRequest) {
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         LIMIT 50
       `;
-      const shouldPromptLotFirst = detectClass === "apartment" && !normalizedRequestedLot;
+      const shouldPromptLotFirst = detectClass === "apartment" && !submittedLotPresent;
       console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
+      console.log("[FR_LOT_API] submittedLotPresent", submittedLotPresent);
       console.log("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);
       console.log("[FR_FLOW] submitted_lot=" + String(normalizedRequestedLot ?? ""));
       console.log("[FR_FLOW] should_prompt_lot=" + String(shouldPromptLotFirst));
@@ -1034,6 +1123,11 @@ export async function GET(request: NextRequest) {
           else pushIf(v);
         }
 
+        // DVF / gold-table lot columns discovered at runtime (no guessed names in SQL).
+        for (const col of lotLikeColsFromSchema) {
+          pushIf((row as any)[col]);
+        }
+
         return tokens;
       };
 
@@ -1060,6 +1154,32 @@ export async function GET(request: NextRequest) {
 
       frRuntimeDebug.exact_rows_count = exactApartmentRowsCount;
       frRuntimeDebug.exact_usable_rows_count = exactUsableRowsCount;
+
+      const rawExactAddressRowsCount = (exactRows as Array<Record<string, unknown>>).length;
+      let exactMatchReason: string;
+      if (!exactLotToken) {
+        exactMatchReason = "no_submitted_lot_token_skipped_apartment_row_filter";
+      } else if (rawExactAddressRowsCount === 0) {
+        exactMatchReason = "no_rows_for_ban_normalized_address_in_property_latest_facts";
+      } else if (exactApartmentRowsCount === 0) {
+        const sample = (exactRows as Array<Record<string, unknown>>)[0];
+        const sampleTokens = sample ? extractLotTokensFromRow(sample) : [];
+        console.log("[FR_EXACT] sample_row_lot_tokens=" + JSON.stringify(sampleTokens));
+        exactMatchReason =
+          "address_rows_exist_but_no_lot_column_value_matches_submitted_token_" + String(exactLotToken);
+      } else if (exactUsableRowsCount === 0) {
+        exactMatchReason = "lot_rows_matched_but_missing_usable_surface_m2_or_price_per_m2";
+      } else {
+        exactMatchReason = "usable_exact_rows_available";
+      }
+      frRuntimeDebug.exact_match_reason = exactMatchReason;
+      console.log("[FR_EXACT] exact_match_reason=" + exactMatchReason);
+      console.log(
+        "[FR_EXACT] raw_address_rows_count=" +
+          String(rawExactAddressRowsCount) +
+          " filtered_lot_rows=" +
+          String(exactApartmentRowsCount)
+      );
 
       const usableExactRows = exactMatchingRows.filter((r) => {
         const surf = parseMaybeDecimal((r as any).surface_m2);
@@ -1406,7 +1526,8 @@ export async function GET(request: NextRequest) {
                 date: null,
                 message: "No exact recent transaction available",
               },
-              street_average: null,
+              // Median €/m² for UI when headline uses price/m² (same numeric scale as exact_value uses total €).
+              street_average: streetEstimate.avgPricePerM2,
               street_average_message: fallbackSourceStreet,
               livability_rating: "FAIR",
             },
@@ -1519,7 +1640,7 @@ export async function GET(request: NextRequest) {
                 date: null,
                 message: "No exact recent transaction available",
               },
-              street_average: null,
+              street_average: medianAvgPricePerM2,
             street_average_message:
               surfaceForEstimation == null
                 ? `${fallbackSourceCommune} — comparable pricing available, but exact estimate could not be computed (missing surface).`
@@ -1579,7 +1700,7 @@ export async function GET(request: NextRequest) {
                 date: null,
                 message: "No exact recent transaction available",
               },
-              street_average: null,
+              street_average: streetNonNumericFallback.avgPricePerM2,
               street_average_message: missingSurfaceMessage,
               livability_rating: "FAIR",
             },
