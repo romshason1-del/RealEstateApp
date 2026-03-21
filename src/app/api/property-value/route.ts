@@ -408,6 +408,7 @@ export async function GET(request: NextRequest) {
         submitted_lot_present: null,
         exact_match_reason: null,
         exact_lot_column_used: null,
+        winning_median_price_per_m2: null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -456,44 +457,103 @@ export async function GET(request: NextRequest) {
 
         const ppmProp = prop?.pricePerSqm;
         const ppmBs = bs?.avgPricePerSqm;
-        const price_per_m2 =
+        const streetAvgPr = pr?.street_average;
+        const ppmFromStreetAvg =
+          typeof streetAvgPr === "number" && Number.isFinite(streetAvgPr) && streetAvgPr > 0 ? streetAvgPr : null;
+        const wppDbg = frRuntimeDebug.winning_median_price_per_m2;
+        const ppmFromWinningDebug =
+          typeof wppDbg === "number" && Number.isFinite(wppDbg) && wppDbg > 0 ? wppDbg : null;
+        let price_per_m2 =
           typeof ppmProp === "number" && Number.isFinite(ppmProp) && ppmProp > 0
             ? ppmProp
             : typeof ppmBs === "number" && Number.isFinite(ppmBs) && ppmBs > 0
               ? ppmBs
-              : null;
+              : ppmFromStreetAvg ?? ppmFromWinningDebug;
 
-        const estimated_value =
+        let estimated_value =
           typeof exactVal === "number" && Number.isFinite(exactVal) && exactVal > 0
             ? exactVal
             : typeof txVal === "number" && Number.isFinite(txVal) && txVal > 0
               ? txVal
               : null;
 
-        const estimated_value_present = estimated_value != null;
-        const price_per_m2_present = price_per_m2 != null;
+        let winning_source_label = String(
+          frRuntimeDebug.winning_source_label ??
+            pr?.street_average_message ??
+            pr?.exact_value_message ??
+            ""
+        ).trim();
+        const confidence = String((frObj?.confidence as string) ?? "low");
+
+        let outPayload: Record<string, unknown> = { ...payload };
+        const hasWinningStep = frRuntimeDebug.winning_step != null && String(frRuntimeDebug.winning_step) !== "";
+
+        if (tag === "valuation_response") {
+          // No surface: ladder still provides median €/m² on property / street_average — ensure display path sees it.
+          if (price_per_m2 == null && ppmFromStreetAvg != null) {
+            price_per_m2 = ppmFromStreetAvg;
+          }
+          if (estimated_value == null && typeof exactVal === "number" && Number.isFinite(exactVal) && exactVal > 0) {
+            estimated_value = exactVal;
+          }
+
+          if (hasWinningStep && !winning_source_label) {
+            winning_source_label = "France valuation";
+          }
+
+          const evPos =
+            estimated_value != null &&
+            typeof estimated_value === "number" &&
+            Number.isFinite(estimated_value) &&
+            estimated_value > 0;
+          const ppmPos =
+            price_per_m2 != null &&
+            typeof price_per_m2 === "number" &&
+            Number.isFinite(price_per_m2) &&
+            price_per_m2 > 0;
+          // Displayable winner: total estimate and/or median €/m² (required when no surface).
+          const has_display_value = Boolean(evPos || ppmPos);
+
+          if (hasWinningStep && !has_display_value) {
+            console.error("[FR_RETURN] winning_step_set_but_no_price_or_estimate", {
+              winning_step: frRuntimeDebug.winning_step,
+              winning_source_label,
+            });
+          }
+
+          outPayload.fr_valuation_display = {
+            winning_source_label,
+            source_label: winning_source_label,
+            winning_step: frRuntimeDebug.winning_step,
+            confidence,
+            estimated_value: evPos ? estimated_value : null,
+            price_per_m2: ppmPos ? price_per_m2 : null,
+            last_sale_price,
+            last_sale_date,
+            has_display_value,
+          };
+          // Stable top-level fields for UI/clients (France valuation only).
+          outPayload.winning_source_label = winning_source_label;
+          outPayload.confidence = confidence;
+          outPayload.estimated_value = evPos ? estimated_value : null;
+          outPayload.price_per_m2 = ppmPos ? price_per_m2 : null;
+        }
+
+        const estimated_value_present =
+          estimated_value != null &&
+          typeof estimated_value === "number" &&
+          Number.isFinite(estimated_value) &&
+          estimated_value > 0;
+        const price_per_m2_present =
+          price_per_m2 != null &&
+          typeof price_per_m2 === "number" &&
+          Number.isFinite(price_per_m2) &&
+          price_per_m2 > 0;
         const has_display_value = estimated_value_present || price_per_m2_present;
 
         const has_winner = tag === "valuation_response";
         const winning_step_str =
           frRuntimeDebug.winning_step == null ? "" : String(frRuntimeDebug.winning_step);
-
-        let outPayload: Record<string, unknown> = { ...payload };
-        if (tag === "valuation_response") {
-          const source_label = String(
-            frRuntimeDebug.winning_source_label ?? pr?.street_average_message ?? pr?.exact_value_message ?? ""
-          );
-          outPayload.fr_valuation_display = {
-            source_label,
-            winning_step: frRuntimeDebug.winning_step,
-            confidence: (frObj?.confidence as string) ?? "low",
-            estimated_value: estimated_value,
-            price_per_m2: price_per_m2,
-            last_sale_price,
-            last_sale_date,
-            has_display_value,
-          };
-        }
 
         console.log("[FR_LOT_API] response_tag", tag);
         console.log("[FR_RETURN] submitted_lot_present=" + String(submittedLotPresent));
@@ -1020,6 +1080,11 @@ export async function GET(request: NextRequest) {
       console.log("[FR_FLOW] should_prompt_lot=" + String(shouldPromptLotFirst));
       console.log("[FR_FLOW] continue_to_valuation=" + String(!shouldPromptLotFirst));
       if (shouldPromptLotFirst) {
+        if (submittedLotPresent) {
+          console.error(
+            "[FR_RETURN] blocked_prompt_lot_first_submitted_lot_present=true — continuing to valuation ladder"
+          );
+        } else {
         console.log("[FR_GOLD] apartment_lot_prompt_triggered");
         console.log("[FR_LOT_API] response tag", "prompt_lot_first");
         return frReturn(
@@ -1057,6 +1122,7 @@ export async function GET(request: NextRequest) {
             },
             "prompt_lot_first"
           );
+        }
       }
 
       console.log("[FR_FLOW] ladder_step_started=EXACT");
@@ -1082,6 +1148,8 @@ export async function GET(request: NextRequest) {
       console.log("[FR_SQL] query_ok=true");
       console.log("[FR_SQL] rows_count=", (exactRows as any[])?.length ?? 0);
       console.log("[FR_SQL] columns_detected=", Object.keys(exactTableInspection.sampleRow ?? {}));
+
+      const rawExactHouseNumberRowCount = (exactRows as Array<Record<string, unknown>>).length;
 
       const normalizeLotToken = (v: unknown): string | null => {
         if (v === null || v === undefined) return null;
@@ -1155,11 +1223,10 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.exact_rows_count = exactApartmentRowsCount;
       frRuntimeDebug.exact_usable_rows_count = exactUsableRowsCount;
 
-      const rawExactAddressRowsCount = (exactRows as Array<Record<string, unknown>>).length;
       let exactMatchReason: string;
       if (!exactLotToken) {
         exactMatchReason = "no_submitted_lot_token_skipped_apartment_row_filter";
-      } else if (rawExactAddressRowsCount === 0) {
+      } else if (rawExactHouseNumberRowCount === 0) {
         exactMatchReason = "no_rows_for_ban_normalized_address_in_property_latest_facts";
       } else if (exactApartmentRowsCount === 0) {
         const sample = (exactRows as Array<Record<string, unknown>>)[0];
@@ -1176,7 +1243,7 @@ export async function GET(request: NextRequest) {
       console.log("[FR_EXACT] exact_match_reason=" + exactMatchReason);
       console.log(
         "[FR_EXACT] raw_address_rows_count=" +
-          String(rawExactAddressRowsCount) +
+          String(rawExactHouseNumberRowCount) +
           " filtered_lot_rows=" +
           String(exactApartmentRowsCount)
       );
@@ -1213,6 +1280,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_source_label = winningSourceLabel;
           frRuntimeDebug.has_surface_for_estimate = surface != null && surface > 0;
           frRuntimeDebug.chosen_surface_value = surface;
+          frRuntimeDebug.winning_median_price_per_m2 =
+            Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null;
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -1263,6 +1332,14 @@ export async function GET(request: NextRequest) {
       let sameBuildingRowsCount = 0;
       let sameBuildingUsableRowsCount = 0;
       if (houseNumberNorm) {
+        if (rawExactHouseNumberRowCount === 0) {
+          console.log(
+            "[FR_FLOW] ladder_step_skipped=BUILDING reason=no_property_latest_facts_rows_for_this_house_number (same filter as EXACT)"
+          );
+          frRuntimeDebug.building_rows_count = 0;
+          frRuntimeDebug.building_usable_rows_count = 0;
+          console.log("[FR_STEP] building_lookup_done");
+        } else {
         console.log("[FR_FLOW] ladder_step_started=BUILDING");
         const buildingTable = "property_latest_facts";
         const buildingTableInspection = await inspectFranceTable("BUILDING", buildingTable);
@@ -1345,6 +1422,7 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_source_label = "Building-level estimate";
             frRuntimeDebug.has_surface_for_estimate = medianSurfaceM2ForFallback != null;
             frRuntimeDebug.chosen_surface_value = medianSurfaceM2ForFallback;
+            frRuntimeDebug.winning_median_price_per_m2 = medianPricePerM2;
             return frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -1380,6 +1458,7 @@ export async function GET(request: NextRequest) {
           }
         }
         // If building-level estimate can't be computed, continue the ladder to street/commune fallback.
+        }
       }
       if (!houseNumberNorm) console.log("[FR_STEP] building_lookup_done");
 
@@ -1506,6 +1585,7 @@ export async function GET(request: NextRequest) {
           winningSourceLabel: fallbackSourceStreet,
         });
         if (streetEstimate.estimated != null) {
+          frRuntimeDebug.winning_median_price_per_m2 = streetEstimate.avgPricePerM2;
           frRuntimeDebug.winning_step = "street_fallback";
           frRuntimeDebug.winning_source_label = fallbackSourceStreet;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
@@ -1558,6 +1638,67 @@ export async function GET(request: NextRequest) {
                   : fallbackSourceStreet,
             }),
           }, "valuation_response");
+        }
+        // No row in property_latest_facts for this house number + no building tier: show street median €/m² now (do not wait for COMMUNE).
+        const goldFactsMissingThisHouseNumber =
+          rawExactHouseNumberRowCount === 0 && Boolean(houseNumberNorm);
+        const buildingTierHasNoUsableRows = sameBuildingUsableRowsCount === 0;
+        if (
+          goldFactsMissingThisHouseNumber &&
+          buildingTierHasNoUsableRows &&
+          streetEstimate.estimated == null
+        ) {
+          const streetOnlyMessage = `${fallbackSourceStreet} — no property_latest_facts row for this house number; median €/m² on the street (total estimate needs surface).`;
+          frRuntimeDebug.winning_median_price_per_m2 = streetEstimate.avgPricePerM2;
+          frRuntimeDebug.winning_step = "street_fallback";
+          frRuntimeDebug.winning_source_label = fallbackSourceStreet;
+          frRuntimeDebug.has_surface_for_estimate = false;
+          frRuntimeDebug.chosen_surface_value = null;
+          console.log(
+            "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only_no_gold_house_row"
+          );
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              fr_detect: frDetectToUse,
+              property_result: {
+                exact_value: null,
+                exact_value_message: null,
+                value_level: "street-level",
+                last_transaction: {
+                  amount: 0,
+                  date: null,
+                  message: "No exact recent transaction available",
+                },
+                street_average: streetEstimate.avgPricePerM2,
+                street_average_message: streetOnlyMessage,
+                livability_rating: "FAIR",
+              },
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "nearby_comparable",
+                confidence: "low_medium",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: {
+                  transactionDate: null,
+                  transactionValue: null,
+                  pricePerSqm: streetEstimate.avgPricePerM2,
+                  surfaceArea: null,
+                  rooms: null,
+                  propertyType: propertyType,
+                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                  postalCode: postcodeNorm || null,
+                  commune: cityNorm || null,
+                },
+                buildingStats: null,
+                comparables: [],
+                matchExplanation: streetOnlyMessage,
+              }),
+            },
+            "valuation_response"
+          );
         }
         // Street usable comps exist, but without surface we can't compute a numeric total yet.
         // Per ladder spec, try commune next before returning a non-exact street fallback.
@@ -1624,6 +1765,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_source_label = fallbackSourceCommune;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
+          frRuntimeDebug.winning_median_price_per_m2 = medianAvgPricePerM2;
           console.log(
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
           );
@@ -1679,6 +1821,7 @@ export async function GET(request: NextRequest) {
       // still return a truthful non-exact fallback instead of falling through to no-data.
       if (streetNonNumericFallback) {
         const missingSurfaceMessage = `${fallbackSourceStreet} — comparable pricing available, but exact estimate could not be computed (missing surface).`;
+        frRuntimeDebug.winning_median_price_per_m2 = streetNonNumericFallback.avgPricePerM2;
         frRuntimeDebug.winning_step = "street_fallback";
         frRuntimeDebug.winning_source_label = fallbackSourceStreet;
         frRuntimeDebug.has_surface_for_estimate = false;
