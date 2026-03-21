@@ -493,6 +493,9 @@ export async function GET(request: NextRequest) {
           if (price_per_m2 == null && ppmFromStreetAvg != null) {
             price_per_m2 = ppmFromStreetAvg;
           }
+          if (price_per_m2 == null && ppmFromWinningDebug != null) {
+            price_per_m2 = ppmFromWinningDebug;
+          }
           if (estimated_value == null && typeof exactVal === "number" && Number.isFinite(exactVal) && exactVal > 0) {
             estimated_value = exactVal;
           }
@@ -511,8 +514,23 @@ export async function GET(request: NextRequest) {
             typeof price_per_m2 === "number" &&
             Number.isFinite(price_per_m2) &&
             price_per_m2 > 0;
-          // Displayable winner: total estimate and/or median €/m² (required when no surface).
-          const has_display_value = Boolean(evPos || ppmPos);
+
+          const noSurfaceForDisplay = !Boolean(frRuntimeDebug.has_surface_for_estimate);
+          let display_value: number | null = evPos ? estimated_value : ppmPos ? price_per_m2 : null;
+          let display_value_type: "estimated_total" | "price_per_m2" | null = evPos
+            ? "estimated_total"
+            : ppmPos
+              ? "price_per_m2"
+              : null;
+          // No surface: UI must still show median €/m² (not blank).
+          if (noSurfaceForDisplay && hasWinningStep && ppmPos && !evPos) {
+            display_value = price_per_m2;
+            display_value_type = "price_per_m2";
+          }
+          let has_display_value = Boolean(evPos || ppmPos);
+          if (noSurfaceForDisplay && hasWinningStep && ppmPos) {
+            has_display_value = true;
+          }
 
           if (hasWinningStep && !has_display_value) {
             console.error("[FR_RETURN] winning_step_set_but_no_price_or_estimate", {
@@ -528,6 +546,8 @@ export async function GET(request: NextRequest) {
             confidence,
             estimated_value: evPos ? estimated_value : null,
             price_per_m2: ppmPos ? price_per_m2 : null,
+            display_value,
+            display_value_type,
             last_sale_price,
             last_sale_date,
             has_display_value,
@@ -537,6 +557,8 @@ export async function GET(request: NextRequest) {
           outPayload.confidence = confidence;
           outPayload.estimated_value = evPos ? estimated_value : null;
           outPayload.price_per_m2 = ppmPos ? price_per_m2 : null;
+          outPayload.display_value = display_value;
+          outPayload.display_value_type = display_value_type;
         }
 
         const estimated_value_present =

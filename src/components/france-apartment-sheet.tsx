@@ -757,28 +757,59 @@ export function FranceApartmentSheet({
       | {
           estimated_value?: number | null;
           price_per_m2?: number | null;
+          display_value?: number | null;
+          display_value_type?: string | null;
           has_display_value?: boolean;
         }
       | undefined;
+    const topEstimated = (parsed as any)?.estimated_value as number | null | undefined;
+    const topPricePerM2 = (parsed as any)?.price_per_m2 as number | null | undefined;
+    const topDisplayValue = (parsed as any)?.display_value as number | null | undefined;
+    const topDisplayValueType = (parsed as any)?.display_value_type as string | null | undefined;
+
     const rawValue =
       fr?.property?.transactionValue ??
       (typeof fv?.estimated_value === "number" && fv.estimated_value > 0 ? fv.estimated_value : null) ??
+      (typeof topEstimated === "number" && topEstimated > 0 ? topEstimated : null) ??
       (typeof pr?.exact_value === "number" && pr.exact_value > 0 ? pr.exact_value : null) ??
       (fr?.resultType === "building_level" ? (fr?.buildingStats?.avgTransactionValue ?? legacy?.averageBuildingValue ?? null) : null);
     const hasValue = typeof rawValue === "number" && rawValue > 0;
     const ppm2Display =
       (typeof fr?.property?.pricePerSqm === "number" && fr.property.pricePerSqm > 0 ? fr.property.pricePerSqm : null) ??
       (typeof fv?.price_per_m2 === "number" && fv.price_per_m2 > 0 ? fv.price_per_m2 : null) ??
-      (typeof pr?.street_average === "number" && pr.street_average > 0 ? pr.street_average : null);
+      (typeof topPricePerM2 === "number" && topPricePerM2 > 0 ? topPricePerM2 : null) ??
+      (typeof pr?.street_average === "number" && pr.street_average > 0 ? pr.street_average : null) ??
+      (fv?.display_value_type === "price_per_m2" &&
+      typeof fv?.display_value === "number" &&
+      fv.display_value > 0
+        ? fv.display_value
+        : null) ??
+      (topDisplayValueType === "price_per_m2" &&
+      typeof topDisplayValue === "number" &&
+      topDisplayValue > 0
+        ? topDisplayValue
+        : null) ??
+      (typeof rd?.winning_median_price_per_m2 === "number" && rd.winning_median_price_per_m2 > 0
+        ? rd.winning_median_price_per_m2
+        : null);
     const isNoResult =
       !isLoadingNow &&
       (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
 
-    const isSuspiciousFallback =
+    const isSuspiciousFallbackRaw =
       !isLoadingNow &&
       (fr?.resultType === "similar_apartment_same_building" || fr?.resultType === "nearby_comparable") &&
       (fr?.debug?.suspiciousPolicy === "warning" || fr?.debug?.suspiciousPricePerSqm === true);
+    // API contract: explicit €/m² display from valuation_response must still render.
+    const isSuspiciousFallback =
+      isSuspiciousFallbackRaw &&
+      !(
+        fv?.display_value_type === "price_per_m2" &&
+        fv?.has_display_value === true &&
+        (typeof fv?.price_per_m2 === "number" || typeof fv?.display_value === "number")
+      );
 
+    // Rule: estimated_value null + price_per_m2 (or display_value) → show €/m² in headline, not "—".
     const hasPricePerM2Headline =
       !hasValue &&
       ppm2Display != null &&
@@ -882,8 +913,8 @@ export function FranceApartmentSheet({
           ? "No reliable price available"
           : hasValue
             ? formatCurrency(rawValue, currencySymbol)
-            : hasPricePerM2Headline
-              ? `${Math.round(ppm2Display!).toLocaleString("en-US")} ${currencySymbol}/m² (median)`
+            : hasPricePerM2Headline && ppm2Display != null
+              ? `${Math.round(ppm2Display).toLocaleString("en-US")} ${currencySymbol}/m² (median)`
             : fr?.resultType === "building_level"
               ? "No reliable building value available"
               : "—";
