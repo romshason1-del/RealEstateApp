@@ -1342,9 +1342,11 @@ export function FranceApartmentSheet({
                       <div>fr_parsed_street: {toDebugStr(rd?.fr_parsed_street)}</div>
                       <div>fr_parsed_postcode: {toDebugStr(rd?.fr_parsed_postcode)}</div>
                       <div>fr_parsed_city: {toDebugStr(rd?.fr_parsed_city)}</div>
+                      <div>fr_raw_postcode_token: {toDebugStr(rd?.fr_raw_postcode_token)}</div>
                       <div className="font-semibold text-amber-300/90 mt-1">BAN</div>
                       <div>fr_ban_query_mode: {toDebugStr(rd?.fr_ban_query_mode)}</div>
                       <div>fr_ban_attempt_count: {toDebugStr(rd?.fr_ban_attempt_count)}</div>
+                      <div>fr_postcode_mismatch_rejections: {toDebugStr(rd?.fr_postcode_mismatch_rejections)}</div>
                       <div>ban_city: {toDebugStr(rd?.ban_city)}</div>
                       <div>ban_postcode: {toDebugStr(rd?.ban_postcode)}</div>
                       <div>ban_street: {toDebugStr(rd?.ban_street)}</div>

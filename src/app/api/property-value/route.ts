@@ -390,6 +390,9 @@ export async function GET(request: NextRequest) {
       console.log("[FR_PARSE] raw_input=" + (fullRawAddress || "(empty)"));
       console.log("[FR_PARSE] parser_started=" + (fullRawAddress ? "true" : "false"));
 
+      const rawPostcodeMatch = fullRawAddress.match(/\b(\d{5})\b/);
+      const frRawPostcodeToken = rawPostcodeMatch ? rawPostcodeMatch[1] : null;
+
       let cityParsed = city.trim();
       let streetParsed = street.trim();
       let houseNumberParsed = houseNumber.trim();
@@ -401,6 +404,7 @@ export async function GET(request: NextRequest) {
         if (parsed.street) streetParsed = streetParsed || parsed.street;
         if (parsed.city) cityParsed = cityParsed || parsed.city;
         if (parsed.postcode) postcodeParsed = postcodeParsed || parsed.postcode;
+        if (frRawPostcodeToken) postcodeParsed = frRawPostcodeToken;
         if (!parsed.city && !parsed.street && !parsed.postcode && !parsed.houseNumber) {
           const fallback = parseAddressFromFullString(fullRawAddress);
           if (fallback.houseNumber) houseNumberParsed = houseNumberParsed || fallback.houseNumber;
@@ -508,6 +512,8 @@ export async function GET(request: NextRequest) {
         fr_parsed_city: cityParsed || null,
         fr_ban_query_mode: null as string | null,
         fr_ban_attempt_count: null as number | null,
+        fr_raw_postcode_token: frRawPostcodeToken,
+        fr_postcode_mismatch_rejections: null as number | null,
         fr_cache_hit: false,
         fr_cache_bypass_reason: null,
         fr_failed_stage: !frParserStarted && frHadRawInput ? "parse_entry" : null,
@@ -859,7 +865,7 @@ export async function GET(request: NextRequest) {
       }
 
       if (fullRawAddress && banQueryAttempts.length === 0) {
-        const rawPc = fullRawAddress.match(/\b(\d{4,5})\b/)?.[1];
+        const rawPc = frRawPostcodeToken || fullRawAddress.match(/\b(\d{5})\b/)?.[1] || fullRawAddress.match(/\b(\d{4,5})\b/)?.[1];
         const beforePc = rawPc ? fullRawAddress.slice(0, fullRawAddress.indexOf(rawPc)).replace(/,+\s*$/, "").trim() : fullRawAddress;
         const rawStreet = beforePc.replace(/^\d+[A-Za-z]?\s*/, "").trim();
         const rawHn = fullRawAddress.match(/^(\d+[A-Za-z]?)\s/)?.[1] || "";
@@ -940,13 +946,22 @@ export async function GET(request: NextRequest) {
             }
             return "";
           };
+          let postcodeMismatchCount = 0;
           const filtered = rawRows.filter((r) => {
             const banPc = pickStr(r, ["postcode", "postal_code", "code_postal"]);
             const banCityVal = pickStr(r, ["city_norm", "normalized_city", "city"]);
-            if (banInputPostcode && banPc && banInputPostcode.trim() !== banPc.trim()) return false;
+            if (banInputPostcode && banPc && banInputPostcode.trim() !== banPc.trim()) {
+              postcodeMismatchCount++;
+              if (process.env.NODE_ENV !== "production") {
+                console.log("[FR_BAN] postcode_mismatch_reject", { requested: banInputPostcode, candidate: banPc });
+              }
+              return false;
+            }
             if (banInputCity && banCityVal && !frCityMatches(banInputCity, banCityVal)) return false;
             return true;
           });
+          const prevRejections = (frRuntimeDebug.fr_postcode_mismatch_rejections as number) ?? 0;
+          frRuntimeDebug.fr_postcode_mismatch_rejections = prevRejections + postcodeMismatchCount;
           if (filtered.length > 0) {
             banRows = filtered;
             break;
@@ -3493,6 +3508,8 @@ export async function GET(request: NextRequest) {
           fr_parsed_city: null,
           fr_ban_query_mode: "(none)",
           fr_ban_attempt_count: 0,
+          fr_raw_postcode_token: null,
+          fr_postcode_mismatch_rejections: 0,
           fr_cache_hit: false,
           fr_cache_bypass_reason: null,
           fr_failed_stage: "fatal_error",

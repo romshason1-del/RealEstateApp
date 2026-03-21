@@ -165,9 +165,20 @@ export function parseUKAddressFromFullString(
 }
 
 /**
+ * Extract exact 5-digit French postcode token from raw string. Never mutates.
+ * French postcodes are exactly 5 digits (e.g. 06400, 75004).
+ * Returns the first 5-digit match; prefers postcode before city (e.g. ", 06400 Cannes").
+ */
+function extractRawFRPostcode(raw: string): string {
+  const m = raw.match(/\b(\d{5})\b/);
+  return m ? m[1] : "";
+}
+
+/**
  * Robust French address parser for raw typed strings.
  * Handles: "6 Chemin du Vallon, 06400 Cannes", "10 Rue de Rivoli, 75004 Paris",
  * "22 Rue Paradis, 13001 Marseille", uppercase-only, missing commas, extra spaces.
+ * RAW POSTCODE PRIORITY: When a 5-digit postcode exists in the raw input, it is preserved exactly.
  */
 export function parseFRAddressFromFullString(
   address: string
@@ -175,6 +186,8 @@ export function parseFRAddressFromFullString(
   const raw = (address ?? "").trim();
   const trimmed = raw.replace(/\s+/g, " ").trim();
   if (!trimmed) return { houseNumber: "", street: "", city: "", postcode: "" };
+
+  const rawPostcode = extractRawFRPostcode(trimmed);
 
   // Strip common trailing suffixes
   const withoutFR = trimmed
@@ -261,6 +274,7 @@ export function parseFRAddressFromFullString(
     street = beforePostcode.replace(/^\d+[A-Za-z]?\s*/, "").trim();
   }
 
+  if (rawPostcode) postcode = rawPostcode;
   return { houseNumber, street, city, postcode };
 }
 
