@@ -484,8 +484,16 @@ export function PropertyValueCard({
 
   const isExactApartmentPayload = React.useCallback((d: unknown): boolean => {
     if (!d || typeof d !== "object") return false;
-    const r = d as { data_source?: string; result_level?: string; property_result?: { value_level?: string } };
-    return r.data_source === "properties_france" && r.result_level === "exact_property" && r.property_result?.value_level === "property-level";
+    const r = d as {
+      data_source?: string;
+      result_level?: string;
+      fr?: { resultType?: string };
+      property_result?: { value_level?: string };
+    };
+    if (r.data_source !== "properties_france") return false;
+    const rt = r.fr?.resultType;
+    if (rt === "exact_apartment" || rt === "exact_address") return true;
+    return r.result_level === "exact_property" && r.property_result?.value_level === "property-level";
   }, []);
 
   const activeInsightsData =

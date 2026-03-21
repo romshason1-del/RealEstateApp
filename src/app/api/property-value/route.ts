@@ -455,6 +455,9 @@ export async function GET(request: NextRequest) {
         winning_median_price_per_m2: null,
         /** Set when `property_latest_facts` money converter runs (1000 = thousandths of €). */
         property_latest_facts_money_divisor: null,
+        exact_level: null as "EXACT_UNIT" | "EXACT_ADDRESS" | "NONE" | null,
+        exact_unit_row_count: null as number | null,
+        exact_address_row_count: null as number | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -598,7 +601,7 @@ export async function GET(request: NextRequest) {
             last_sale_date,
             has_display_value,
           };
-          if (String(frRuntimeDebug.winning_step) === "exact") {
+          if (String(frRuntimeDebug.winning_step) === "exact_unit" || String(frRuntimeDebug.winning_step) === "exact_address") {
             console.log(
               "[FR_PRICE] envelope_fr_valuation_last_sale_price=" +
                 String(last_sale_price) +
@@ -1294,28 +1297,70 @@ export async function GET(request: NextRequest) {
         return s === "" ? null : s;
       };
 
-      const exactMatchingRows = !exactLotToken
-        ? []
-        : (exactRows as Array<Record<string, unknown>>).filter((r) => {
-            const tokens = extractLotTokensFromRow(r);
-            // Building-level row: no unit_number and no resolvable lot tokens — do not reject
-            // just because the user submitted a lot (e.g. cadastral lot ≠ apartment unit).
-            if (primaryUnitNumberRaw(r) == null && tokens.length === 0) return true;
-            return tokens.some((t) => t === exactLotToken);
-          });
-
-      const exactApartmentRowsCount = exactMatchingRows.length;
-      const exactUsableRowsCount = exactMatchingRows.filter((r) => {
+      const rowUsableForExact = (r: Record<string, unknown>): boolean => {
         const surf = parseMaybeDecimal((r as any).surface_m2);
         const ppm2 = parseMaybeDecimal((r as any).price_per_m2);
         return surf != null && surf > 0 && ppm2 != null && ppm2 > 0;
-      }).length;
+      };
+
+      /** True only when `unit_number` normalizes to the submitted lot (strict unit-level evidence). */
+      const unitTokenMatchesSubmittedLot = (r: Record<string, unknown>): boolean => {
+        const un = primaryUnitNumberRaw(r);
+        if (un == null) return false;
+        const t = normalizeLotToken(un);
+        return t != null && t === exactLotToken;
+      };
+
+      /** Single building-level aggregate: no unit_number and no resolvable lot tokens on the row. */
+      const isAddressOnlyAggregateRow = (r: Record<string, unknown>): boolean =>
+        primaryUnitNumberRaw(r) == null && extractLotTokensFromRow(r).length === 0;
+
+      const sortExactCandidates = (rows: Array<Record<string, unknown>>): Record<string, unknown> | undefined => {
+        if (rows.length === 0) return undefined;
+        const sorted = [...rows].sort((a, b) => {
+          const pa = parseMaybeDecimal((a as any).price_per_m2) ?? 0;
+          const pb = parseMaybeDecimal((b as any).price_per_m2) ?? 0;
+          if (pb !== pa) return pb - pa;
+          const da = String((a as any).last_sale_date ?? "");
+          const db = String((b as any).last_sale_date ?? "");
+          return db.localeCompare(da);
+        });
+        return sorted[0];
+      };
+
+      let exactTier: "EXACT_UNIT" | "EXACT_ADDRESS" | "NONE" = "NONE";
+      let exactMatchingRows: Array<Record<string, unknown>> = [];
+      let usableUnitRows: Array<Record<string, unknown>> = [];
+      let usableAddressRows: Array<Record<string, unknown>> = [];
+
+      if (!exactLotToken) {
+        exactMatchingRows = [];
+        frRuntimeDebug.exact_unit_row_count = 0;
+        frRuntimeDebug.exact_address_row_count = 0;
+      } else {
+        const unitCandidates = (exactRows as Array<Record<string, unknown>>).filter((r) =>
+          unitTokenMatchesSubmittedLot(r)
+        );
+        const addressCandidates = (exactRows as Array<Record<string, unknown>>).filter((r) =>
+          isAddressOnlyAggregateRow(r)
+        );
+        exactMatchingRows = [...unitCandidates, ...addressCandidates];
+        usableUnitRows = unitCandidates.filter(rowUsableForExact);
+        usableAddressRows = addressCandidates.filter(rowUsableForExact);
+        frRuntimeDebug.exact_unit_row_count = unitCandidates.length;
+        frRuntimeDebug.exact_address_row_count = addressCandidates.length;
+      }
+
+      const exactApartmentRowsCount = exactMatchingRows.length;
+      const exactUsableRowsCount = usableUnitRows.length + usableAddressRows.length;
 
       console.log("[FR_DEBUG] exact_apartment_query_counts", {
         submittedLot: aptNumber?.trim() || null,
         normalizedLot: normalizedRequestedLot,
         exactApartmentRowsCount,
         exactUsableRowsCount,
+        exact_unit_row_count: frRuntimeDebug.exact_unit_row_count,
+        exact_address_row_count: frRuntimeDebug.exact_address_row_count,
       });
       console.log("[FR_STEP] exact_lookup_done");
 
@@ -1332,9 +1377,9 @@ export async function GET(request: NextRequest) {
         const sampleTokens = sample ? extractLotTokensFromRow(sample) : [];
         console.log("[FR_EXACT] sample_row_lot_tokens=" + JSON.stringify(sampleTokens));
         exactMatchReason =
-          "address_rows_exist_but_no_row_passed_lot_filter_for_token_" + String(exactLotToken);
+          "address_rows_exist_but_no_unit_or_address_aggregate_row_for_token_" + String(exactLotToken);
       } else if (exactUsableRowsCount === 0) {
-        exactMatchReason = "lot_rows_matched_but_missing_usable_surface_m2_or_price_per_m2";
+        exactMatchReason = "exact_tier_rows_matched_but_missing_usable_surface_m2_or_price_per_m2";
       } else {
         exactMatchReason = "usable_exact_rows_available";
       }
@@ -1347,22 +1392,33 @@ export async function GET(request: NextRequest) {
           String(exactApartmentRowsCount)
       );
 
-      const usableExactRows = exactMatchingRows.filter((r) => {
-        const surf = parseMaybeDecimal((r as any).surface_m2);
-        const ppm2 = parseMaybeDecimal((r as any).price_per_m2);
-        return surf != null && surf > 0 && ppm2 != null && ppm2 > 0;
-      });
+      let exactBest: Record<string, unknown> | undefined;
+      let exactUnitMatch = false;
+      if (usableUnitRows.length > 0) {
+        exactBest = sortExactCandidates(usableUnitRows);
+        exactTier = "EXACT_UNIT";
+        exactUnitMatch = true;
+      } else if (exactLotToken && usableAddressRows.length > 0) {
+        exactBest = sortExactCandidates(usableAddressRows);
+        exactTier = "EXACT_ADDRESS";
+        exactUnitMatch = false;
+      } else {
+        exactBest = undefined;
+        exactTier = "NONE";
+        exactUnitMatch = false;
+      }
 
-      const exactBest = usableExactRows.sort((a, b) => {
-        const pa = parseMaybeDecimal((a as any).price_per_m2) ?? 0;
-        const pb = parseMaybeDecimal((b as any).price_per_m2) ?? 0;
-        if (pb !== pa) return pb - pa;
-        const da = String((a as any).last_sale_date ?? "");
-        const db = String((b as any).last_sale_date ?? "");
-        return db.localeCompare(da);
-      })[0];
+      frRuntimeDebug.exact_level = exactTier;
+
+      const usableExactRows =
+        exactTier === "EXACT_UNIT" ? usableUnitRows : exactTier === "EXACT_ADDRESS" ? usableAddressRows : [];
+
+      console.log("[FR_EXACT] submitted_lot=" + String(exactLotToken ?? ""));
+      console.log("[FR_EXACT] unit_match=" + String(exactUnitMatch));
+      console.log("[FR_EXACT] exact_level=" + exactTier);
 
       const logRowForFrExact =
+        exactBest ??
         (usableExactRows.length > 0 ? usableExactRows[0] : null) ??
         (exactMatchingRows.length > 0 ? exactMatchingRows[0] : null) ??
         ((exactRows as Array<Record<string, unknown>>)[0] ?? null);
@@ -1377,9 +1433,10 @@ export async function GET(request: NextRequest) {
           (logRowForFrExact ? String((logRowForFrExact as any).house_number ?? "") : "—")
       );
       {
-        const un = logRowForFrExact ? (logRowForFrExact as any).unit_number : undefined;
+        const rowForUnitLog = exactBest ?? logRowForFrExact;
+        const un = rowForUnitLog ? (rowForUnitLog as any).unit_number : undefined;
         const unLog =
-          !logRowForFrExact
+          !rowForUnitLog
             ? "—"
             : un === null || un === undefined || String(un).trim() === ""
               ? "null"
@@ -1410,14 +1467,23 @@ export async function GET(request: NextRequest) {
         const hasEstimated = estimated != null;
         if (hasEstimated) {
           console.log("[FR_PRICE] api_estimated_value_exact_surface_x_ppm=" + String(estimated));
-          const winningSourceLabel = detectClass === "apartment" ? "Exact apartment" : "Exact property";
+          const isExactUnitTier = exactTier === "EXACT_UNIT";
+          const winningStep = isExactUnitTier ? "exact_unit" : "exact_address";
+          const winningSourceLabel = isExactUnitTier
+            ? detectClass === "apartment"
+              ? "Exact apartment"
+              : "Exact property"
+            : "Exact address match";
+          const frResultType = isExactUnitTier ? "exact_apartment" : "exact_address";
+          const frConfidence = isExactUnitTier ? "medium_high" : "high";
           frRuntimeDebug.exact_reject_reason = "";
           console.log("[FR_EXACT] exact_reject_reason=");
           console.log("[FR_DEBUG] winning_valuation_step", {
-            winningValuationStep: "exact",
+            winningValuationStep: winningStep,
             winningSourceLabel,
+            exact_level: exactTier,
           });
-          frRuntimeDebug.winning_step = "exact";
+          frRuntimeDebug.winning_step = winningStep;
           frRuntimeDebug.winning_source_label = winningSourceLabel;
           frRuntimeDebug.has_surface_for_estimate = surface != null && surface > 0;
           frRuntimeDebug.chosen_surface_value = surface;
@@ -1437,13 +1503,13 @@ export async function GET(request: NextRequest) {
                 message: lastSaleEuro > 0 ? undefined : "No recent transaction available",
               },
               street_average: null,
-              street_average_message: detectClass === "apartment" ? "Exact apartment" : "Exact property",
+              street_average_message: winningSourceLabel,
               livability_rating: "FAIR",
             },
             fr: emptyFranceResponse({
               success: true,
-              resultType: "exact_apartment",
-              confidence: "high",
+              resultType: frResultType as any,
+              confidence: frConfidence as any,
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
@@ -1459,7 +1525,11 @@ export async function GET(request: NextRequest) {
               },
               buildingStats: null,
               comparables: [],
-              matchExplanation: "Exact property",
+              matchExplanation: isExactUnitTier
+                ? detectClass === "apartment"
+                  ? "Exact apartment match"
+                  : "Exact property match"
+                : "Exact address match (building-level record; unit not matched in data)",
             }),
           }, "valuation_response");
         }
@@ -1578,10 +1648,10 @@ export async function GET(request: NextRequest) {
             const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2Euro);
             console.log("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
-              winningSourceLabel: "Building-level estimate",
+              winningSourceLabel: "Similar properties in this building",
             });
             frRuntimeDebug.winning_step = "building_level";
-            frRuntimeDebug.winning_source_label = "Building-level estimate";
+            frRuntimeDebug.winning_source_label = "Similar properties in this building";
             frRuntimeDebug.has_surface_for_estimate = medianSurfaceM2ForFallback != null;
             frRuntimeDebug.chosen_surface_value = medianSurfaceM2ForFallback;
             frRuntimeDebug.winning_median_price_per_m2 = medianPricePerM2Euro;
@@ -1600,19 +1670,19 @@ export async function GET(request: NextRequest) {
                     message: "No exact recent transaction available",
                   },
                   street_average: null,
-                  street_average_message: "Building-level estimate",
+                  street_average_message: "Similar properties in this building",
                   livability_rating: "FAIR",
                 },
                 fr: emptyFranceResponse({
                   success: true,
                   resultType: "building_level",
-                  confidence: "medium",
+                  confidence: "high",
                   requestedLot: requestedLotNorm,
                   normalizedLot: normalizedRequestedLot,
                   property: null,
                   buildingStats: { transactionCount: sameBuildingUsableRowsCount, avgPricePerSqm: medianPricePerM2Euro, avgTransactionValue: null },
                   comparables: [],
-                  matchExplanation: "Building-level estimate (median/average from same building rows).",
+                  matchExplanation: "Similar properties in this building (median from same-address rows).",
                 }),
               },
               "valuation_response"
@@ -1695,7 +1765,7 @@ export async function GET(request: NextRequest) {
       console.log("[FR_SQL] rows_count=", (fallbackStreetRows as any[])?.length ?? 0);
       console.log("[FR_SQL] columns_detected=", Object.keys(streetTableInspection.sampleRow ?? {}));
       const fallbackSourceStreet = "Similar properties on same street";
-      const fallbackSourceCommune = "Commune fallback";
+      const fallbackSourceCommune = "Similar properties in same commune";
 
       const streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }>;
       const streetFallbackRowsCount = streetRows.length;
@@ -1779,7 +1849,7 @@ export async function GET(request: NextRequest) {
               // success=true so the UI does not go to "No reliable data found"
               success: true,
               resultType: "nearby_comparable",
-              confidence: "low_medium",
+              confidence: "medium",
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
@@ -1842,7 +1912,7 @@ export async function GET(request: NextRequest) {
               fr: emptyFranceResponse({
                 success: true,
                 resultType: "nearby_comparable",
-                confidence: "low_medium",
+                confidence: "medium",
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
@@ -1922,7 +1992,7 @@ export async function GET(request: NextRequest) {
             surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2Euro) : null;
           // Avoid forcing "No reliable building value available" when we do not have surface.
           const frResultType = estimated == null ? "nearby_comparable" : "building_level";
-          const frConfidence = estimated == null ? "low_medium" : "low";
+          const frConfidence = "low";
           console.log("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "commune_fallback",
             winningSourceLabel: fallbackSourceCommune,
@@ -2016,7 +2086,7 @@ export async function GET(request: NextRequest) {
             fr: emptyFranceResponse({
               success: true,
               resultType: "nearby_comparable",
-              confidence: "low_medium",
+              confidence: "medium",
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {

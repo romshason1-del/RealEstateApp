@@ -1,5 +1,7 @@
 export type FranceResultType =
   | "exact_apartment"
+  /** Address/house match from property_latest_facts without unit_number evidence for the submitted lot */
+  | "exact_address"
   | "similar_apartment_same_building"
   | "building_level"
   | "nearby_comparable"
