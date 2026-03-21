@@ -156,13 +156,6 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     if (isLoading) setIsResultCardOpen(true);
   }, [isLoading]);
-  // Close result card when loading completes and we need apartment lot input.
-  React.useEffect(() => {
-    if (!frAddressFetchDone) return;
-    if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim() && !hasSubmittedLotSearch) {
-      setIsResultCardOpen(false);
-    }
-  }, [frAddressFetchDone, effectiveDetectClass, requestedLot, hasSubmittedLotSearch]);
 
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
@@ -298,6 +291,15 @@ export function FranceApartmentSheet({
           : isHouseLikeUI
             ? "house"
             : "unclear";
+
+  // Close result card when loading completes and we need apartment lot input.
+  React.useEffect(() => {
+    if (!frAddressFetchDone) return;
+    if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim() && !hasSubmittedLotSearch) {
+      setIsResultCardOpen(false);
+    }
+  }, [frAddressFetchDone, effectiveDetectClass, requestedLot, hasSubmittedLotSearch]);
+
   React.useEffect(() => {
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
