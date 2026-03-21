@@ -1368,6 +1368,9 @@ export function FranceApartmentSheet({
                       <div>fr_failed_stage: {toDebugStr(rd?.fr_failed_stage)}</div>
                       <div>submitted_lot: {toDebugStr(rd?.submitted_lot)}</div>
                       <div>detect_class: {toDebugStr(rd?.detect_class)}</div>
+                      <div>fr_detect_signals_summary: {toDebugStr(rd?.fr_detect_signals_summary)}</div>
+                      <div>fr_detect_used_lot: {toDebugStr(rd?.fr_detect_used_lot)}</div>
+                      <div>fr_detect_override_reason: {toDebugStr(rd?.fr_detect_override_reason)}</div>
                       <div className="font-semibold text-amber-300/90 mt-1">Source lookup</div>
                       <div>fr_source_lookup_postcode: {toDebugStr(rd?.fr_source_lookup_postcode)}</div>
                       <div>fr_source_lookup_city: {toDebugStr(rd?.fr_source_lookup_city)}</div>

@@ -567,6 +567,9 @@ export async function GET(request: NextRequest) {
         request_url_seen_by_api: null,
         submitted_lot: null,
         detect_class: null,
+        fr_detect_signals_summary: null as string | null,
+        fr_detect_used_lot: null as boolean | null,
+        fr_detect_override_reason: null as string | null,
         exact_rows_count: null,
         exact_usable_rows_count: null,
         building_rows_count: null,
@@ -1347,6 +1350,7 @@ export async function GET(request: NextRequest) {
 
       let earlyCandidateRows: Array<Record<string, unknown>> = [];
       let apartmentEvidenceFromFacts = false;
+      let houseEvidenceFromFacts = false;
       let candidateLotsFromFacts: string[] = [];
       const hasAddressForDiscovery = (cityNorm || postcodeNorm) && streetNorm;
       if (hasAddressForDiscovery) {
@@ -1378,17 +1382,21 @@ export async function GET(request: NextRequest) {
           earlyCandidateRows = (earlyRows ?? []) as Array<Record<string, unknown>>;
           const lots = new Set<string>();
           let appartCount = 0;
+          let maisonCount = 0;
           for (const r of earlyCandidateRows) {
             const pt = String((r as any).property_type ?? "").toLowerCase();
             if (pt.includes("appartement")) appartCount++;
+            if (pt.includes("maison") || pt.includes("villa") || pt.includes("pavillon") || pt.includes("house")) maisonCount++;
             const un = (r as any).unit_number;
             if (un != null && String(un).trim()) lots.add(String(un).trim().replace(/^0+/, "") || String(un).trim());
           }
-          apartmentEvidenceFromFacts = lots.size >= 2 || appartCount >= 2;
+          apartmentEvidenceFromFacts = (lots.size >= 2 || appartCount >= 2) && !(maisonCount >= 1 && appartCount === 0);
+          houseEvidenceFromFacts = maisonCount >= 1 && (appartCount === 0 || maisonCount > appartCount);
           candidateLotsFromFacts = Array.from(lots).filter(Boolean);
           console.log("[FR_SOURCE] source_path=facts");
           console.log("[FR_SOURCE] candidate_rows_found=" + String(earlyCandidateRows.length));
           console.log("[FR_CLASSIFY] apartment_evidence=" + (apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts" : "none_from_facts"));
+          console.log("[FR_CLASSIFY] house_evidence_from_facts=" + (houseEvidenceFromFacts ? "maison_dominates" : "false"));
         } catch (e) {
           console.log("[FR_SOURCE] early_candidate_query_error", (e as Error)?.message);
         }
@@ -1475,8 +1483,40 @@ export async function GET(request: NextRequest) {
         detectedTypeLower.includes("appart") || detectedTypeLower.includes("apartment") || detectedTypeLower.includes("multi");
       const houseFromType = detectedTypeLower.includes("maison") || detectedTypeLower.includes("house") || detectedTypeLower.includes("villa");
 
-      const detectedApartment = isMultiUnitDetected || apartmentFromType || apartmentEvidenceFromFacts;
-      const detectedHouse = isHouseLikeDetected || houseFromType;
+      const strongHouseSignals = houseEvidenceFromFacts;
+      const strongApartmentSignals = apartmentEvidenceFromFacts;
+      const mediumHouseSignals = isHouseLikeDetected || houseFromType;
+      const mediumApartmentSignals = isMultiUnitDetected || apartmentFromType;
+
+      let detectClass: "apartment" | "house" | "unclear";
+      const detectUsedLot = false;
+      let detectOverrideReason: string | null = null;
+
+      if (strongHouseSignals && !strongApartmentSignals) {
+        detectClass = "house";
+        detectOverrideReason = "facts_maison_dominates";
+      } else if (strongApartmentSignals && !strongHouseSignals) {
+        detectClass = "apartment";
+      } else if (strongHouseSignals && strongApartmentSignals) {
+        detectClass = "house";
+        detectOverrideReason = "conflict_house_wins_over_apartment";
+      } else if (mediumHouseSignals && !mediumApartmentSignals) {
+        detectClass = "house";
+        detectOverrideReason = "intelligence_house_signals";
+      } else if (mediumApartmentSignals && !mediumHouseSignals) {
+        detectClass = "apartment";
+      } else if (mediumHouseSignals && mediumApartmentSignals) {
+        detectClass = "house";
+        detectOverrideReason = "tie_house_preferred_over_apartment";
+      } else {
+        detectClass = "unclear";
+        detectOverrideReason = "no_strong_or_medium_signals";
+      }
+
+      if (strongHouseSignals && detectClass !== "house") {
+        detectClass = "house";
+        detectOverrideReason = "override_strong_house_ignored_other_signals";
+      }
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
@@ -1484,12 +1524,20 @@ export async function GET(request: NextRequest) {
         : apartmentFromType ? "detected_type_appartement"
         : "none";
       const multiUnitEvidenceDesc = isMultiUnitDetected ? "true" : "false";
+      const signalsSummary = [
+        houseEvidenceFromFacts ? "house_from_facts" : null,
+        apartmentEvidenceFromFacts ? "apartment_from_facts" : null,
+        isMultiUnitDetected ? "multi_unit" : null,
+        isHouseLikeDetected ? "house_like" : null,
+        apartmentFromType ? "type_appartement" : null,
+        houseFromType ? "type_maison" : null,
+        submittedLotPresent ? "submitted_lot" : null,
+      ].filter(Boolean).join("|") || "none";
 
-      // Final apartment-vs-house decision rule (gold-table + facts driven).
-      // - If house-like evidence exists, run house-direct flow.
-      // - Else if multi-unit / apartment-like evidence exists (incl. from property_latest_facts), ask for apartment/lot.
-      const detectClass: "apartment" | "house" | "unclear" = detectedHouse ? "house" : detectedApartment ? "apartment" : "unclear";
       frRuntimeDebug.detect_class = detectClass;
+      frRuntimeDebug.fr_detect_signals_summary = signalsSummary;
+      frRuntimeDebug.fr_detect_used_lot = detectUsedLot;
+      frRuntimeDebug.fr_detect_override_reason = detectOverrideReason;
       console.log("[FR_CLASSIFY] apartment_evidence=" + apartmentEvidenceDesc);
       console.log("[FR_CLASSIFY] multi_unit_evidence=" + multiUnitEvidenceDesc);
       console.log("[FR_CLASSIFY] detect_class=" + detectClass);
