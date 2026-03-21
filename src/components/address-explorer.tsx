@@ -579,6 +579,8 @@ export const AddressExplorer = () => {
   const [isSearching, setIsSearching] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const suggestionExplicitlySelectedRef = React.useRef(false);
+  const rawTypedInputRef = React.useRef("");
+  const selectedSuggestionRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
@@ -848,6 +850,7 @@ export const AddressExplorer = () => {
           const franceCenter = { lat: 46.603354, lng: 1.888334 };
           setSearchPredictions([]);
           setIsSearchDropdownOpen(false);
+          rawTypedInputRef.current = typedAddress;
           setQuery(typedAddress);
           setCenter(franceCenter);
           setSelectedRestaurant(null);
@@ -905,8 +908,10 @@ export const AddressExplorer = () => {
       setIsFranceSearching(false);
       setIsSearching(false);
       if (countryProfile.countryCode === "FR") {
+        rawTypedInputRef.current = typedAddress;
         setQuery(typedAddress);
       } else {
+        rawTypedInputRef.current = formattedAddress;
         setQuery(formattedAddress);
       }
       if (looksLikeFrance && frSearchStartedAtRef.current) {
@@ -1270,6 +1275,8 @@ export const AddressExplorer = () => {
       const rawTyped = query.trim();
       const selectedFormattedFromPred = prediction.description;
       suggestionExplicitlySelectedRef.current = true;
+      selectedSuggestionRef.current = selectedFormattedFromPred;
+      rawTypedInputRef.current = selectedFormattedFromPred;
       console.log("[SEARCH_INPUT] raw_typed_value=" + (rawTyped || "(empty)"));
       console.log("[SEARCH_INPUT] selected_suggestion_value=" + selectedFormattedFromPred);
       console.log("[SEARCH_INPUT] suggestion_explicitly_selected=true");
@@ -1304,6 +1311,7 @@ export const AddressExplorer = () => {
         const countryFromComponents = results[0].address_components?.find((c) => c.types.includes("country"))?.short_name?.trim();
         const isFrance = (countryFromComponents ?? "").toUpperCase() === "FR" || (countryFromComponents ?? "").toUpperCase() === "RE";
 
+        rawTypedInputRef.current = displayAddress;
         setQuery(displayAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
@@ -2202,6 +2210,8 @@ export const AddressExplorer = () => {
                 value={query}
                 onChange={(event) => {
                   const nextQuery = event.target.value;
+                  rawTypedInputRef.current = nextQuery;
+                  selectedSuggestionRef.current = null;
                   setQuery(nextQuery);
                   setIsSearchDropdownOpen(nextQuery.trim().length >= PLACES_MIN_CHARS);
                   if (!nextQuery.trim()) {
@@ -2214,16 +2224,25 @@ export const AddressExplorer = () => {
                     setIsSearchDropdownOpen(true);
                   }
                 }}
-                onKeyDown={(event) => {
+                onKeyDownCapture={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
                     event.stopPropagation();
+                    event.nativeEvent.stopImmediatePropagation();
                     setIsSearchDropdownOpen(false);
-                    const rawValue = (event.currentTarget as HTMLInputElement).value?.trim() ?? "";
-                    void handleSearch(rawValue || undefined);
+                    const rawTyped = rawTypedInputRef.current?.trim() ?? "";
+                    const selectedSugg = selectedSuggestionRef.current;
+                    console.log("[SEARCH_ENTER] rawTypedInput=" + (rawTyped || "(empty)"));
+                    console.log("[SEARCH_ENTER] selectedSuggestion=" + (selectedSugg ?? "(null)"));
+                    console.log("[SEARCH_ENTER] explicitSuggestionSelection=false");
+                    console.log("[SEARCH_ENTER] submittedValue=" + (rawTyped || "(empty)"));
+                    if (rawTyped) {
+                      void handleSearch(rawTyped);
+                    }
                   }
                 }}
                 placeholder="Search addresses or streets..."
+                autoComplete="off"
                 className="h-12 w-full rounded-2xl border border-amber-400/40 bg-[#101010] pl-10 pr-4 text-white outline-none placeholder:text-zinc-400 focus:border-amber-400"
               />
               {searchPredictions.length ? (
