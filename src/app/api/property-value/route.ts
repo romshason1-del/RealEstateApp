@@ -570,6 +570,9 @@ export async function GET(request: NextRequest) {
         fr_detect_signals_summary: null as string | null,
         fr_detect_used_lot: null as boolean | null,
         fr_detect_override_reason: null as string | null,
+        fr_detect_multi_unit_source: null as "ban" | "source" | "building_intel" | "none" | null,
+        fr_detect_ban_strength_used: null as boolean | null,
+        fr_should_prompt_lot: null as boolean | null,
         exact_rows_count: null,
         exact_usable_rows_count: null,
         building_rows_count: null,
@@ -1483,16 +1486,24 @@ export async function GET(request: NextRequest) {
         detectedTypeLower.includes("appart") || detectedTypeLower.includes("apartment") || detectedTypeLower.includes("multi");
       const houseFromType = detectedTypeLower.includes("maison") || detectedTypeLower.includes("house") || detectedTypeLower.includes("villa");
 
+      const banStreetThresholdPassed = frRuntimeDebug.fr_ban_similarity_threshold_passed === true;
+      const allowMultiUnitFromQueries = banStreetThresholdPassed;
+
       const strongHouseSignals = houseEvidenceFromFacts;
-      const strongApartmentSignals = apartmentEvidenceFromFacts;
+      const strongApartmentSignals = allowMultiUnitFromQueries && apartmentEvidenceFromFacts;
       const mediumHouseSignals = isHouseLikeDetected || houseFromType;
-      const mediumApartmentSignals = isMultiUnitDetected || apartmentFromType;
+      const mediumApartmentSignals = allowMultiUnitFromQueries && (isMultiUnitDetected || apartmentFromType);
+
+      let multiUnitSource: "ban" | "source" | "building_intel" | "none" = "none";
 
       let detectClass: "apartment" | "house" | "unclear";
       const detectUsedLot = false;
       let detectOverrideReason: string | null = null;
 
-      if (strongHouseSignals && !strongApartmentSignals) {
+      if (!allowMultiUnitFromQueries && (apartmentEvidenceFromFacts || isMultiUnitDetected)) {
+        detectClass = "unclear";
+        detectOverrideReason = "ban_weak_match_ignored_multi_unit_evidence";
+      } else if (strongHouseSignals && !strongApartmentSignals) {
         detectClass = "house";
         detectOverrideReason = "facts_maison_dominates";
       } else if (strongApartmentSignals && !strongHouseSignals) {
@@ -1518,6 +1529,12 @@ export async function GET(request: NextRequest) {
         detectOverrideReason = "override_strong_house_ignored_other_signals";
       }
 
+      if (detectClass === "apartment" && allowMultiUnitFromQueries) {
+        multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
+      }
+
+      const shouldPromptLot = detectClass === "apartment" && !submittedLotPresent && allowMultiUnitFromQueries;
+
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
         : isMultiUnitDetected ? "building_intelligence_multi_unit"
@@ -1538,6 +1555,9 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_detect_signals_summary = signalsSummary;
       frRuntimeDebug.fr_detect_used_lot = detectUsedLot;
       frRuntimeDebug.fr_detect_override_reason = detectOverrideReason;
+      frRuntimeDebug.fr_detect_multi_unit_source = multiUnitSource;
+      frRuntimeDebug.fr_detect_ban_strength_used = banStreetThresholdPassed;
+      frRuntimeDebug.fr_should_prompt_lot = shouldPromptLot;
       console.log("[FR_CLASSIFY] apartment_evidence=" + apartmentEvidenceDesc);
       console.log("[FR_CLASSIFY] multi_unit_evidence=" + multiUnitEvidenceDesc);
       console.log("[FR_CLASSIFY] detect_class=" + detectClass);
@@ -1704,7 +1724,7 @@ export async function GET(request: NextRequest) {
           AND ${frBqHouseNumberMatchSql}
         LIMIT 50
       `;
-      const shouldPromptLotFirst = detectClass === "apartment" && !submittedLotPresent;
+      const shouldPromptLotFirst = shouldPromptLot;
       console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
       console.log("[FR_LOT_API] submittedLotPresent", submittedLotPresent);
       console.log("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);

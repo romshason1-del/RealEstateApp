@@ -1371,6 +1371,9 @@ export function FranceApartmentSheet({
                       <div>fr_detect_signals_summary: {toDebugStr(rd?.fr_detect_signals_summary)}</div>
                       <div>fr_detect_used_lot: {toDebugStr(rd?.fr_detect_used_lot)}</div>
                       <div>fr_detect_override_reason: {toDebugStr(rd?.fr_detect_override_reason)}</div>
+                      <div>fr_detect_multi_unit_source: {toDebugStr(rd?.fr_detect_multi_unit_source)}</div>
+                      <div>fr_detect_ban_strength_used: {toDebugStr(rd?.fr_detect_ban_strength_used)}</div>
+                      <div>fr_should_prompt_lot: {toDebugStr(rd?.fr_should_prompt_lot)}</div>
                       <div className="font-semibold text-amber-300/90 mt-1">Source lookup</div>
                       <div>fr_source_lookup_postcode: {toDebugStr(rd?.fr_source_lookup_postcode)}</div>
                       <div>fr_source_lookup_city: {toDebugStr(rd?.fr_source_lookup_city)}</div>
