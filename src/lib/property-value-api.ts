@@ -251,12 +251,14 @@ export async function fetchPropertyValueInsights(
   }
   if (isFR) {
     const hasPostcodeOrStreet = !!(parsed.postcode?.trim() || parsed.street?.trim());
-    if (!hasPostcodeOrStreet) {
+    const hasRawInput = !!(options?.rawInputAddress ?? "").trim();
+    if (!hasPostcodeOrStreet && !hasRawInput) {
       return {
         message: "Postcode or street name required for France. Could not parse from address.",
         debug: { raw_input_address: { city: parsed.city, street: parsed.street, house_number: parsed.houseNumber } },
       };
     }
+    // When rawInputAddress is provided, always call API - server can parse and attempt raw BAN lookup.
   }
 
   try {
@@ -276,6 +278,8 @@ export async function fetchPropertyValueInsights(
     if (isFR) {
       const requestUrl = `/api/property-value?${params.toString()}`;
       console.log("[FR_LOT_REQUEST_URL]", {
+        address: address?.trim() || "(empty)",
+        rawInputAddress: options?.rawInputAddress?.trim() || "(empty)",
         apt_from_options: options?.aptNumber ?? null,
         apt_trimmed: apt || null,
         final_url: requestUrl,

@@ -376,11 +376,16 @@ export async function GET(request: NextRequest) {
 
   if (isFR) {
     // Minimal France gold-table path (exact -> area fallback -> no data).
+    const rawInput = (addressParam || rawInputAddress || "").trim();
+    const countryDetected = (countryCode ?? "").toUpperCase();
+    console.log("[FR_ENTRY] raw_input=" + (rawInput || "(empty)"));
+    console.log("[FR_ENTRY] country_detected=" + (countryDetected || "(empty)"));
+    console.log("[FR_ENTRY] parser_started=true");
     try {
       console.log("[FR_STEP] entered");
       const frStartTs = Date.now();
 
-      const fullRawAddress = (addressParam || rawInputAddress || [houseNumber, street, city, postcode || zip].filter(Boolean).join(", ")).trim();
+      const fullRawAddress = (rawInputAddress || addressParam || rawInput || [houseNumber, street, city, postcode || zip].filter(Boolean).join(", ")).trim();
       console.log("[FR_PARSE] raw_input=" + (fullRawAddress || "(empty)"));
 
       let cityParsed = city.trim();
@@ -800,8 +805,26 @@ export async function GET(request: NextRequest) {
       console.log("[FR_BAN] raw_postcode=" + (banInputPostcode || "(empty)"));
 
       const banQueryAttempts: Array<{ postcode: string; city_norm: string; street_norm: string; house_number_norm: string; query_mode: string }> = [];
-      const streetForBan = banInputStreetNorm || banInputCity || "";
+      let streetForBan = banInputStreetNorm || banInputCity || "";
 
+      if (!streetForBan && !banInputPostcode && fullRawAddress) {
+        const rawPc = fullRawAddress.match(/\b(\d{4,5})\b/)?.[1];
+        const beforePc = rawPc ? fullRawAddress.slice(0, fullRawAddress.indexOf(rawPc)).replace(/,+\s*$/, "").trim() : fullRawAddress;
+        const rawStreet = beforePc.replace(/^\d+[A-Za-z]?\s*/, "").trim();
+        const rawHn = fullRawAddress.match(/^(\d+[A-Za-z]?)\s/)?.[1] || "";
+        if ((rawPc || rawStreet) && rawStreet.length >= 2) {
+          const rawStreetNorm = normalizeForBanText(rawStreet);
+          const rawPrefixRegex = /^(?:RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i;
+          const rawStreetCore = rawStreetNorm.replace(rawPrefixRegex, "").replace(/\s+/g, " ").trim() || rawStreetNorm;
+          banQueryAttempts.push({
+            postcode: rawPc || "",
+            city_norm: "",
+            street_norm: rawStreetCore || rawStreetNorm,
+            house_number_norm: rawHn,
+            query_mode: "raw",
+          });
+        }
+      }
       if (streetForBan || banInputPostcode) {
         if (banInputPostcode && banInputCity && streetForBan) {
           banQueryAttempts.push({ postcode: banInputPostcode, city_norm: banInputCity, street_norm: streetForBan, house_number_norm: banInputHouseNumber || "", query_mode: "parsed_full" });
@@ -818,6 +841,7 @@ export async function GET(request: NextRequest) {
       }
 
       console.log("[FR_BAN] raw_query_attempted=" + (banInputPostcode || banInputStreetNorm || banInputCity ? "true" : "false"));
+      console.log("[FR_BAN] query_input=" + (fullRawAddress || "(empty)"));
 
       try {
         console.log("[FR_BAN] before_ban_query", {
@@ -856,7 +880,9 @@ export async function GET(request: NextRequest) {
             house_number_norm: attempt.house_number_norm || "",
           };
           if (!attempt.street_norm && !attempt.postcode) continue;
+          const queryInputComposite = [attempt.postcode, attempt.city_norm, attempt.street_norm].filter(Boolean).join(" ");
           console.log("[FR_BAN] query_mode=" + attempt.query_mode);
+          console.log("[FR_BAN] query_input=" + (queryInputComposite || "(empty)"));
           console.log("[FR_PARAMS]", { query: "ban_normalized_lookup_query", attempt: i + 1, ...banParams });
           const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
             { query: banLookupQuery, params: banParams },

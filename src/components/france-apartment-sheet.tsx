@@ -51,7 +51,8 @@ export function FranceApartmentSheet({
   onClose,
 }: FranceSheetProps) {
   const isDev = process.env.NODE_ENV !== "production";
-  const addressForApi = typedAddressForFrance?.trim() ? typedAddressForFrance.trim() : address;
+  const addressForApi = (typedAddressForFrance?.trim() || address?.trim() || "").trim();
+  const rawForApi = (rawInputAddressForFrance?.trim() || addressForApi || "").trim();
 
   const [lotInput, setLotInput] = React.useState("");
   const [requestedLot, setRequestedLot] = React.useState<string | undefined>(undefined);
@@ -73,14 +74,14 @@ export function FranceApartmentSheet({
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
-  const { data, isLoading, refetch } = usePropertyValueInsights(addressForApi, "FR", {
+  const { data, isLoading, refetch } = usePropertyValueInsights(addressForApi || rawForApi, "FR", {
     latitude: position.lat,
     longitude: position.lng,
     aptNumber: requestedLot ?? (hasSubmittedLotSearch ? lotInput : undefined),
     postcode,
     refetchTrigger: trigger,
     countryCode: "FR",
-    rawInputAddress: rawInputAddressForFrance?.trim() || undefined,
+    rawInputAddress: rawForApi || undefined,
   });
 
   React.useEffect(() => {
