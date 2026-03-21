@@ -1528,7 +1528,16 @@ export async function GET(request: NextRequest) {
       const houseFromType = detectedTypeLower.includes("maison") || detectedTypeLower.includes("house") || detectedTypeLower.includes("villa");
 
       const banStreetThresholdPassed = frRuntimeDebug.fr_ban_similarity_threshold_passed === true;
-      const allowMultiUnitFromQueries = banStreetThresholdPassed;
+      const banCity = (frRuntimeDebug.ban_city as string)?.trim() || null;
+      const banPostcode = (frRuntimeDebug.ban_postcode as string)?.trim() || null;
+      const banStreet = (frRuntimeDebug.ban_street as string)?.trim() || null;
+      const banHouseNumber = (frRuntimeDebug.ban_house_number as string)?.trim() || null;
+      const hasBanAddressMatch = Boolean(banCity && banPostcode && banStreet && banHouseNumber);
+      const largeCityDepts = new Set(["75", "13", "69", "59", "33", "31", "44", "34", "67", "83", "84", "06", "74", "38", "35", "64", "17"]);
+      const pcDept = (postcodeNorm || "").slice(0, 2);
+      const isLargeUrbanCity = largeCityDepts.has(pcDept);
+      const hasUrbanApartmentSignals = isLargeUrbanCity && hasBanAddressMatch;
+      const allowMultiUnitFromQueries = banStreetThresholdPassed || hasUrbanApartmentSignals;
 
       const strongHouseSignals = houseEvidenceFromFacts;
       const strongApartmentSignals = allowMultiUnitFromQueries && apartmentEvidenceFromFacts;
@@ -1568,6 +1577,13 @@ export async function GET(request: NextRequest) {
       if (strongHouseSignals && detectClass !== "house") {
         detectClass = "house";
         detectOverrideReason = "override_strong_house_ignored_other_signals";
+      }
+
+      // Force apartment detection when strong urban signals exist (large city + BAN address match).
+      // Do not override house — house logic is unchanged.
+      if (detectClass !== "house" && hasUrbanApartmentSignals) {
+        detectClass = "apartment";
+        detectOverrideReason = "urban_apartment_override_city_street_number";
       }
 
       if (detectClass === "apartment" && allowMultiUnitFromQueries) {
@@ -1778,43 +1794,9 @@ export async function GET(request: NextRequest) {
             "[FR_RETURN] blocked_prompt_lot_first_submitted_lot_present=true — continuing to valuation ladder"
           );
         } else {
-        console.log("[FR_GOLD] apartment_lot_prompt_triggered");
-        console.log("[FR_LOT_API] response tag", "prompt_lot_first");
-        return frReturn(
-            {
-              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
-              data_source: "properties_france",
-              multiple_units: true,
-              prompt_for_apartment: true,
-              available_lots: candidateLots,
-              property_result: {
-                exact_value: null,
-                exact_value_message: "Enter apartment/lot for a more precise result.",
-                value_level: "building-level",
-                last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
-                street_average: null,
-                street_average_message: "No reliable data found",
-                livability_rating: "FAIR",
-              },
-              fr_detect: detectClass,
-              fr: emptyFranceResponse({
-                success: true,
-                resultType: "building_level",
-                confidence: "medium",
-                requestedLot: requestedLotNorm,
-                normalizedLot: normalizedRequestedLot,
-                property: null,
-                buildingStats: {
-                  transactionCount: Math.max(candidateLots.length, isMultiUnitDetected ? 2 : 1),
-                  avgPricePerSqm: null,
-                  avgTransactionValue: null,
-                },
-                comparables: [],
-                matchExplanation: "Apartment-like building detected. Enter lot/apartment for precise valuation.",
-              }),
-            },
-            "prompt_lot_first"
-          );
+          // Defer lot prompt: run ladder first to try building-level fallback (req 4).
+          // If building profile returns a result, we return it. If not, return prompt before no_data (req 3).
+          console.log("[FR_FLOW] apartment_no_lot_defer_prompt_until_after_building_fallback");
         }
       }
 
@@ -3035,7 +3017,9 @@ export async function GET(request: NextRequest) {
       const tryBuildingProfileFallback = (): ReturnType<typeof frReturn> | null => {
         if (!buildingProfile || buildingProfile.transaction_count < 1) return null;
         const forHouses = detectClass === "house" && buildingProfile.house_count > 0;
-        const forApartments = detectClass === "apartment" && (buildingProfile.apartment_count > 0 || buildingProfile.transaction_count > 0);
+        const forApartments =
+          (detectClass === "apartment" || (detectClass === "unclear" && buildingProfile.apartment_count > 0)) &&
+          (buildingProfile.apartment_count > 0 || buildingProfile.transaction_count > 0);
         if (!forHouses && !forApartments) return null;
         const medianPpm = buildingProfile.median_price_per_m2;
         const surfaceForEst = validInputSurfaceM2 ?? buildingProfile.surface_median ?? medianSurfaceM2ForFallback;
@@ -3733,6 +3717,46 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
       frRuntimeDebug.no_data_reason = noDataReasonParts.join(" | ") || "unknown";
+
+      // Req 3: If apartment + no lot and we'd return no_data, prompt for lot instead.
+      if (detectClass === "apartment" && !submittedLotPresent) {
+        console.log("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
+        return frReturn(
+          {
+            address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+            data_source: "properties_france",
+            multiple_units: true,
+            prompt_for_apartment: true,
+            available_lots: candidateLots,
+            property_result: {
+              exact_value: null,
+              exact_value_message: "Enter apartment/lot for a more precise result.",
+              value_level: "building-level",
+              last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
+              street_average: null,
+              street_average_message: "No reliable data found",
+              livability_rating: "FAIR",
+            },
+            fr_detect: detectClass,
+            fr: emptyFranceResponse({
+              success: true,
+              resultType: "building_level",
+              confidence: "medium",
+              requestedLot: requestedLotNorm,
+              normalizedLot: normalizedRequestedLot,
+              property: null,
+              buildingStats: {
+                transactionCount: Math.max(candidateLots.length, isMultiUnitDetected ? 2 : 1),
+                avgPricePerSqm: null,
+                avgTransactionValue: null,
+              },
+              comparables: [],
+              matchExplanation: "Apartment-like building detected. Enter lot/apartment for precise valuation.",
+            }),
+          },
+          "prompt_lot_first"
+        );
+      }
 
       return frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
