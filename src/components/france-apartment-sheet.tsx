@@ -966,8 +966,10 @@ export function FranceApartmentSheet({
       return { min: p20, max: p80 };
     })();
 
-    // Hide redundant "Estimated value" row when the headline is €/m²-only (no total or range).
-    const showEstimatedValueSubLabel = hasValue || valueRange != null;
+    // €/m²-only (estimated total absent, no min–max range): hide "Estimated value" — keep market value + confidence + source.
+    const isPricePerM2OnlyHeadline =
+      hasPricePerM2Headline && !hasValue && valueRange == null;
+    const showEstimatedValueSubLabel = !isPricePerM2OnlyHeadline && (hasValue || valueRange != null);
 
     const lastTxValue =
       !isLoadingNow && !isNoResult && typeof fr?.property?.transactionValue === "number" && fr.property.transactionValue > 0
