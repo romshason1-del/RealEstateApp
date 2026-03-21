@@ -292,18 +292,27 @@ export function FranceApartmentSheet({
             ? "house"
             : "unclear";
 
-  // House-direct flow: never apply apartment lot UI logic or close the result card.
-  const isHouseDirectFlow = effectiveDetectClass === "house" || (effectiveDetectClass === "unclear" && !shouldShowApartmentInput);
+  // Lot prompt genuinely required: apartment flow AND backend asked for lot AND no lot provided.
+  const lotPromptGenuinelyRequired =
+    effectiveDetectClass === "apartment" && parsed?.prompt_for_apartment === true && !(requestedLot ?? "").trim();
 
-  // Close result card ONLY when apartment needs lot input. Never close for house.
+  // House-direct flow: robust — allow when no active lot prompt or we have a usable result.
+  const isHouseDirectFlow =
+    effectiveDetectClass === "house" ||
+    (effectiveDetectClass === "unclear" && !shouldShowApartmentInput) ||
+    (frAddressFetchDone && effectiveData && parsed?.prompt_for_apartment !== true) ||
+    (effectiveDetectClass === "apartment" && parsed?.prompt_for_apartment !== true && frAddressFetchDone);
+
+  // Apartment block active: only when lot is genuinely required and we have no usable result yet.
+  const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
+
+  // Close result card ONLY when apartment block is active. Never close for house/direct flows.
   React.useEffect(() => {
     if (isHouseDirectFlow) return;
-    if (!frAddressFetchDone) return;
-    if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim() && !hasSubmittedLotSearch) {
-      if (isDev) console.log("[FR_UI] fr_ui_close_reason=apartment_lot_prompt");
-      setIsResultCardOpen(false);
-    }
-  }, [isHouseDirectFlow, frAddressFetchDone, effectiveDetectClass, requestedLot, hasSubmittedLotSearch, isDev]);
+    if (!apartmentBlockActive) return;
+    if (isDev) console.log("[FR_UI] fr_ui_close_reason=apartment_lot_prompt");
+    setIsResultCardOpen(false);
+  }, [isHouseDirectFlow, apartmentBlockActive, isDev]);
 
   React.useEffect(() => {
     if (!isDev) return;
@@ -335,9 +344,9 @@ export function FranceApartmentSheet({
     console.log("[FR_UI_STATE]", { uiState });
   }, [isDev, uiState]);
 
-  const resultCardBlocked = effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim();
+  const resultCardBlocked = apartmentBlockActive;
 
-  // Strict UI gate for apartment-first flow only. Never run for house.
+  // Strict UI gate for apartment-first flow only. Never run for house/direct.
   // If apartment is detected and user hasn't submitted a lot yet,
   // keep the result card closed and never allow "searched" phases to render.
   React.useEffect(() => {
@@ -438,23 +447,18 @@ export function FranceApartmentSheet({
     return hasUsefulBuildingData ? "searched_no_exact_match_but_building_exists_state" : "no_result_state";
   }, [effectiveData, hasSubmittedLotSearch, hasUsefulBuildingData, apartmentLotGateActive, isFranceBuildingSimilarWin]);
 
-  // Houses/single-unit properties should not require apartment/lot input.
-  // As soon as we have enough data to infer "house", open the results directly from the address.
+  // Houses/single-unit properties and direct-result flows: open results when not genuinely waiting for lot.
   React.useEffect(() => {
-    // Fallback: if apartment input is not shown, ensure the user always gets a usable next step
-    // by opening the results (house-direct/implicit resolved state) rather than leaving the sheet inactive.
-    // If backend indicates a multi-unit building (apartment/lot-first), never auto-open results.
-    // This guarantees we don't show a final result/no-data card before the user submits a lot.
-    if (parsed?.multiple_units === true || parsed?.prompt_for_apartment === true) return;
+    if (lotPromptGenuinelyRequired) return;
     if (!frAddressFetchDone) return;
-    if (effectiveDetectClass === "apartment") return;
     if (shouldShowApartmentInput) return;
     if (hasSubmittedLotSearch) return;
     if (isLoading) return;
+    if (!effectiveData) return;
     if (isDev) console.log("[FR_UI] direct_house_flow_chosen");
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, isDev, frDetect, frAddressFetchDone, effectiveDetectClass, parsed?.multiple_units, parsed?.prompt_for_apartment]);
+  }, [lotPromptGenuinelyRequired, shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, frAddressFetchDone, effectiveData, isDev]);
 
   React.useEffect(() => {
     if (!isDev) return;
@@ -833,29 +837,22 @@ export function FranceApartmentSheet({
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
-    // House-direct: keep card visible during and after fetch. Apartment: need submitted lot or loading.
-    const houseFlowShowCard = isHouseDirectFlow && frAddressFetchDone;
-    const apartmentOrLoading = hasSubmittedLotSearch || isLoading;
-    if (!houseFlowShowCard && !apartmentOrLoading) {
-      if (effectiveDetectClass === "apartment" && isDev) {
-        console.log("[FR_UI_DEBUG] result_card_blocked", {
-          detectClass: effectiveDetectClass,
-          hasSubmittedLot: hasSubmittedLotSearch,
-          blocked: true,
-        });
+
+    const houseFlowActive = isHouseDirectFlow;
+    const apartmentBlockActiveNow = apartmentBlockActive;
+
+    if (apartmentBlockActiveNow) {
+      if (isDev) {
+        console.log("[FR_UI_DEBUG] result_card_blocked", { apartmentBlockActiveNow, houseFlowActive });
       }
       return null;
     }
-    // Extra safety: apartment-first should never render without a submitted lot value.
-    if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim()) {
-      if (isDev) {
-        console.log("[FR_UI_DEBUG] result_card_blocked_missing_lot_value", {
-          detectClass: effectiveDetectClass,
-          hasSubmittedLot: hasSubmittedLotSearch,
-          blocked: true,
-          requestedLot,
-        });
-      }
+
+    const showForHouseOrDirect = houseFlowActive && (frAddressFetchDone || isLoading);
+    const showForApartment = hasSubmittedLotSearch || (isLoading && effectiveDetectClass === "apartment");
+    const showForNonLotFlow = frAddressFetchDone && effectiveData;
+
+    if (!showForHouseOrDirect && !showForApartment && !showForNonLotFlow) {
       return null;
     }
 
@@ -1356,9 +1353,10 @@ export function FranceApartmentSheet({
                 {isFranceDebugOpen ? (
                   <div className="mt-0.5 rounded-[8px] border border-white/10 bg-black/15 px-2 py-1.5 overflow-hidden">
                     <div className="max-h-[140px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-300/90 space-y-0.5">
-                      <div>fr_ui_flow: {isHouseDirectFlow ? "house" : "apartment"}</div>
                       <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
-                      <div>fr_ui_lot_prompt_open: {String(shouldShowApartmentInput && !hasSubmittedLotSearch)}</div>
+                      <div>fr_ui_house_flow_active: {String(isHouseDirectFlow)}</div>
+                      <div>fr_ui_apartment_block_active: {String(apartmentBlockActive)}</div>
+                      <div>fr_ui_hide_reason: {apartmentBlockActive && !isHouseDirectFlow ? "apartment_block" : "—"}</div>
                       <div>winning_step: {toDebugStr(rd?.winning_step)}</div>
                       <div>winning_source_label: {toDebugStr(rd?.winning_source_label)}</div>
                       <div>confidence: {toDebugStr((fr as any)?.confidence ?? rd?.confidence)}</div>
