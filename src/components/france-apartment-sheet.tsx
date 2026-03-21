@@ -71,6 +71,7 @@ export function FranceApartmentSheet({
   const [showOptionalAptInput, setShowOptionalAptInput] = React.useState(false);
   // TEMP: default-open in non-production to make this investigation obvious.
   const [isFranceDebugOpen, setIsFranceDebugOpen] = React.useState(isDev);
+  const [isFranceDebugMoreOpen, setIsFranceDebugMoreOpen] = React.useState(false);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
@@ -133,6 +134,7 @@ export function FranceApartmentSheet({
     setShowOptionalAptInput(false);
     setResolvedForDisplay(null);
     setIsExpanded(false);
+    setIsFranceDebugMoreOpen(false);
   }, [addressKey]);
 
   // Prevent any "house-direct" result-card auto-open until we have resolved the initial
@@ -149,6 +151,18 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     if (frAddressFetchStarted && !isLoading) setFrAddressFetchDone(true);
   }, [frAddressFetchStarted, isLoading]);
+
+  // Show result card immediately when loading starts (no intermediate popup).
+  React.useEffect(() => {
+    if (isLoading) setIsResultCardOpen(true);
+  }, [isLoading]);
+  // Close result card when loading completes and we need apartment lot input.
+  React.useEffect(() => {
+    if (!frAddressFetchDone) return;
+    if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim() && !hasSubmittedLotSearch) {
+      setIsResultCardOpen(false);
+    }
+  }, [frAddressFetchDone, effectiveDetectClass, requestedLot, hasSubmittedLotSearch]);
 
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
@@ -808,7 +822,8 @@ export function FranceApartmentSheet({
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
-    if (!hasSubmittedLotSearch) {
+    // Allow loading state before hasSubmittedLotSearch; show "Searching..." immediately.
+    if (!hasSubmittedLotSearch && !isLoading) {
       if (effectiveDetectClass === "apartment" && isDev) {
         console.log("[FR_UI_DEBUG] result_card_blocked", {
           detectClass: effectiveDetectClass,
@@ -1314,100 +1329,114 @@ export function FranceApartmentSheet({
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
               </div>
 
-              {/* TEMP: France runtime diagnostics (investigation only) */}
+              {/* TEMP: France runtime diagnostics (investigation only) - compact by default */}
               <div className="mt-1">
                 <button
                   type="button"
                   onClick={() => setIsFranceDebugOpen((v) => !v)}
-                  className="flex w-full items-center justify-between rounded-[10px] border border-white/10 bg-white/5 px-2.5 py-2 text-left"
+                  className="flex w-full items-center justify-between rounded-[8px] border border-white/10 bg-white/5 px-2 py-1.5 text-left"
                   aria-expanded={isFranceDebugOpen}
                 >
-                  <span className="text-xs font-semibold text-white/85">France Debug</span>
-                  <span className="text-xs font-semibold text-white/60">{isFranceDebugOpen ? "Hide" : "Show"}</span>
+                  <span className="text-[10px] font-semibold text-white/85">France Debug</span>
+                  <span className="text-[10px] font-semibold text-white/60">{isFranceDebugOpen ? "Hide" : "Show"}</span>
                 </button>
                 {isFranceDebugOpen ? (
-                  <div className="mt-1 rounded-[10px] border border-white/10 bg-black/15 px-2.5 py-2 overflow-hidden">
-                    <div className="text-[10px] uppercase tracking-wider text-zinc-400/90 font-medium">fr_runtime_debug</div>
-                    <div className="mt-2 space-y-0.5 text-[10px] leading-tight text-zinc-400/90">
-                      <div className="font-mono">{flowMarker}</div>
-                      <div className="font-mono">{detectMarker}</div>
-                    </div>
-                    <div className="mt-2 font-mono text-[10px] leading-tight text-zinc-200/80 space-y-0.5">
-                      <div className="font-semibold text-amber-300/90">Request / parse</div>
-                      <div>fr_raw_input: {toDebugStr(rd?.fr_raw_input)}</div>
-                      <div>fr_address_param: {toDebugStr(rd?.fr_address_param)}</div>
-                      <div>fr_full_raw_address: {toDebugStr(rd?.fr_full_raw_address)}</div>
-                      <div>fr_parser_started: {toDebugStr(rd?.fr_parser_started)}</div>
-                      <div>fr_parsed_house_number: {toDebugStr(rd?.fr_parsed_house_number)}</div>
-                      <div>fr_parsed_street: {toDebugStr(rd?.fr_parsed_street)}</div>
-                      <div>fr_parsed_postcode: {toDebugStr(rd?.fr_parsed_postcode)}</div>
-                      <div>fr_parsed_city: {toDebugStr(rd?.fr_parsed_city)}</div>
-                      <div>fr_raw_postcode_token: {toDebugStr(rd?.fr_raw_postcode_token)}</div>
-                      <div className="font-semibold text-amber-300/90 mt-1">BAN</div>
-                      <div>fr_ban_query_mode: {toDebugStr(rd?.fr_ban_query_mode)}</div>
-                      <div>fr_ban_attempt_count: {toDebugStr(rd?.fr_ban_attempt_count)}</div>
-                      <div>fr_postcode_mismatch_rejections: {toDebugStr(rd?.fr_postcode_mismatch_rejections)}</div>
-                      <div>fr_typed_street_normalized: {toDebugStr(rd?.fr_typed_street_normalized)}</div>
-                      <div>fr_typed_street_type: {toDebugStr(rd?.fr_typed_street_type)}</div>
-                      <div>fr_typed_street_core: {toDebugStr(rd?.fr_typed_street_core)}</div>
-                      <div>fr_ban_candidate_count: {toDebugStr(rd?.fr_ban_candidate_count)}</div>
-                      <div>fr_ban_selected_street_score: {toDebugStr(rd?.fr_ban_selected_street_score)}</div>
-                      <div>fr_ban_selected_reason: {toDebugStr(rd?.fr_ban_selected_reason)}</div>
-                      <div>fr_ban_selected_street_type: {toDebugStr(rd?.fr_ban_selected_street_type)}</div>
-                      <div>fr_ban_selected_street_core: {toDebugStr(rd?.fr_ban_selected_street_core)}</div>
-                      <div>fr_ban_selected_penalties: {toDebugStr(rd?.fr_ban_selected_penalties)}</div>
-                      <div>fr_ban_similarity_threshold_passed: {toDebugStr(rd?.fr_ban_similarity_threshold_passed)}</div>
-                      <div>fr_ban_top_candidates_summary: {toDebugStr(rd?.fr_ban_top_candidates_summary)}</div>
+                  <div className="mt-0.5 rounded-[8px] border border-white/10 bg-black/15 px-2 py-1.5 overflow-hidden">
+                    <div className="max-h-[140px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-300/90 space-y-0.5">
+                      <div>winning_step: {toDebugStr(rd?.winning_step)}</div>
+                      <div>winning_source_label: {toDebugStr(rd?.winning_source_label)}</div>
+                      <div>confidence: {toDebugStr((fr as any)?.confidence ?? rd?.confidence)}</div>
                       <div>ban_city: {toDebugStr(rd?.ban_city)}</div>
                       <div>ban_postcode: {toDebugStr(rd?.ban_postcode)}</div>
                       <div>ban_street: {toDebugStr(rd?.ban_street)}</div>
                       <div>ban_house_number: {toDebugStr(rd?.ban_house_number)}</div>
-                      <div className="font-semibold text-amber-300/90 mt-1">Cache / outcome</div>
-                      <div>fr_cache_hit: {toDebugStr(rd?.fr_cache_hit)}</div>
-                      <div>fr_cache_bypass_reason: {toDebugStr(rd?.fr_cache_bypass_reason)}</div>
-                      <div>fr_failed_stage: {toDebugStr(rd?.fr_failed_stage)}</div>
-                      <div>submitted_lot: {toDebugStr(rd?.submitted_lot)}</div>
                       <div>detect_class: {toDebugStr(rd?.detect_class)}</div>
-                      <div>fr_detect_signals_summary: {toDebugStr(rd?.fr_detect_signals_summary)}</div>
-                      <div>fr_detect_used_lot: {toDebugStr(rd?.fr_detect_used_lot)}</div>
-                      <div>fr_detect_override_reason: {toDebugStr(rd?.fr_detect_override_reason)}</div>
-                      <div>fr_detect_multi_unit_source: {toDebugStr(rd?.fr_detect_multi_unit_source)}</div>
-                      <div>fr_detect_ban_strength_used: {toDebugStr(rd?.fr_detect_ban_strength_used)}</div>
-                      <div>fr_should_prompt_lot: {toDebugStr(rd?.fr_should_prompt_lot)}</div>
-                      <div>fr_label_safety_override: {toDebugStr(rd?.fr_label_safety_override)}</div>
-                      <div>fr_confidence_adjustment_reason: {toDebugStr(rd?.fr_confidence_adjustment_reason)}</div>
-                      <div className="font-semibold text-amber-300/90 mt-1">Source lookup</div>
-                      <div>fr_source_lookup_postcode: {toDebugStr(rd?.fr_source_lookup_postcode)}</div>
-                      <div>fr_source_lookup_city: {toDebugStr(rd?.fr_source_lookup_city)}</div>
-                      <div>fr_source_lookup_street_raw: {toDebugStr(rd?.fr_source_lookup_street_raw)}</div>
-                      <div>fr_source_lookup_street_core: {toDebugStr(rd?.fr_source_lookup_street_core)}</div>
-                      <div>fr_source_lookup_street_type: {toDebugStr(rd?.fr_source_lookup_street_type)}</div>
-                      <div>fr_source_lookup_street: {toDebugStr(rd?.fr_source_lookup_street)}</div>
-                      <div>fr_source_lookup_house_number: {toDebugStr(rd?.fr_source_lookup_house_number)}</div>
-                      <div>fr_source_lookup_exact_count: {toDebugStr(rd?.fr_source_lookup_exact_count)}</div>
-                      <div>fr_source_lookup_street_count: {toDebugStr(rd?.fr_source_lookup_street_count)}</div>
-                      <div>fr_source_lookup_commune_count: {toDebugStr(rd?.fr_source_lookup_commune_count)}</div>
-                      <div>fr_source_lookup_failed_reason: {toDebugStr(rd?.fr_source_lookup_failed_reason)}</div>
-                      <div>exact_rows_count: {toDebugStr(rd?.exact_rows_count)}</div>
-                      <div>exact_usable_rows_count: {toDebugStr(rd?.exact_usable_rows_count)}</div>
-                      <div>exact_level: {toDebugStr(rd?.exact_level)}</div>
-                      <div>exact_unit_row_count: {toDebugStr(rd?.exact_unit_row_count)}</div>
-                      <div>exact_address_row_count: {toDebugStr(rd?.exact_address_row_count)}</div>
-                      <div>building_rows_count: {toDebugStr(rd?.building_rows_count)}</div>
-                      <div>building_usable_rows_count: {toDebugStr(rd?.building_usable_rows_count)}</div>
-                      <div>building_similar_unit_candidates_count: {toDebugStr(rd?.building_similar_unit_candidates_count)}</div>
-                      <div>building_similar_unit_after_filters_count: {toDebugStr(rd?.building_similar_unit_after_filters_count)}</div>
-                      <div>building_similar_unit_reject_reason: {toDebugStr(rd?.building_similar_unit_reject_reason)}</div>
-                      <div>street_rows_count: {toDebugStr(rd?.street_rows_count)}</div>
-                      <div>street_usable_rows_count: {toDebugStr(rd?.street_usable_rows_count)}</div>
-                      <div>commune_rows_count: {toDebugStr(rd?.commune_rows_count)}</div>
-                      <div>commune_usable_rows_count: {toDebugStr(rd?.commune_usable_rows_count)}</div>
-                      <div>winning_step: {toDebugStr(rd?.winning_step)}</div>
-                      <div>winning_source_label: {toDebugStr(rd?.winning_source_label)}</div>
-                      <div>has_surface_for_estimate: {toDebugStr(rd?.has_surface_for_estimate)}</div>
-                      <div>chosen_surface_value: {toDebugStr(rd?.chosen_surface_value)}</div>
-                      <div>no_data_reason: {toDebugStr(rd?.no_data_reason)}</div>
+                      {toDebugStr(rd?.no_data_reason) !== "—" ? (
+                        <div>no_data_reason: {toDebugStr(rd?.no_data_reason)}</div>
+                      ) : null}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsFranceDebugMoreOpen((v) => !v)}
+                      className="mt-1 flex w-full items-center justify-between rounded-[6px] border border-white/8 bg-black/20 px-1.5 py-1 text-left"
+                      aria-expanded={isFranceDebugMoreOpen}
+                    >
+                      <span className="text-[9px] font-medium text-zinc-400">More debug details</span>
+                      <span className="text-[9px] text-zinc-500">{isFranceDebugMoreOpen ? "▲" : "▼"}</span>
+                    </button>
+                    {isFranceDebugMoreOpen ? (
+                      <div className="mt-0.5 max-h-[180px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-400/80 space-y-0.5 border-t border-white/5 pt-1">
+                        <div className="font-semibold text-amber-300/80">Flow / detect</div>
+                        <div>{flowMarker}</div>
+                        <div>{detectMarker}</div>
+                        <div className="font-semibold text-amber-300/80 mt-0.5">Request / parse</div>
+                        <div>fr_raw_input: {toDebugStr(rd?.fr_raw_input)}</div>
+                        <div>fr_address_param: {toDebugStr(rd?.fr_address_param)}</div>
+                        <div>fr_full_raw_address: {toDebugStr(rd?.fr_full_raw_address)}</div>
+                        <div>fr_parser_started: {toDebugStr(rd?.fr_parser_started)}</div>
+                        <div>fr_parsed_house_number: {toDebugStr(rd?.fr_parsed_house_number)}</div>
+                        <div>fr_parsed_street: {toDebugStr(rd?.fr_parsed_street)}</div>
+                        <div>fr_parsed_postcode: {toDebugStr(rd?.fr_parsed_postcode)}</div>
+                        <div>fr_parsed_city: {toDebugStr(rd?.fr_parsed_city)}</div>
+                        <div>fr_raw_postcode_token: {toDebugStr(rd?.fr_raw_postcode_token)}</div>
+                        <div className="font-semibold text-amber-300/80 mt-0.5">BAN</div>
+                        <div>fr_ban_query_mode: {toDebugStr(rd?.fr_ban_query_mode)}</div>
+                        <div>fr_ban_attempt_count: {toDebugStr(rd?.fr_ban_attempt_count)}</div>
+                        <div>fr_postcode_mismatch_rejections: {toDebugStr(rd?.fr_postcode_mismatch_rejections)}</div>
+                        <div>fr_typed_street_normalized: {toDebugStr(rd?.fr_typed_street_normalized)}</div>
+                        <div>fr_typed_street_type: {toDebugStr(rd?.fr_typed_street_type)}</div>
+                        <div>fr_typed_street_core: {toDebugStr(rd?.fr_typed_street_core)}</div>
+                        <div>fr_ban_candidate_count: {toDebugStr(rd?.fr_ban_candidate_count)}</div>
+                        <div>fr_ban_selected_street_score: {toDebugStr(rd?.fr_ban_selected_street_score)}</div>
+                        <div>fr_ban_selected_reason: {toDebugStr(rd?.fr_ban_selected_reason)}</div>
+                        <div>fr_ban_selected_street_type: {toDebugStr(rd?.fr_ban_selected_street_type)}</div>
+                        <div>fr_ban_selected_street_core: {toDebugStr(rd?.fr_ban_selected_street_core)}</div>
+                        <div>fr_ban_selected_penalties: {toDebugStr(rd?.fr_ban_selected_penalties)}</div>
+                        <div>fr_ban_similarity_threshold_passed: {toDebugStr(rd?.fr_ban_similarity_threshold_passed)}</div>
+                        <div>fr_ban_top_candidates_summary: {toDebugStr(rd?.fr_ban_top_candidates_summary)}</div>
+                        <div className="font-semibold text-amber-300/80 mt-0.5">Cache / outcome</div>
+                        <div>fr_cache_hit: {toDebugStr(rd?.fr_cache_hit)}</div>
+                        <div>fr_cache_bypass_reason: {toDebugStr(rd?.fr_cache_bypass_reason)}</div>
+                        <div>fr_failed_stage: {toDebugStr(rd?.fr_failed_stage)}</div>
+                        <div>submitted_lot: {toDebugStr(rd?.submitted_lot)}</div>
+                        <div>fr_detect_signals_summary: {toDebugStr(rd?.fr_detect_signals_summary)}</div>
+                        <div>fr_detect_used_lot: {toDebugStr(rd?.fr_detect_used_lot)}</div>
+                        <div>fr_detect_override_reason: {toDebugStr(rd?.fr_detect_override_reason)}</div>
+                        <div>fr_detect_multi_unit_source: {toDebugStr(rd?.fr_detect_multi_unit_source)}</div>
+                        <div>fr_detect_ban_strength_used: {toDebugStr(rd?.fr_detect_ban_strength_used)}</div>
+                        <div>fr_should_prompt_lot: {toDebugStr(rd?.fr_should_prompt_lot)}</div>
+                        <div>fr_label_safety_override: {toDebugStr(rd?.fr_label_safety_override)}</div>
+                        <div>fr_confidence_adjustment_reason: {toDebugStr(rd?.fr_confidence_adjustment_reason)}</div>
+                        <div className="font-semibold text-amber-300/80 mt-0.5">Source lookup</div>
+                        <div>fr_source_lookup_postcode: {toDebugStr(rd?.fr_source_lookup_postcode)}</div>
+                        <div>fr_source_lookup_city: {toDebugStr(rd?.fr_source_lookup_city)}</div>
+                        <div>fr_source_lookup_street_raw: {toDebugStr(rd?.fr_source_lookup_street_raw)}</div>
+                        <div>fr_source_lookup_street_core: {toDebugStr(rd?.fr_source_lookup_street_core)}</div>
+                        <div>fr_source_lookup_street_type: {toDebugStr(rd?.fr_source_lookup_street_type)}</div>
+                        <div>fr_source_lookup_street: {toDebugStr(rd?.fr_source_lookup_street)}</div>
+                        <div>fr_source_lookup_house_number: {toDebugStr(rd?.fr_source_lookup_house_number)}</div>
+                        <div>fr_source_lookup_exact_count: {toDebugStr(rd?.fr_source_lookup_exact_count)}</div>
+                        <div>fr_source_lookup_street_count: {toDebugStr(rd?.fr_source_lookup_street_count)}</div>
+                        <div>fr_source_lookup_commune_count: {toDebugStr(rd?.fr_source_lookup_commune_count)}</div>
+                        <div>fr_source_lookup_failed_reason: {toDebugStr(rd?.fr_source_lookup_failed_reason)}</div>
+                        <div>exact_rows_count: {toDebugStr(rd?.exact_rows_count)}</div>
+                        <div>exact_usable_rows_count: {toDebugStr(rd?.exact_usable_rows_count)}</div>
+                        <div>exact_level: {toDebugStr(rd?.exact_level)}</div>
+                        <div>exact_unit_row_count: {toDebugStr(rd?.exact_unit_row_count)}</div>
+                        <div>exact_address_row_count: {toDebugStr(rd?.exact_address_row_count)}</div>
+                        <div>building_rows_count: {toDebugStr(rd?.building_rows_count)}</div>
+                        <div>building_usable_rows_count: {toDebugStr(rd?.building_usable_rows_count)}</div>
+                        <div>building_similar_unit_candidates_count: {toDebugStr(rd?.building_similar_unit_candidates_count)}</div>
+                        <div>building_similar_unit_after_filters_count: {toDebugStr(rd?.building_similar_unit_after_filters_count)}</div>
+                        <div>building_similar_unit_reject_reason: {toDebugStr(rd?.building_similar_unit_reject_reason)}</div>
+                        <div>street_rows_count: {toDebugStr(rd?.street_rows_count)}</div>
+                        <div>street_usable_rows_count: {toDebugStr(rd?.street_usable_rows_count)}</div>
+                        <div>commune_rows_count: {toDebugStr(rd?.commune_rows_count)}</div>
+                        <div>commune_usable_rows_count: {toDebugStr(rd?.commune_usable_rows_count)}</div>
+                        <div>has_surface_for_estimate: {toDebugStr(rd?.has_surface_for_estimate)}</div>
+                        <div>chosen_surface_value: {toDebugStr(rd?.chosen_surface_value)}</div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1632,16 +1661,8 @@ export function FranceApartmentSheet({
           ) : null}
         </div>
 
-        {/* Scrollable body: results only */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
-          <div className="rounded-xl border border-white/10 bg-black/25 p-3">
-            {!isHouseLikeUI ? (
-              <div className="text-[11px] text-zinc-300">
-                Search results open in a separate floating card above the map.
-              </div>
-            ) : null}
-          </div>
-        </div>
+        {/* Scrollable body: results only (no intermediate popup; result card shows Searching/result directly) */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3" />
       </div>
     </div>
   );
