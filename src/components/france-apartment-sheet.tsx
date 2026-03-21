@@ -1347,6 +1347,11 @@ export function FranceApartmentSheet({
                       <div>fr_ban_query_mode: {toDebugStr(rd?.fr_ban_query_mode)}</div>
                       <div>fr_ban_attempt_count: {toDebugStr(rd?.fr_ban_attempt_count)}</div>
                       <div>fr_postcode_mismatch_rejections: {toDebugStr(rd?.fr_postcode_mismatch_rejections)}</div>
+                      <div>fr_typed_street_normalized: {toDebugStr(rd?.fr_typed_street_normalized)}</div>
+                      <div>fr_ban_candidate_count: {toDebugStr(rd?.fr_ban_candidate_count)}</div>
+                      <div>fr_ban_selected_street_score: {toDebugStr(rd?.fr_ban_selected_street_score)}</div>
+                      <div>fr_ban_selected_reason: {toDebugStr(rd?.fr_ban_selected_reason)}</div>
+                      <div>fr_ban_top_candidates_summary: {toDebugStr(rd?.fr_ban_top_candidates_summary)}</div>
                       <div>ban_city: {toDebugStr(rd?.ban_city)}</div>
                       <div>ban_postcode: {toDebugStr(rd?.ban_postcode)}</div>
                       <div>ban_street: {toDebugStr(rd?.ban_street)}</div>

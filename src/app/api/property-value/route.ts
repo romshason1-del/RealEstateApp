@@ -514,6 +514,11 @@ export async function GET(request: NextRequest) {
         fr_ban_attempt_count: null as number | null,
         fr_raw_postcode_token: frRawPostcodeToken,
         fr_postcode_mismatch_rejections: null as number | null,
+        fr_typed_street_normalized: null as string | null,
+        fr_ban_candidate_count: null as number | null,
+        fr_ban_selected_street_score: null as number | null,
+        fr_ban_selected_reason: null as string | null,
+        fr_ban_top_candidates_summary: null as string | null,
         fr_cache_hit: false,
         fr_cache_bypass_reason: null,
         fr_failed_stage: !frParserStarted && frHadRawInput ? "parse_entry" : null,
@@ -783,6 +788,21 @@ export async function GET(request: NextRequest) {
         return cleaned;
       };
 
+      const scoreStreetSimilarity = (typedNorm: string, candidateStreetRaw: string): number => {
+        if (!typedNorm.trim()) return 0;
+        const candNorm = normalizeStreetForDetection(candidateStreetRaw || "");
+        const typedTokens = typedNorm.split(/\s+/).filter(Boolean);
+        const candTokens = candNorm.split(/\s+/).filter(Boolean);
+        if (typedTokens.length === 0) return 0;
+        if (candNorm === typedNorm) return 1;
+        if (candNorm.trim().startsWith(typedNorm.trim()) && candTokens.length === typedTokens.length) return 1;
+        const matchCount = typedTokens.filter((t) => candTokens.includes(t)).length;
+        const extraCount = candTokens.filter((t) => !typedTokens.includes(t)).length;
+        const baseScore = matchCount / typedTokens.length;
+        const penalty = extraCount * 0.2;
+        return Math.max(0, Math.round((baseScore - penalty) * 100) / 100);
+      };
+
       let streetNormalizedDet = normalizeStreetForDetection(streetNorm);
 
       // BAN resolution first (FR only) so downstream detection + valuation use deterministic inputs.
@@ -972,21 +992,69 @@ export async function GET(request: NextRequest) {
         const banRowsCount = banRows?.length ?? 0;
         console.log("[FR_BAN] candidate_count=" + banRowsCount);
         frRuntimeDebug.ban_rows_count = banRowsCount;
+        frRuntimeDebug.fr_typed_street_normalized = streetNormalizedDet || null;
+        frRuntimeDebug.fr_ban_candidate_count = banRowsCount;
 
-        const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
+        const pickStrFromRow = (r: Record<string, unknown>, keys: string[]): string => {
+          for (const k of keys) {
+            const v = r?.[k];
+            if (typeof v === "string" && (v as string).trim()) return (v as string).trim();
+          }
+          return "";
+        };
+        const typedStreetNorm = streetNormalizedDet || "";
+        const STRONG_STREET_THRESHOLD = 0.6;
+        const scoredRows = (banRows ?? []).map((r) => {
+          const rowStreet = pickStrFromRow(r, ["street_norm", "normalized_street", "street_norm_clean", "street"]);
+          const score = scoreStreetSimilarity(typedStreetNorm, rowStreet);
+          return { row: r, score, rowStreet };
+        });
+        scoredRows.sort((a, b) => b.score - a.score);
+        const best = scoredRows[0];
+        const useFullRow = best && (best.score >= STRONG_STREET_THRESHOLD || (banRowsCount === 1 && best.score > 0));
+        const banRow: Record<string, unknown> | null =
+          best && (useFullRow || (banInputPostcode && best.score >= 0))
+            ? (best.row as Record<string, unknown>)
+            : null;
+        const banRowScore = best?.score ?? null;
+        const banSelectionReason =
+          !best
+            ? "no_candidates"
+            : best.score >= 1
+              ? "exact_street_match"
+              : best.score >= STRONG_STREET_THRESHOLD
+                ? "strong_street_similarity"
+                : banRowsCount === 1
+                  ? "single_candidate"
+                  : best.score > 0
+                    ? "best_available_weak_street"
+                    : "postcode_city_only_fallback";
+
+        frRuntimeDebug.fr_ban_selected_street_score = banRowScore;
+        frRuntimeDebug.fr_ban_selected_reason = banSelectionReason;
+        frRuntimeDebug.fr_ban_top_candidates_summary =
+          scoredRows.length > 0
+            ? scoredRows
+                .slice(0, 5)
+                .map((s, i) => `#${i + 1}:${(s.score * 100).toFixed(0)}%:${s.rowStreet || "(empty)"}`)
+                .join(" | ")
+            : null;
+
         const selectedMatchLevel = banRow ? "full" : "none";
         console.log("[FR_BAN] selected_match_level=" + selectedMatchLevel);
+        console.log("[FR_BAN] street_score=" + String(banRowScore ?? "n/a"));
+        console.log("[FR_BAN] selection_reason=" + banSelectionReason);
 
         if (banRow) {
-          const selCity = banRow.city_norm ?? banRow.city ?? banRow.normalized_city;
-          const selPc = banRow.postcode ?? banRow.postal_code ?? banRow.code_postal;
+          const selCity = (banRow.city_norm ?? banRow.city ?? banRow.normalized_city) as string | undefined;
+          const selPc = (banRow.postcode ?? banRow.postal_code ?? banRow.code_postal) as string | undefined;
           console.log("[FR_BAN] selected_city=" + String(selCity ?? "(empty)"));
           console.log("[FR_BAN] selected_postcode=" + String(selPc ?? "(empty)"));
           const selReason = banInputPostcode && String(selPc ?? "").trim() === banInputPostcode.trim()
             ? "exact_postcode_match"
             : banInputCity && frCityMatches(banInputCity, String(selCity ?? ""))
               ? "exact_city_match"
-              : "best_available_after_filter";
+              : banSelectionReason;
           console.log("[FR_BAN] selection_reason=" + selReason);
         }
         if (banRow) {
@@ -1042,13 +1110,17 @@ export async function GET(request: NextRequest) {
             postcodeNorm = banPostcode;
             ban_postcode = banPostcode;
           }
-          if (banStreetNorm) {
+          if (banStreetNorm && useFullRow) {
             streetNorm = banStreetNorm;
             ban_street = banStreetNorm;
+          } else if (streetNorm && !useFullRow) {
+            ban_street = streetNorm;
           }
-          if (banHouse) {
+          if (banHouse && useFullRow) {
             houseNumberNorm = banHouse;
             ban_house_number = banHouse;
+          } else if (houseNumberNorm && !useFullRow) {
+            ban_house_number = houseNumberNorm;
           }
 
           // Recompute normalized street used by intelligence_v2 detection.
@@ -3510,6 +3582,11 @@ export async function GET(request: NextRequest) {
           fr_ban_attempt_count: 0,
           fr_raw_postcode_token: null,
           fr_postcode_mismatch_rejections: 0,
+          fr_typed_street_normalized: null,
+          fr_ban_candidate_count: 0,
+          fr_ban_selected_street_score: null,
+          fr_ban_selected_reason: "fatal_error",
+          fr_ban_top_candidates_summary: null,
           fr_cache_hit: false,
           fr_cache_bypass_reason: null,
           fr_failed_stage: "fatal_error",
