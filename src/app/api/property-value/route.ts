@@ -2403,6 +2403,7 @@ export async function GET(request: NextRequest) {
 
       const tryStreetFallback = () => {
         if (streetUsableAvgRowsCount <= 0) return null;
+        // No outlier filtering for street when rows < 5 – allow small samples
         const avgPriceValues = streetUsableAvgRows
           .map((r) => parseMaybeDecimal(r.avg_price_per_m2))
           .filter((v): v is number => v != null && v > 0);
@@ -2424,8 +2425,16 @@ export async function GET(request: NextRequest) {
       };
 
       const streetEstimate = tryStreetFallback();
-      let streetNonNumericFallback: typeof streetEstimate | null = null;
+      const streetFallbackDecision = streetEstimate ? "street" : "commune";
+      console.log("[FR_STREET] rows_found=" + String(streetFallbackRowsCount));
+      console.log("[FR_STREET] rows_used=" + String(streetUsableAvgRowsCount));
+      if (!streetEstimate) {
+        console.log("[FR_STREET] rejected_reason=" + (streetUsableAvgRowsCount <= 0 ? "no_usable_rows" : "median_invalid"));
+      }
+      console.log("[FR_STREET] fallback_decision=" + streetFallbackDecision);
+
       if (streetEstimate) {
+        const streetConfidence = streetUsableAvgRowsCount <= 2 ? "low" : "medium";
         console.log("[FR_DEBUG] winning_valuation_step", {
           winningValuationStep: "street_fallback",
           winningSourceLabel: fallbackSourceStreet,
@@ -2461,7 +2470,7 @@ export async function GET(request: NextRequest) {
               // success=true so the UI does not go to "No reliable data found"
               success: true,
               resultType: "nearby_comparable",
-              confidence: "medium",
+              confidence: streetConfidence as "low" | "medium",
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
@@ -2485,70 +2494,56 @@ export async function GET(request: NextRequest) {
             }),
           }, "valuation_response");
         }
-        // No row in property_latest_facts for this house number + no building tier: show street median €/m² now (do not wait for COMMUNE).
-        const goldFactsMissingThisHouseNumber =
-          rawExactHouseNumberRowCount === 0 && Boolean(houseNumberNorm);
-        const buildingTierHasNoUsableRows = sameBuildingUsableRowsCount === 0;
-        if (
-          goldFactsMissingThisHouseNumber &&
-          buildingTierHasNoUsableRows &&
-          streetEstimate.estimated == null
-        ) {
-          const streetOnlyMessage = `${fallbackSourceStreet} — no property_latest_facts row for this house number; median €/m² on the street (total estimate needs surface).`;
-          frRuntimeDebug.winning_median_price_per_m2 = streetEstimate.avgPricePerM2;
-          frRuntimeDebug.winning_step = "street_fallback";
-          frRuntimeDebug.winning_source_label = fallbackSourceStreet;
-          frRuntimeDebug.has_surface_for_estimate = false;
-          frRuntimeDebug.chosen_surface_value = null;
-          console.log(
-            "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only_no_gold_house_row"
-          );
-          return frReturn(
-            {
-              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
-              data_source: "properties_france",
-              fr_detect: frDetectToUse,
-              property_result: {
-                exact_value: null,
-                exact_value_message: null,
-                value_level: "street-level",
-                last_transaction: {
-                  amount: 0,
-                  date: null,
-                  message: "No exact recent transaction available",
-                },
-                street_average: streetEstimate.avgPricePerM2,
-                street_average_message: streetOnlyMessage,
-                livability_rating: "FAIR",
+        // Street has valid price_per_m2 but no surface for total estimate: prefer street over commune.
+        const streetOnlyMessage = `${fallbackSourceStreet} — comparable pricing available, but exact estimate could not be computed (missing surface).`;
+        frRuntimeDebug.winning_median_price_per_m2 = streetEstimate.avgPricePerM2;
+        frRuntimeDebug.winning_step = "street_fallback";
+        frRuntimeDebug.winning_source_label = fallbackSourceStreet;
+        frRuntimeDebug.has_surface_for_estimate = false;
+        frRuntimeDebug.chosen_surface_value = null;
+        console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
+        return frReturn(
+          {
+            address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+            data_source: "properties_france",
+            fr_detect: frDetectToUse,
+            property_result: {
+              exact_value: null,
+              exact_value_message: null,
+              value_level: "street-level",
+              last_transaction: {
+                amount: 0,
+                date: null,
+                message: "No exact recent transaction available",
               },
-              fr: emptyFranceResponse({
-                success: true,
-                resultType: "nearby_comparable",
-                confidence: "medium",
-                requestedLot: requestedLotNorm,
-                normalizedLot: normalizedRequestedLot,
-                property: {
-                  transactionDate: null,
-                  transactionValue: null,
-                  pricePerSqm: streetEstimate.avgPricePerM2,
-                  surfaceArea: null,
-                  rooms: null,
-                  propertyType: propertyType,
-                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
-                  postalCode: postcodeNorm || null,
-                  commune: cityNorm || null,
-                },
-                buildingStats: null,
-                comparables: [],
-                matchExplanation: streetOnlyMessage,
-              }),
+              street_average: streetEstimate.avgPricePerM2,
+              street_average_message: streetOnlyMessage,
+              livability_rating: "FAIR",
             },
-            "valuation_response"
-          );
-        }
-        // Street usable comps exist, but without surface we can't compute a numeric total yet.
-        // Per ladder spec, try commune next before returning a non-exact street fallback.
-        streetNonNumericFallback = streetEstimate;
+            fr: emptyFranceResponse({
+              success: true,
+              resultType: "nearby_comparable",
+              confidence: streetConfidence as "low" | "medium",
+              requestedLot: requestedLotNorm,
+              normalizedLot: normalizedRequestedLot,
+              property: {
+                transactionDate: null,
+                transactionValue: null,
+                pricePerSqm: streetEstimate.avgPricePerM2,
+                surfaceArea: null,
+                rooms: null,
+                propertyType: propertyType,
+                building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                postalCode: postcodeNorm || null,
+                commune: cityNorm || null,
+              },
+              buildingStats: null,
+              comparables: [],
+              matchExplanation: streetOnlyMessage,
+            }),
+          },
+          "valuation_response"
+        );
       }
 
       // Street fallback wasn't usable; try commune fallback next.
@@ -2696,62 +2691,6 @@ export async function GET(request: NextRequest) {
             }),
           }, "valuation_response");
         }
-      }
-
-      // If street usable comps exist but we could not compute a numeric total (missing surface),
-      // still return a truthful non-exact fallback instead of falling through to no-data.
-      if (streetNonNumericFallback) {
-        const missingSurfaceMessage = `${fallbackSourceStreet} — comparable pricing available, but exact estimate could not be computed (missing surface).`;
-        frRuntimeDebug.winning_median_price_per_m2 = streetNonNumericFallback.avgPricePerM2;
-        frRuntimeDebug.winning_step = "street_fallback";
-        frRuntimeDebug.winning_source_label = fallbackSourceStreet;
-        frRuntimeDebug.has_surface_for_estimate = false;
-        frRuntimeDebug.chosen_surface_value = null;
-        console.log(
-          "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_no_total_estimate (EXACT+BUILDING+STREET+COMMUNE ran; street comps without surface)"
-        );
-        return frReturn(
-          {
-            address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
-            data_source: "properties_france",
-            fr_detect: frDetectToUse,
-            property_result: {
-              exact_value: null,
-              exact_value_message: null,
-              value_level: "street-level",
-              last_transaction: {
-                amount: 0,
-                date: null,
-                message: "No exact recent transaction available",
-              },
-              street_average: streetNonNumericFallback.avgPricePerM2,
-              street_average_message: missingSurfaceMessage,
-              livability_rating: "FAIR",
-            },
-            fr: emptyFranceResponse({
-              success: true,
-              resultType: "nearby_comparable",
-              confidence: "medium",
-              requestedLot: requestedLotNorm,
-              normalizedLot: normalizedRequestedLot,
-              property: {
-                transactionDate: null,
-                transactionValue: null,
-                pricePerSqm: streetNonNumericFallback.avgPricePerM2,
-                surfaceArea: null,
-                rooms: null,
-                propertyType: propertyType,
-                building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
-                postalCode: postcodeNorm || null,
-                commune: cityNorm || null,
-              },
-              buildingStats: null,
-              comparables: [],
-              matchExplanation: missingSurfaceMessage,
-            }),
-          },
-          "valuation_response"
-        );
       }
 
       const noDataReasonParts: string[] = [];
