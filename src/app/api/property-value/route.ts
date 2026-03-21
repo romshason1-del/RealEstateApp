@@ -420,7 +420,33 @@ export async function GET(request: NextRequest) {
       });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
+        const pr = payload.property_result as Record<string, unknown> | undefined;
+        const frObj = payload.fr as Record<string, unknown> | undefined;
+        const prop = frObj?.property as Record<string, unknown> | null | undefined;
+        const bs = frObj?.buildingStats as Record<string, unknown> | undefined;
+        const exactVal = pr?.exact_value;
+        const txVal = prop?.transactionValue;
+        const estimated_value_present =
+          (typeof exactVal === "number" && Number.isFinite(exactVal) && exactVal > 0) ||
+          (typeof txVal === "number" && Number.isFinite(txVal) && txVal > 0);
+        const ppmProp = prop?.pricePerSqm;
+        const ppmBs = bs?.avgPricePerSqm;
+        const price_per_m2_present =
+          (typeof ppmProp === "number" && Number.isFinite(ppmProp) && ppmProp > 0) ||
+          (typeof ppmBs === "number" && Number.isFinite(ppmBs) && ppmBs > 0);
+        const has_winner = tag === "valuation_response";
+        const winning_step_str =
+          frRuntimeDebug.winning_step == null ? "" : String(frRuntimeDebug.winning_step);
+
         console.log("[FR_LOT_API] response_tag", tag);
+        console.log("[FR_RETURN] has_winner=" + String(has_winner));
+        console.log("[FR_RETURN] winning_step=" + winning_step_str);
+        console.log("[FR_RETURN] returning_tag=" + tag);
+        console.log(
+          "[FR_RETURN] has_surface_for_estimate=" + String(Boolean(frRuntimeDebug.has_surface_for_estimate))
+        );
+        console.log("[FR_RETURN] estimated_value_present=" + String(estimated_value_present));
+        console.log("[FR_RETURN] price_per_m2_present=" + String(price_per_m2_present));
         console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         // Not BAN-specific: every France exit path uses frReturn (valuation, lot prompt, no_data, etc.).
@@ -1105,7 +1131,7 @@ export async function GET(request: NextRequest) {
               comparables: [],
               matchExplanation: "Exact property",
             }),
-          }, "exact_match");
+          }, "valuation_response");
         }
         // If the row exists but we couldn't compute an estimated value, continue the ladder.
       }
@@ -1229,7 +1255,7 @@ export async function GET(request: NextRequest) {
                   matchExplanation: "Building-level estimate (median/average from same building rows).",
                 }),
               },
-              "building_same_address_match"
+              "valuation_response"
             );
           }
         }
@@ -1365,7 +1391,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
           console.log(
-            "[FR_FLOW] valuation_ladder_complete tag=fallback_match branch=STREET_numeric (EXACT+BUILDING+STREET ran)"
+            "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_numeric (EXACT+BUILDING+STREET ran)"
           );
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -1410,7 +1436,7 @@ export async function GET(request: NextRequest) {
                   ? `${fallbackSourceStreet} — comparable pricing available, but exact estimate could not be computed (missing surface).`
                   : fallbackSourceStreet,
             }),
-          }, "fallback_match");
+          }, "valuation_response");
         }
         // Street usable comps exist, but without surface we can't compute a numeric total yet.
         // Per ladder spec, try commune next before returning a non-exact street fallback.
@@ -1478,7 +1504,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
           console.log(
-            "[FR_FLOW] valuation_ladder_complete tag=fallback_match branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
+            "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
           );
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -1524,7 +1550,7 @@ export async function GET(request: NextRequest) {
                   ? `${fallbackSourceCommune} — comparable pricing available, but exact estimate could not be computed (missing surface).`
                   : fallbackSourceCommune,
             }),
-          }, "fallback_match");
+          }, "valuation_response");
         }
       }
 
@@ -1537,7 +1563,7 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.has_surface_for_estimate = false;
         frRuntimeDebug.chosen_surface_value = null;
         console.log(
-          "[FR_FLOW] valuation_ladder_complete tag=fallback_match branch=STREET_no_total_estimate (EXACT+BUILDING+STREET+COMMUNE ran; street comps without surface)"
+          "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_no_total_estimate (EXACT+BUILDING+STREET+COMMUNE ran; street comps without surface)"
         );
         return frReturn(
           {
@@ -1579,7 +1605,7 @@ export async function GET(request: NextRequest) {
               matchExplanation: missingSurfaceMessage,
             }),
           },
-          "fallback_match"
+          "valuation_response"
         );
       }
 
@@ -1604,8 +1630,32 @@ export async function GET(request: NextRequest) {
         noDataReason: noDataReasonParts.join(" | ") || "unknown",
       });
 
-      frRuntimeDebug.winning_step = "no_data";
-      frRuntimeDebug.winning_source_label = "No reliable data found";
+      const anyUsableRowSignal =
+        exactUsableRowsCount > 0 ||
+        sameBuildingUsableRowsCount > 0 ||
+        streetUsableAvgRowsCount > 0 ||
+        communeUsableAvgRowsCount > 0;
+      if (anyUsableRowSignal) {
+        console.error("[FR_FLOW] unexpected_no_data_despite_usable_rows", {
+          exactUsableRowsCount,
+          sameBuildingUsableRowsCount,
+          streetUsableAvgRowsCount,
+          communeUsableAvgRowsCount,
+        });
+      }
+
+      const banMatchedForTerminal = Boolean(frRuntimeDebug.ban_match_found);
+      const noValuationWinnerTerminal = !anyUsableRowSignal;
+      const terminalNoDataTag: "fallback_match" | "no_data" =
+        banMatchedForTerminal && noValuationWinnerTerminal ? "fallback_match" : "no_data";
+
+      if (terminalNoDataTag === "fallback_match") {
+        frRuntimeDebug.winning_step = null;
+        frRuntimeDebug.winning_source_label = null;
+      } else {
+        frRuntimeDebug.winning_step = "no_data";
+        frRuntimeDebug.winning_source_label = "No reliable data found";
+      }
       frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
       frRuntimeDebug.no_data_reason = noDataReasonParts.join(" | ") || "unknown";
@@ -1634,7 +1684,7 @@ export async function GET(request: NextRequest) {
           comparables: [],
           matchExplanation: "No reliable data found",
         }),
-      }, "no_data");
+      }, terminalNoDataTag);
     } catch (err) {
       console.log("[FR_STEP] returning_error");
       console.error("[FR_FATAL]", err);
