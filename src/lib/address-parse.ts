@@ -165,16 +165,18 @@ export function parseUKAddressFromFullString(
 }
 
 /**
- * French address format: "15 Promenade des Anglais, 06000 Nice" or "15, DES ANGLAIS, 6000 NICE"
- * Also handles Google Places: "Rue Anatole France, 10000 Troyes, France", "Troyes, 10000", etc.
- * Extracts houseNumber, street, city, postcode (code postal: 4-5 digits).
+ * Robust French address parser for raw typed strings.
+ * Handles: "6 Chemin du Vallon, 06400 Cannes", "10 Rue de Rivoli, 75004 Paris",
+ * "22 Rue Paradis, 13001 Marseille", uppercase-only, missing commas, extra spaces.
  */
 export function parseFRAddressFromFullString(
   address: string
 ): { houseNumber: string; street: string; city: string; postcode: string } {
-  const trimmed = address.trim().replace(/\s+/g, " ");
-  // Google Places may end French overseas departments with region names (e.g. "Réunion")
-  // which breaks our "postcode + city at end" extraction. Strip common trailing suffixes.
+  const raw = (address ?? "").trim();
+  const trimmed = raw.replace(/\s+/g, " ").trim();
+  if (!trimmed) return { houseNumber: "", street: "", city: "", postcode: "" };
+
+  // Strip common trailing suffixes
   const withoutFR = trimmed
     .replace(/,?\s*(France|FR)\s*$/i, "")
     .replace(/,?\s*(La\s*)?R\u00e9union\s*$/i, "")
@@ -188,18 +190,39 @@ export function parseFRAddressFromFullString(
     .trim();
   if (!withoutFR) return { houseNumber: "", street: "", city: "", postcode: "" };
 
-  // Primary: "10000 Troyes" or "06000 Nice" at end
-  const postcodeMatch = withoutFR.match(/\b(\d{4,5})\s+([A-Za-zÀ-ÿ\s'-]+)\s*$/);
   let postcode = "";
   let city = "";
   let beforePostcode = withoutFR;
-  if (postcodeMatch) {
-    postcode = postcodeMatch[1];
-    city = postcodeMatch[2].trim();
-    beforePostcode = withoutFR.slice(0, postcodeMatch.index).trim().replace(/,\s*$/, "");
+
+  // Strategy 1: Postcode + city at end (with optional comma before)
+  // "6 Chemin du Vallon, 06400 Cannes" or "6 Chemin du Vallon 06400 Cannes"
+  const postcodeCityEnd = withoutFR.match(/,?\s*(\d{4,5})\s+([A-Za-zÀ-ÿ\s\'-]+)\s*$/);
+  if (postcodeCityEnd) {
+    postcode = postcodeCityEnd[1];
+    city = postcodeCityEnd[2].trim();
+    beforePostcode = withoutFR.slice(0, postcodeCityEnd.index ?? 0).trim().replace(/,\s*$/, "");
   }
 
-  // Fallback: extract postcode from anywhere (Google "Troyes, 10000" or "10000" standalone)
+  // Strategy 2: Comma-separated "..., postcode city" or "..., city postcode"
+  if (!postcode && !city) {
+    const parts = withoutFR.split(",").map((p) => p.trim()).filter(Boolean);
+    const lastPart = parts[parts.length - 1] ?? "";
+    const pcCityMatch = lastPart.match(/^(\d{4,5})\s+(.+)$/);
+    if (pcCityMatch) {
+      postcode = pcCityMatch[1];
+      city = pcCityMatch[2].trim();
+      beforePostcode = parts.slice(0, -1).join(" ").trim();
+    } else {
+      const cityPcMatch = lastPart.match(/^(.+?)\s+(\d{4,5})$/);
+      if (cityPcMatch) {
+        city = cityPcMatch[1].trim();
+        postcode = cityPcMatch[2];
+        beforePostcode = parts.slice(0, -1).join(" ").trim();
+      }
+    }
+  }
+
+  // Strategy 3: Postcode anywhere (5 digits or 4 digits)
   if (!postcode) {
     const fiveDigit = withoutFR.match(/\b(\d{5})\b/);
     const fourDigit = withoutFR.match(/\b([1-9]\d{3})\b/);
@@ -210,21 +233,33 @@ export function parseFRAddressFromFullString(
     }
   }
 
-  // If we have a postcode but no city (e.g. "..., 97435 Saint-Paul, Réunion"),
-  // try extracting "postcode + city" from the middle of the string.
+  // If we have postcode but no city, extract city after postcode
   if (postcode && !city) {
-    const re = new RegExp(`\\b${postcode}\\s+([A-Za-zÀ-ÿ\\s'-]+)\\b`, "i");
+    const re = new RegExp(`\\b${postcode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+([A-Za-zÀ-ÿ\\s\\'-]+)`, "i");
     const m = withoutFR.match(re);
-    if (m?.[1]) {
-      city = m[1].trim();
-    }
+    if (m?.[1]) city = m[1].trim();
   }
 
-  const parts = beforePostcode.split(",").map((p) => p.trim()).filter(Boolean);
-  const houseMatch = (parts[0] ?? "").match(/^(\d+[A-Za-z]?)\s*(.*)$/);
-  const houseNumber = houseMatch ? houseMatch[1] : "";
-  const streetPart = houseMatch ? houseMatch[2].trim() : (parts[0] ?? "");
-  const street = streetPart || (parts.length >= 2 ? parts.slice(1).join(", ") : "");
+  // Extract house number and street from beforePostcode
+  // "6 Chemin du Vallon" -> house 6, street "Chemin du Vallon"
+  let houseNumber = "";
+  let street = "";
+  const firstPart = beforePostcode.split(",")[0]?.trim() ?? beforePostcode;
+  const houseMatch = firstPart.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
+  if (houseMatch) {
+    houseNumber = houseMatch[1];
+    street = houseMatch[2].trim();
+  } else {
+    const leadingNum = firstPart.match(/^(\d+[A-Za-z]?)\s*$/);
+    if (leadingNum) {
+      houseNumber = leadingNum[1];
+    }
+    street = firstPart.replace(/^\d+[A-Za-z]?\s*/, "").trim() || firstPart;
+  }
+
+  if (!street && beforePostcode) {
+    street = beforePostcode.replace(/^\d+[A-Za-z]?\s*/, "").trim();
+  }
 
   return { houseNumber, street, city, postcode };
 }

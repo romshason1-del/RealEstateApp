@@ -388,21 +388,24 @@ export async function GET(request: NextRequest) {
       let houseNumberParsed = houseNumber.trim();
       let postcodeParsed = (postcode || zip || "").trim();
 
-      if (fullRawAddress && (!cityParsed || !streetParsed || !postcodeParsed)) {
+      if (fullRawAddress) {
         const parsed = parseFRAddressFromFullString(fullRawAddress);
-        if (parsed.city) cityParsed = cityParsed || parsed.city;
-        if (parsed.street) streetParsed = streetParsed || parsed.street;
         if (parsed.houseNumber) houseNumberParsed = houseNumberParsed || parsed.houseNumber;
+        if (parsed.street) streetParsed = streetParsed || parsed.street;
+        if (parsed.city) cityParsed = cityParsed || parsed.city;
         if (parsed.postcode) postcodeParsed = postcodeParsed || parsed.postcode;
-        if (!parsed.city && !parsed.street && !parsed.postcode) {
+        if (!parsed.city && !parsed.street && !parsed.postcode && !parsed.houseNumber) {
           const fallback = parseAddressFromFullString(fullRawAddress);
-          if (fallback.city) cityParsed = cityParsed || fallback.city;
-          if (fallback.street) streetParsed = streetParsed || fallback.street;
           if (fallback.houseNumber) houseNumberParsed = houseNumberParsed || fallback.houseNumber;
+          if (fallback.street) streetParsed = streetParsed || fallback.street;
+          if (fallback.city) cityParsed = cityParsed || fallback.city;
         }
       }
 
-      console.log("[FR_PARSE] parsed_address=" + JSON.stringify({ city: cityParsed || "(empty)", street: streetParsed || "(empty)", houseNumber: houseNumberParsed || "(empty)", postcode: postcodeParsed || "(empty)" }));
+      console.log("[FR_PARSE] parsed_house_number=" + (houseNumberParsed || "(empty)"));
+      console.log("[FR_PARSE] parsed_street=" + (streetParsed || "(empty)"));
+      console.log("[FR_PARSE] parsed_postcode=" + (postcodeParsed || "(empty)"));
+      console.log("[FR_PARSE] parsed_city=" + (cityParsed || "(empty)"));
 
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
@@ -796,15 +799,21 @@ export async function GET(request: NextRequest) {
       console.log("[FR_BAN] raw_city=" + (banInputCity || "(empty)"));
       console.log("[FR_BAN] raw_postcode=" + (banInputPostcode || "(empty)"));
 
-      const banQueryAttempts: Array<{ postcode: string; city_norm: string; street_norm: string; house_number_norm: string }> = [];
+      const banQueryAttempts: Array<{ postcode: string; city_norm: string; street_norm: string; house_number_norm: string; query_mode: string }> = [];
       const streetForBan = banInputStreetNorm || banInputCity || "";
-      if (banInputPostcode || streetForBan) {
-        banQueryAttempts.push({ postcode: banInputPostcode || "", city_norm: banInputCity || "", street_norm: streetForBan, house_number_norm: banInputHouseNumber || "" });
-        if (banInputPostcode && streetForBan) {
-          banQueryAttempts.push({ postcode: banInputPostcode, city_norm: "", street_norm: streetForBan, house_number_norm: banInputHouseNumber || "" });
+
+      if (streetForBan || banInputPostcode) {
+        if (banInputPostcode && banInputCity && streetForBan) {
+          banQueryAttempts.push({ postcode: banInputPostcode, city_norm: banInputCity, street_norm: streetForBan, house_number_norm: banInputHouseNumber || "", query_mode: "parsed_full" });
+        }
+        if (banInputPostcode && streetForBan && !banQueryAttempts.some((a) => a.query_mode === "parsed_postcode_street")) {
+          banQueryAttempts.push({ postcode: banInputPostcode, city_norm: "", street_norm: streetForBan, house_number_norm: banInputHouseNumber || "", query_mode: "parsed_postcode_street" });
         }
         if (banInputCity && streetForBan && !banInputPostcode) {
-          banQueryAttempts.push({ postcode: "", city_norm: banInputCity, street_norm: streetForBan, house_number_norm: banInputHouseNumber || "" });
+          banQueryAttempts.push({ postcode: "", city_norm: banInputCity, street_norm: streetForBan, house_number_norm: banInputHouseNumber || "", query_mode: "parsed_city_street" });
+        }
+        if (streetForBan && !banQueryAttempts.some((a) => a.query_mode === "street_only")) {
+          banQueryAttempts.push({ postcode: "", city_norm: "", street_norm: streetForBan, house_number_norm: banInputHouseNumber || "", query_mode: "street_only" });
         }
       }
 
@@ -847,6 +856,7 @@ export async function GET(request: NextRequest) {
             house_number_norm: attempt.house_number_norm || "",
           };
           if (!attempt.street_norm && !attempt.postcode) continue;
+          console.log("[FR_BAN] query_mode=" + attempt.query_mode);
           console.log("[FR_PARAMS]", { query: "ban_normalized_lookup_query", attempt: i + 1, ...banParams });
           const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
             { query: banLookupQuery, params: banParams },
@@ -875,10 +885,13 @@ export async function GET(request: NextRequest) {
 
         console.log("[FR_BAN] after_ban_query");
         const banRowsCount = banRows?.length ?? 0;
-        console.log("[FR_BAN] ban_rows_count", { banRowsCount });
+        console.log("[FR_BAN] candidate_count=" + banRowsCount);
         frRuntimeDebug.ban_rows_count = banRowsCount;
 
         const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
+        const selectedMatchLevel = banRow ? "full" : "none";
+        console.log("[FR_BAN] selected_match_level=" + selectedMatchLevel);
+
         if (banRow) {
           const selCity = banRow.city_norm ?? banRow.city ?? banRow.normalized_city;
           const selPc = banRow.postcode ?? banRow.postal_code ?? banRow.code_postal;
