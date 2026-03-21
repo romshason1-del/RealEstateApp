@@ -1333,10 +1333,26 @@ export function FranceApartmentSheet({
                       <div className="font-mono">{detectMarker}</div>
                     </div>
                     <div className="mt-2 font-mono text-[10px] leading-tight text-zinc-200/80 space-y-0.5">
+                      <div className="font-semibold text-amber-300/90">Request / parse</div>
+                      <div>fr_raw_input: {toDebugStr(rd?.fr_raw_input)}</div>
+                      <div>fr_address_param: {toDebugStr(rd?.fr_address_param)}</div>
+                      <div>fr_full_raw_address: {toDebugStr(rd?.fr_full_raw_address)}</div>
+                      <div>fr_parser_started: {toDebugStr(rd?.fr_parser_started)}</div>
+                      <div>fr_parsed_house_number: {toDebugStr(rd?.fr_parsed_house_number)}</div>
+                      <div>fr_parsed_street: {toDebugStr(rd?.fr_parsed_street)}</div>
+                      <div>fr_parsed_postcode: {toDebugStr(rd?.fr_parsed_postcode)}</div>
+                      <div>fr_parsed_city: {toDebugStr(rd?.fr_parsed_city)}</div>
+                      <div className="font-semibold text-amber-300/90 mt-1">BAN</div>
+                      <div>fr_ban_query_mode: {toDebugStr(rd?.fr_ban_query_mode)}</div>
+                      <div>fr_ban_attempt_count: {toDebugStr(rd?.fr_ban_attempt_count)}</div>
                       <div>ban_city: {toDebugStr(rd?.ban_city)}</div>
                       <div>ban_postcode: {toDebugStr(rd?.ban_postcode)}</div>
                       <div>ban_street: {toDebugStr(rd?.ban_street)}</div>
                       <div>ban_house_number: {toDebugStr(rd?.ban_house_number)}</div>
+                      <div className="font-semibold text-amber-300/90 mt-1">Cache / outcome</div>
+                      <div>fr_cache_hit: {toDebugStr(rd?.fr_cache_hit)}</div>
+                      <div>fr_cache_bypass_reason: {toDebugStr(rd?.fr_cache_bypass_reason)}</div>
+                      <div>fr_failed_stage: {toDebugStr(rd?.fr_failed_stage)}</div>
                       <div>submitted_lot: {toDebugStr(rd?.submitted_lot)}</div>
                       <div>detect_class: {toDebugStr(rd?.detect_class)}</div>
                       <div>exact_rows_count: {toDebugStr(rd?.exact_rows_count)}</div>

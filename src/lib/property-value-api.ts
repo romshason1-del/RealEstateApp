@@ -196,12 +196,21 @@ export async function fetchPropertyValueInsights(
       return String(rd?.winning_step ?? "") === "no_data" || (d?.fr as Record<string, unknown> | undefined)?.resultType === "no_result";
     })();
   const bypassCache = frRawPresent && frCachedNoData;
+  let didBypassCache = false;
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     if (isFR && process.env.NODE_ENV !== "production") {
       console.log("[FR_CACHE] cache_hit=" + (bypassCache ? "false" : "true"));
       if (bypassCache) console.log("[FR_CACHE] bypass_reason=typed_address_no_data_bypass");
     }
-    if (!bypassCache) return cached.data;
+    if (!bypassCache) {
+      const cachedData = cached.data as Record<string, unknown>;
+      if (isFR && cachedData && typeof cachedData === "object") {
+        const rd = (cachedData.fr_runtime_debug ?? {}) as Record<string, unknown>;
+        cachedData.fr_runtime_debug = { ...rd, fr_cache_hit: true, fr_cache_bypass_reason: null };
+      }
+      return cached.data;
+    }
+    didBypassCache = true;
   }
 
   const parsed =
@@ -330,6 +339,11 @@ export async function fetchPropertyValueInsights(
       CACHE.set(key, { data, ts: Date.now() });
     }
     // France no_data with rawInputAddress is never cached (avoids stale no_data for typed addresses)
+    if (isFR && didBypassCache && data && typeof data === "object") {
+      const d = data as Record<string, unknown>;
+      const rd = (d.fr_runtime_debug ?? {}) as Record<string, unknown>;
+      d.fr_runtime_debug = { ...rd, fr_cache_bypass_reason: "typed_address_no_data_bypass" };
+    }
 
     return data;
   } catch (err) {

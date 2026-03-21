@@ -494,7 +494,23 @@ export async function GET(request: NextRequest) {
       };
 
       // Temporary runtime diagnostics for France (debug-only; do not treat as stable API contract).
+      const frParserStarted = !!fullRawAddress;
+      const frHadRawInput = !!(addressParam || rawInputAddress || "").trim();
       const frRuntimeDebug: Record<string, unknown> = {
+        // Request/parse diagnostics (visible in UI debug panel)
+        fr_raw_input: rawInput || null,
+        fr_address_param: addressParam || null,
+        fr_full_raw_address: fullRawAddress || null,
+        fr_parser_started: frParserStarted,
+        fr_parsed_house_number: houseNumberParsed || null,
+        fr_parsed_street: streetParsed || null,
+        fr_parsed_postcode: postcodeParsed || null,
+        fr_parsed_city: cityParsed || null,
+        fr_ban_query_mode: null as string | null,
+        fr_ban_attempt_count: null as number | null,
+        fr_cache_hit: false,
+        fr_cache_bypass_reason: null,
+        fr_failed_stage: !frParserStarted && frHadRawInput ? "parse_entry" : null,
         // BAN integration diagnostics (France-only)
         ban_match_found: null,
         ban_rows_count: null,
@@ -866,6 +882,8 @@ export async function GET(request: NextRequest) {
         console.log("[FR_BAN] raw_attempt_added=false");
       }
       console.log("[FR_BAN] ban_attempt_count=" + banQueryAttempts.length);
+      frRuntimeDebug.fr_ban_attempt_count = banQueryAttempts.length;
+      frRuntimeDebug.fr_ban_query_mode = banQueryAttempts.length > 0 ? banQueryAttempts.map((a) => a.query_mode).join(",") : "(none)";
       console.log("[FR_BAN] raw_query_attempted=" + (banInputPostcode || banInputStreetNorm || banInputCity ? "true" : "false"));
       console.log("[FR_BAN] query_input=" + (fullRawAddress || "(empty)"));
 
@@ -3404,6 +3422,7 @@ export async function GET(request: NextRequest) {
           : !frRuntimeDebug.ban_match_found ? "ban_selection"
           : exactHouseCandidates <= 0 && exactApartmentRowsCount <= 0 && sameBuildingUsableRowsCount <= 0 ? "source_lookup"
           : "valuation";
+        frRuntimeDebug.fr_failed_stage = failedStage;
         console.log("[FR_FAIL] no_data_reason=" + (noDataReasonParts.join(" | ") || "unknown"));
         console.log("[FR_FAIL] failed_stage=" + failedStage);
       }
@@ -3445,6 +3464,7 @@ export async function GET(request: NextRequest) {
         err instanceof Error && typeof err.stack === "string"
           ? (err.stack.split("\n")[0] ?? null)
           : null;
+      const catchRawInput = (searchParams.get("address") || searchParams.get("rawInputAddress") || "").trim();
       const payload = {
         message: "Failed to fetch France property value",
         error: fatalMessage,
@@ -3463,6 +3483,19 @@ export async function GET(request: NextRequest) {
           ban_postcode: null,
           ban_street: null,
           ban_house_number: null,
+          fr_raw_input: catchRawInput || null,
+          fr_address_param: searchParams.get("address") || null,
+          fr_full_raw_address: searchParams.get("rawInputAddress") || searchParams.get("address") || catchRawInput || null,
+          fr_parser_started: false,
+          fr_parsed_house_number: null,
+          fr_parsed_street: null,
+          fr_parsed_postcode: null,
+          fr_parsed_city: null,
+          fr_ban_query_mode: "(none)",
+          fr_ban_attempt_count: 0,
+          fr_cache_hit: false,
+          fr_cache_bypass_reason: null,
+          fr_failed_stage: "fatal_error",
         },
         fr: emptyFranceResponse({
           success: false,
