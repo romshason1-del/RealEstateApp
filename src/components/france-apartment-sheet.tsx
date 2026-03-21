@@ -292,13 +292,18 @@ export function FranceApartmentSheet({
             ? "house"
             : "unclear";
 
-  // Close result card when loading completes and we need apartment lot input.
+  // House-direct flow: never apply apartment lot UI logic or close the result card.
+  const isHouseDirectFlow = effectiveDetectClass === "house" || (effectiveDetectClass === "unclear" && !shouldShowApartmentInput);
+
+  // Close result card ONLY when apartment needs lot input. Never close for house.
   React.useEffect(() => {
+    if (isHouseDirectFlow) return;
     if (!frAddressFetchDone) return;
     if (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim() && !hasSubmittedLotSearch) {
+      if (isDev) console.log("[FR_UI] fr_ui_close_reason=apartment_lot_prompt");
       setIsResultCardOpen(false);
     }
-  }, [frAddressFetchDone, effectiveDetectClass, requestedLot, hasSubmittedLotSearch]);
+  }, [isHouseDirectFlow, frAddressFetchDone, effectiveDetectClass, requestedLot, hasSubmittedLotSearch, isDev]);
 
   React.useEffect(() => {
     if (!isDev) return;
@@ -332,10 +337,11 @@ export function FranceApartmentSheet({
 
   const resultCardBlocked = effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim();
 
-  // Strict UI gate for apartment-first flow:
-  // if apartment is detected and user hasn't submitted a lot yet,
+  // Strict UI gate for apartment-first flow only. Never run for house.
+  // If apartment is detected and user hasn't submitted a lot yet,
   // keep the result card closed and never allow "searched" phases to render.
   React.useEffect(() => {
+    if (isHouseDirectFlow) return;
     if (effectiveDetectClass !== "apartment") return;
     if (!resultCardBlocked) return;
 
@@ -348,11 +354,14 @@ export function FranceApartmentSheet({
     }
 
     if (hasSubmittedLotSearch) setHasSubmittedLotSearch(false);
-    if (isResultCardOpen) setIsResultCardOpen(false);
+    if (isResultCardOpen) {
+      if (isDev) console.log("[FR_UI] fr_ui_close_reason=apartment_reset_blocked");
+      setIsResultCardOpen(false);
+    }
     if (resolvedForDisplay != null) setResolvedForDisplay(null);
     if (isMoreDetailsOpen) setIsMoreDetailsOpen(false);
     if (isExpanded) setIsExpanded(false);
-  }, [effectiveDetectClass, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded, isDev]);
+  }, [isHouseDirectFlow, effectiveDetectClass, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded, isDev]);
 
   const displayConfidence = React.useMemo(() => {
     return coerceConfidenceLabel(normalized?.confidence as unknown);
@@ -824,8 +833,10 @@ export function FranceApartmentSheet({
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
-    // Allow loading state before hasSubmittedLotSearch; show "Searching..." immediately.
-    if (!hasSubmittedLotSearch && !isLoading) {
+    // House-direct: keep card visible during and after fetch. Apartment: need submitted lot or loading.
+    const houseFlowShowCard = isHouseDirectFlow && frAddressFetchDone;
+    const apartmentOrLoading = hasSubmittedLotSearch || isLoading;
+    if (!houseFlowShowCard && !apartmentOrLoading) {
       if (effectiveDetectClass === "apartment" && isDev) {
         console.log("[FR_UI_DEBUG] result_card_blocked", {
           detectClass: effectiveDetectClass,
@@ -1345,6 +1356,9 @@ export function FranceApartmentSheet({
                 {isFranceDebugOpen ? (
                   <div className="mt-0.5 rounded-[8px] border border-white/10 bg-black/15 px-2 py-1.5 overflow-hidden">
                     <div className="max-h-[140px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-300/90 space-y-0.5">
+                      <div>fr_ui_flow: {isHouseDirectFlow ? "house" : "apartment"}</div>
+                      <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
+                      <div>fr_ui_lot_prompt_open: {String(shouldShowApartmentInput && !hasSubmittedLotSearch)}</div>
                       <div>winning_step: {toDebugStr(rd?.winning_step)}</div>
                       <div>winning_source_label: {toDebugStr(rd?.winning_source_label)}</div>
                       <div>confidence: {toDebugStr((fr as any)?.confidence ?? rd?.confidence)}</div>
