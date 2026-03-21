@@ -1371,6 +1371,9 @@ export function FranceApartmentSheet({
                       <div className="font-semibold text-amber-300/90 mt-1">Source lookup</div>
                       <div>fr_source_lookup_postcode: {toDebugStr(rd?.fr_source_lookup_postcode)}</div>
                       <div>fr_source_lookup_city: {toDebugStr(rd?.fr_source_lookup_city)}</div>
+                      <div>fr_source_lookup_street_raw: {toDebugStr(rd?.fr_source_lookup_street_raw)}</div>
+                      <div>fr_source_lookup_street_core: {toDebugStr(rd?.fr_source_lookup_street_core)}</div>
+                      <div>fr_source_lookup_street_type: {toDebugStr(rd?.fr_source_lookup_street_type)}</div>
                       <div>fr_source_lookup_street: {toDebugStr(rd?.fr_source_lookup_street)}</div>
                       <div>fr_source_lookup_house_number: {toDebugStr(rd?.fr_source_lookup_house_number)}</div>
                       <div>fr_source_lookup_exact_count: {toDebugStr(rd?.fr_source_lookup_exact_count)}</div>

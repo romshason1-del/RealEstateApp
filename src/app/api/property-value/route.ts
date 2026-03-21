@@ -539,6 +539,9 @@ export async function GET(request: NextRequest) {
         fr_ban_top_candidates_summary: null as string | null,
         fr_source_lookup_postcode: null as string | null,
         fr_source_lookup_city: null as string | null,
+        fr_source_lookup_street_raw: null as string | null,
+        fr_source_lookup_street_core: null as string | null,
+        fr_source_lookup_street_type: null as string | null,
         fr_source_lookup_street: null as string | null,
         fr_source_lookup_house_number: null as string | null,
         fr_source_lookup_exact_count: null as number | null,
@@ -1314,10 +1317,15 @@ export async function GET(request: NextRequest) {
       // Normalize lookup keys consistently between BAN output and France facts.
       const postcodeNormForSource = normalizePostcodeForFranceSource(postcodeNorm);
       const cityNormForSource = normalizeCityForFranceSource(cityNorm);
-      const streetNormForSource = streetNormalizedDet || "";
+      const streetParsedForSource = parseStreetForComparison(streetNorm || "");
+      const streetNormForSource =
+        streetParsedForSource.core && streetParsedForSource.core.length >= 2
+          ? streetParsedForSource.core
+          : streetNormalizedDet || "";
       const houseNumberNormForSource = houseNumberNorm || "";
       console.log("[FR_SOURCE] normalized_city=" + (cityNormForSource || "(empty)"));
-      console.log("[FR_SOURCE] normalized_street=" + (streetNormForSource || "(empty)"));
+      console.log("[FR_SOURCE] street_core=" + (streetNormForSource || "(empty)"));
+      console.log("[FR_SOURCE] street_type=" + (streetParsedForSource.type || "(empty)"));
       console.log("[FR_SOURCE] normalized_postcode=" + (postcodeNormForSource || "(empty)"));
       console.log("[FR_SOURCE] lookup_keys=postcode|street|house|city");
 
@@ -1716,6 +1724,9 @@ export async function GET(request: NextRequest) {
       };
       frRuntimeDebug.fr_source_lookup_postcode = postcodeNormForSource || null;
       frRuntimeDebug.fr_source_lookup_city = cityNormForSource || null;
+      frRuntimeDebug.fr_source_lookup_street_raw = streetNorm || null;
+      frRuntimeDebug.fr_source_lookup_street_core = streetNormForSource || null;
+      frRuntimeDebug.fr_source_lookup_street_type = streetParsedForSource.type || null;
       frRuntimeDebug.fr_source_lookup_street = streetNormForSource || null;
       frRuntimeDebug.fr_source_lookup_house_number = houseNumberNormForSource || null;
       console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
@@ -3438,7 +3449,7 @@ export async function GET(request: NextRequest) {
               const ppm = frPropertyLatestFactsMoneyToEuros(r.price_per_m2);
               const streetRaw = String(r.street ?? "").trim().toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
               const streetNormRow = streetRaw.replace(/^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i, "").trim();
-              const streetMatch = streetNorm && (streetNormRow.includes(streetNormalizedDet || "") || (streetNormalizedDet || "").includes(streetNormRow) || streetNormRow === streetNormalizedDet);
+              const streetMatch = streetNormForSource && (streetNormRow.includes(streetNormForSource) || streetNormForSource.includes(streetNormRow) || streetNormRow === streetNormForSource);
               const cityMatch = cityNorm && frCityMatches(cityNorm, String(r.city ?? "").trim());
               const hnRaw = r.house_number;
               const hnNum = extractHouseNumberNumeric(String(hnRaw ?? ""));
