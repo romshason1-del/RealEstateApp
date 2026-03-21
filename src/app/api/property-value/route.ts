@@ -515,9 +515,15 @@ export async function GET(request: NextRequest) {
         fr_raw_postcode_token: frRawPostcodeToken,
         fr_postcode_mismatch_rejections: null as number | null,
         fr_typed_street_normalized: null as string | null,
+        fr_typed_street_type: null as string | null,
+        fr_typed_street_core: null as string | null,
         fr_ban_candidate_count: null as number | null,
         fr_ban_selected_street_score: null as number | null,
         fr_ban_selected_reason: null as string | null,
+        fr_ban_selected_street_type: null as string | null,
+        fr_ban_selected_street_core: null as string | null,
+        fr_ban_selected_penalties: null as string | null,
+        fr_ban_similarity_threshold_passed: null as boolean | null,
         fr_ban_top_candidates_summary: null as string | null,
         fr_cache_hit: false,
         fr_cache_bypass_reason: null,
@@ -788,19 +794,61 @@ export async function GET(request: NextRequest) {
         return cleaned;
       };
 
-      const scoreStreetSimilarity = (typedNorm: string, candidateStreetRaw: string): number => {
-        if (!typedNorm.trim()) return 0;
-        const candNorm = normalizeStreetForDetection(candidateStreetRaw || "");
-        const typedTokens = typedNorm.split(/\s+/).filter(Boolean);
-        const candTokens = candNorm.split(/\s+/).filter(Boolean);
-        if (typedTokens.length === 0) return 0;
-        if (candNorm === typedNorm) return 1;
-        if (candNorm.trim().startsWith(typedNorm.trim()) && candTokens.length === typedTokens.length) return 1;
-        const matchCount = typedTokens.filter((t) => candTokens.includes(t)).length;
-        const extraCount = candTokens.filter((t) => !typedTokens.includes(t)).length;
-        const baseScore = matchCount / typedTokens.length;
-        const penalty = extraCount * 0.2;
-        return Math.max(0, Math.round((baseScore - penalty) * 100) / 100);
+      const STREET_TYPES = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "CHE", "ROUTE", "IMPASSE", "IMP", "ALLEE", "ALL", "PLACE", "PL", "SQUARE", "SQ", "SENTE", "COURS", "PROMENADE", "PROM"];
+      const STOPWORDS = ["DE", "DU", "DES", "DE LA", "DE L", "LA", "LE", "LES"];
+      const parseStreetForComparison = (raw: string): { type: string; core: string; coreTokens: string[] } => {
+        const unified = (raw || "")
+          .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
+          .replace(/[''']/g, "'")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toUpperCase()
+          .normalize("NFD")
+          .replace(/\p{M}/gu, "")
+          .replace(/[^A-Z0-9 ]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        let type = "";
+        let rest = unified;
+        const typeRegex = new RegExp(`^(${STREET_TYPES.join("|")})\\.?\\s+`, "i");
+        const tm = rest.match(typeRegex);
+        if (tm) {
+          type = tm[1].toUpperCase().replace(/^CHE$/, "CHEMIN").replace(/^IMP$/, "IMPASSE").replace(/^AV$/, "AVENUE").replace(/^BD$/, "BOULEVARD").replace(/^ALL$/, "ALLEE").replace(/^PL$/, "PLACE").replace(/^SQ$/, "SQUARE").replace(/^PROM$/, "PROMENADE");
+          rest = rest.slice(tm[0].length).trim();
+        }
+        for (const sw of STOPWORDS) {
+          rest = rest.replace(new RegExp(`\\b${sw}\\b`, "gi"), " ");
+        }
+        rest = rest.replace(/\s+/g, " ").trim();
+        const coreTokens = rest.split(/\s+/).filter(Boolean);
+        return { type, core: rest, coreTokens };
+      };
+      const scoreStreetSimilarity = (
+        typedStreetRaw: string,
+        candidateStreetRaw: string
+      ): { score: number; penalties: string[] } => {
+        const typed = parseStreetForComparison(typedStreetRaw || "");
+        const cand = parseStreetForComparison(candidateStreetRaw || "");
+        const penalties: string[] = [];
+        if (typed.coreTokens.length === 0) return { score: 0, penalties: ["no_typed_core"] };
+        let baseScore = 0;
+        const matchCount = typed.coreTokens.filter((t) => cand.coreTokens.includes(t)).length;
+        const extraCount = cand.coreTokens.filter((t) => !typed.coreTokens.includes(t)).length;
+        baseScore = matchCount / typed.coreTokens.length;
+        if (extraCount > 0) {
+          const extraPenalty = extraCount * 0.35;
+          baseScore = Math.max(0, baseScore - extraPenalty);
+          penalties.push("extra_tokens:" + extraCount);
+        }
+        let typePenalty = 0;
+        if (typed.type && cand.type) {
+          if (typed.type !== cand.type) {
+            typePenalty = 0.4;
+            penalties.push("type_mismatch:" + typed.type + " vs " + cand.type);
+          }
+        }
+        const score = Math.max(0, Math.round((baseScore - typePenalty) * 100) / 100);
+        return { score, penalties };
       };
 
       let streetNormalizedDet = normalizeStreetForDetection(streetNorm);
@@ -1002,12 +1050,15 @@ export async function GET(request: NextRequest) {
           }
           return "";
         };
-        const typedStreetNorm = streetNormalizedDet || "";
-        const STRONG_STREET_THRESHOLD = 0.6;
+        const typedStreetRaw = streetNorm || "";
+        const typedParsed = parseStreetForComparison(typedStreetRaw);
+        frRuntimeDebug.fr_typed_street_type = typedParsed.type || null;
+        frRuntimeDebug.fr_typed_street_core = typedParsed.core || null;
+        const STRONG_STREET_THRESHOLD = 0.65;
         const scoredRows = (banRows ?? []).map((r) => {
           const rowStreet = pickStrFromRow(r, ["street_norm", "normalized_street", "street_norm_clean", "street"]);
-          const score = scoreStreetSimilarity(typedStreetNorm, rowStreet);
-          return { row: r, score, rowStreet };
+          const { score, penalties } = scoreStreetSimilarity(typedStreetRaw, rowStreet);
+          return { row: r, score, rowStreet, penalties };
         });
         scoredRows.sort((a, b) => b.score - a.score);
         const best = scoredRows[0];
@@ -1032,6 +1083,13 @@ export async function GET(request: NextRequest) {
 
         frRuntimeDebug.fr_ban_selected_street_score = banRowScore;
         frRuntimeDebug.fr_ban_selected_reason = banSelectionReason;
+        frRuntimeDebug.fr_ban_similarity_threshold_passed = best != null && (best.score >= STRONG_STREET_THRESHOLD || (banRowsCount === 1 && best.score > 0));
+        if (best) {
+          const selParsed = parseStreetForComparison(best.rowStreet);
+          frRuntimeDebug.fr_ban_selected_street_type = selParsed.type || null;
+          frRuntimeDebug.fr_ban_selected_street_core = selParsed.core || null;
+          frRuntimeDebug.fr_ban_selected_penalties = best.penalties?.length ? best.penalties.join(";") : null;
+        }
         frRuntimeDebug.fr_ban_top_candidates_summary =
           scoredRows.length > 0
             ? scoredRows
