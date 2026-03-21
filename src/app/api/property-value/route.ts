@@ -423,7 +423,8 @@ export async function GET(request: NextRequest) {
         console.log("[FR_LOT_API] response_tag", tag);
         console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
-        console.log("[FR_BAN] returning_response", {
+        // Not BAN-specific: every France exit path uses frReturn (valuation, lot prompt, no_data, etc.).
+        console.log("[FR_RETURN] response", {
           tag,
           ban_match_found: frRuntimeDebug.ban_match_found,
           ban_rows_count: frRuntimeDebug.ban_rows_count,
@@ -904,10 +905,9 @@ export async function GET(request: NextRequest) {
       console.log("[FR_FLOW] should_prompt_lot=" + String(shouldPromptLotFirst));
       console.log("[FR_FLOW] continue_to_valuation=" + String(!shouldPromptLotFirst));
       if (shouldPromptLotFirst) {
-        if (detectClass === "apartment") {
-          console.log("[FR_GOLD] apartment_lot_prompt_triggered");
-          console.log("[FR_LOT_API] response tag", "prompt_lot_first");
-          return frReturn(
+        console.log("[FR_GOLD] apartment_lot_prompt_triggered");
+        console.log("[FR_LOT_API] response tag", "prompt_lot_first");
+        return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -942,7 +942,6 @@ export async function GET(request: NextRequest) {
             },
             "prompt_lot_first"
           );
-        }
       }
 
       console.log("[FR_FLOW] ladder_step_started=EXACT");
@@ -1365,6 +1364,9 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_source_label = fallbackSourceStreet;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
+          console.log(
+            "[FR_FLOW] valuation_ladder_complete tag=fallback_match branch=STREET_numeric (EXACT+BUILDING+STREET ran)"
+          );
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -1475,6 +1477,9 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_source_label = fallbackSourceCommune;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
+          console.log(
+            "[FR_FLOW] valuation_ladder_complete tag=fallback_match branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
+          );
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -1531,6 +1536,9 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.winning_source_label = fallbackSourceStreet;
         frRuntimeDebug.has_surface_for_estimate = false;
         frRuntimeDebug.chosen_surface_value = null;
+        console.log(
+          "[FR_FLOW] valuation_ladder_complete tag=fallback_match branch=STREET_no_total_estimate (EXACT+BUILDING+STREET+COMMUNE ran; street comps without surface)"
+        );
         return frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
