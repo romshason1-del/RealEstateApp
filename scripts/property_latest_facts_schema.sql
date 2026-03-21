@@ -1,0 +1,22 @@
+-- BigQuery schema for property_latest_facts (France gold table)
+-- Used by exact_house, exact_address, building_similar_unit ladder steps.
+--
+-- Build from DVF: npm run build:france-facts
+-- Load: bq load --source_format=NEWLINE_DELIMITED_JSON \
+--   streetiq-bigquery:streetiq_gold.property_latest_facts output/property_latest_facts_france.ndjson
+--
+-- Money convention: last_sale_price and price_per_m2 in thousandths of euro (N ⇒ N/1000 €).
+
+-- Column definitions for property_latest_facts:
+-- country STRING
+-- city STRING
+-- postcode STRING
+-- street STRING
+-- house_number STRING
+-- unit_number STRING (nullable; lot_1er from DVF)
+-- property_type STRING
+-- surface_m2 FLOAT64
+-- last_sale_date DATE or STRING (YYYY-MM-DD)
+-- last_sale_price INT64 (thousandths of euro)
+-- price_per_m2 INT64 (thousandths of euro, nullable)
+-- data_source STRING

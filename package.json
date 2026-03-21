@@ -13,6 +13,7 @@
     "import:france:all": "tsx scripts/import-france-all-years.ts",
     "import:france:stream": "tsx scripts/import-france-dvf-stream.ts",
     "download:dvf": "tsx scripts/download-dvf.ts",
+    "build:france-facts": "node --max-old-space-size=8192 node_modules/.bin/tsx scripts/build-france-property-latest-facts.ts",
     "apply:france-schema": "tsx scripts/apply-france-schema.ts",
     "verify:france": "tsx scripts/verify-france-data.ts",
     "debug:paris": "tsx scripts/debug-paris-bigquery.ts",
