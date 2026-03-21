@@ -966,6 +966,9 @@ export function FranceApartmentSheet({
       return { min: p20, max: p80 };
     })();
 
+    // Hide redundant "Estimated value" row when the headline is €/m²-only (no total or range).
+    const showEstimatedValueSubLabel = hasValue || valueRange != null;
+
     const lastTxValue =
       !isLoadingNow && !isNoResult && typeof fr?.property?.transactionValue === "number" && fr.property.transactionValue > 0
         ? fr.property.transactionValue
@@ -1122,9 +1125,11 @@ export function FranceApartmentSheet({
                 </div>
 
                 <div className="mt-1 flex items-center justify-start gap-2">
-                  <div className="text-[11px] font-medium uppercase tracking-wider leading-tight text-zinc-400/70">
-                    Estimated value
-                  </div>
+                  {showEstimatedValueSubLabel ? (
+                    <div className="text-[11px] font-medium uppercase tracking-wider leading-tight text-zinc-400/70">
+                      Estimated value
+                    </div>
+                  ) : null}
                   {!isLoadingNow ? (
                     <div className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${confidenceTone}`}>
                       Confidence: {confidenceText}
