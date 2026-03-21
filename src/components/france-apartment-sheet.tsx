@@ -15,6 +15,20 @@ type FranceSheetProps = {
   onClose: () => void;
 };
 
+/** API `fr_valuation_display` envelope (France property-value route). */
+export type FranceValuationDisplay = {
+  winning_source_label?: string | null;
+  winning_step?: string | null;
+  confidence?: string | null;
+  estimated_value?: number | null;
+  price_per_m2?: number | null;
+  display_value?: number | null;
+  display_value_type?: string | null;
+  has_display_value?: boolean;
+  /** Back-compat alias; API may send both. */
+  source_label?: string | null;
+};
+
 /** Whole euro amounts (totals) — French grouping (narrow no-break space). */
 function formatCurrency(value: number, symbol: string): string {
   if (!Number.isFinite(value)) return `0\u00a0${symbol}`;
@@ -787,15 +801,7 @@ export function FranceApartmentSheet({
       ? ((requestedLot ?? "").trim() ? `Searching lot ${(requestedLot ?? "").trim()} for this address` : "Searching building data for this address")
       : (subtitle || fr?.matchExplanation || null);
 
-    const fv = (parsed as any)?.fr_valuation_display as
-      | {
-          estimated_value?: number | null;
-          price_per_m2?: number | null;
-          display_value?: number | null;
-          display_value_type?: string | null;
-          has_display_value?: boolean;
-        }
-      | undefined;
+    const fv = (parsed as any)?.fr_valuation_display as FranceValuationDisplay | undefined;
     const topEstimated = (parsed as any)?.estimated_value as number | null | undefined;
     const topPricePerM2 = (parsed as any)?.price_per_m2 as number | null | undefined;
     const topDisplayValue = (parsed as any)?.display_value as number | null | undefined;
