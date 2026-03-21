@@ -1368,6 +1368,15 @@ export function FranceApartmentSheet({
                       <div>fr_failed_stage: {toDebugStr(rd?.fr_failed_stage)}</div>
                       <div>submitted_lot: {toDebugStr(rd?.submitted_lot)}</div>
                       <div>detect_class: {toDebugStr(rd?.detect_class)}</div>
+                      <div className="font-semibold text-amber-300/90 mt-1">Source lookup</div>
+                      <div>fr_source_lookup_postcode: {toDebugStr(rd?.fr_source_lookup_postcode)}</div>
+                      <div>fr_source_lookup_city: {toDebugStr(rd?.fr_source_lookup_city)}</div>
+                      <div>fr_source_lookup_street: {toDebugStr(rd?.fr_source_lookup_street)}</div>
+                      <div>fr_source_lookup_house_number: {toDebugStr(rd?.fr_source_lookup_house_number)}</div>
+                      <div>fr_source_lookup_exact_count: {toDebugStr(rd?.fr_source_lookup_exact_count)}</div>
+                      <div>fr_source_lookup_street_count: {toDebugStr(rd?.fr_source_lookup_street_count)}</div>
+                      <div>fr_source_lookup_commune_count: {toDebugStr(rd?.fr_source_lookup_commune_count)}</div>
+                      <div>fr_source_lookup_failed_reason: {toDebugStr(rd?.fr_source_lookup_failed_reason)}</div>
                       <div>exact_rows_count: {toDebugStr(rd?.exact_rows_count)}</div>
                       <div>exact_usable_rows_count: {toDebugStr(rd?.exact_usable_rows_count)}</div>
                       <div>exact_level: {toDebugStr(rd?.exact_level)}</div>

@@ -161,13 +161,25 @@ function validateInput(
   return { valid: true };
 }
 
+/** Normalize French postcode for source lookup: preserve leading zeros, 5-digit string. */
+function normalizePostcodeForFranceSource(postcode: string): string {
+  const s = (postcode ?? "").toString().replace(/\s+/g, "").trim();
+  if (!s || !/^\d+$/.test(s)) return s;
+  return s.length >= 5 ? s.slice(0, 5) : s.padStart(5, "0");
+}
+
 /** Normalize French commune/city for source lookup. PARIS 4E ARRONDISSEMENT -> PARIS, etc. */
 function normalizeCityForFranceSource(city: string): string {
-  const c = (city ?? "").trim().toUpperCase();
-  if (!c) return "";
+  const c = (city ?? "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^A-Z0-9 ]/g, " ");
+  if (!c.trim()) return "";
   const m = c.match(/^(PARIS|MARSEILLE|LYON|LYONS)\s*(?:\d{1,2}(?:ER|E|ÈME)?\s*(?:ARRONDISSEMENT)?)?$/i);
   if (m) return m[1].toUpperCase();
-  return c;
+  return c.replace(/\s+/g, " ").trim();
 }
 
 /** Check if two city strings match (handles arrondissements). */
@@ -525,6 +537,14 @@ export async function GET(request: NextRequest) {
         fr_ban_selected_penalties: null as string | null,
         fr_ban_similarity_threshold_passed: null as boolean | null,
         fr_ban_top_candidates_summary: null as string | null,
+        fr_source_lookup_postcode: null as string | null,
+        fr_source_lookup_city: null as string | null,
+        fr_source_lookup_street: null as string | null,
+        fr_source_lookup_house_number: null as string | null,
+        fr_source_lookup_exact_count: null as number | null,
+        fr_source_lookup_street_count: null as number | null,
+        fr_source_lookup_commune_count: null as number | null,
+        fr_source_lookup_failed_reason: null as string | null,
         fr_cache_hit: false,
         fr_cache_bypass_reason: null,
         fr_failed_stage: !frParserStarted && frHadRawInput ? "parse_entry" : null,
@@ -1291,14 +1311,20 @@ export async function GET(request: NextRequest) {
       };
 
       // Early candidate discovery from property_latest_facts (France source) for apartment evidence
+      // Normalize lookup keys consistently between BAN output and France facts.
+      const postcodeNormForSource = normalizePostcodeForFranceSource(postcodeNorm);
       const cityNormForSource = normalizeCityForFranceSource(cityNorm);
+      const streetNormForSource = streetNormalizedDet || "";
+      const houseNumberNormForSource = houseNumberNorm || "";
       console.log("[FR_SOURCE] normalized_city=" + (cityNormForSource || "(empty)"));
-      console.log("[FR_SOURCE] normalized_street=" + (streetNormalizedDet || "(empty)"));
+      console.log("[FR_SOURCE] normalized_street=" + (streetNormForSource || "(empty)"));
+      console.log("[FR_SOURCE] normalized_postcode=" + (postcodeNormForSource || "(empty)"));
       console.log("[FR_SOURCE] lookup_keys=postcode|street|house|city");
 
       const frBqCityMatchSql = cityNormForSource
         ? `(LOWER(TRIM(city)) = LOWER(@city_main) OR LOWER(TRIM(city)) LIKE CONCAT(LOWER(@city_main), ' %'))`
         : "TRUE";
+      const frBqPostcodeMatchSql = `LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')`;
       const frBqStreetMatchSqlEarly = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%')`;
       const normHn = (hn: string) => {
         let s = (hn ?? "").toString().trim().toUpperCase();
@@ -1321,7 +1347,7 @@ export async function GET(request: NextRequest) {
             SELECT unit_number, property_type
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
-              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode))
+              AND ${frBqPostcodeMatchSql}
               AND ${frBqCityMatchSql}
               AND ${frBqStreetMatchSqlEarly}
               AND ${frBqHouseMatchEarly}
@@ -1333,9 +1359,9 @@ export async function GET(request: NextRequest) {
               params: {
                 city: cityNorm || "",
                 city_main: cityNormForSource || cityNorm || "",
-                postcode: postcodeNorm || "",
-                street_normalized: streetNormalizedDet || "",
-                house_number: houseNumberNorm || "",
+                postcode: postcodeNormForSource || "",
+                street_normalized: streetNormForSource || "",
+                house_number: houseNumberNormForSource || "",
                 house_number_norm: houseNumberNormForEarly || "",
               },
             },
@@ -1377,7 +1403,7 @@ export async function GET(request: NextRequest) {
         SELECT
           *
         FROM candidates
-        WHERE TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+        WHERE ${frBqPostcodeMatchSql}
           AND ${detCityMatchSql}
           AND TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number AS STRING))
           AND (
@@ -1393,11 +1419,11 @@ export async function GET(request: NextRequest) {
       try {
         console.log("[FR_GOLD] before_intelligence_detection_query");
         const detectParams = {
-          city: cityNorm || "",
+          city: cityNormForSource || cityNorm || "",
           city_main: cityNormForSource || cityNorm || "",
-          postcode: postcodeNorm || "",
-          normalizedStreet: streetNormalizedDet || "",
-          house_number: houseNumberNorm || "",
+          postcode: postcodeNormForSource || "",
+          normalizedStreet: streetNormForSource || "",
+          house_number: houseNumberNormForSource || "",
         };
         console.log("[FR_PARAMS]", { query: "intelligence_detection_query", ...detectParams });
         [detectRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
@@ -1616,7 +1642,7 @@ export async function GET(request: NextRequest) {
           *
         FROM \`streetiq-bigquery.streetiq_gold.${exactTable}\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
-          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+          AND ${frBqPostcodeMatchSql}
           AND ${frBqCityMatchSql}
           AND ${frBqStreetMatchSql}
           AND ${frBqHouseNumberMatchSql}
@@ -1680,14 +1706,18 @@ export async function GET(request: NextRequest) {
       console.log("[FR_GOLD] before_exact_query");
       const exactParams = {
         country: country || "",
-        city: cityNorm || "",
+        city: cityNormForSource || cityNorm || "",
         city_main: cityNormForSource || cityNorm || "",
-        postcode: postcodeNorm || "",
+        postcode: postcodeNormForSource || "",
         street: streetNorm || "",
-        street_normalized: streetNormalizedDet || "",
-        house_number: houseNumberNorm || "",
+        street_normalized: streetNormForSource || "",
+        house_number: houseNumberNormForSource || "",
         house_number_norm: houseNumberNormForMatch || "",
       };
+      frRuntimeDebug.fr_source_lookup_postcode = postcodeNormForSource || null;
+      frRuntimeDebug.fr_source_lookup_city = cityNormForSource || null;
+      frRuntimeDebug.fr_source_lookup_street = streetNormForSource || null;
+      frRuntimeDebug.fr_source_lookup_house_number = houseNumberNormForSource || null;
       console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
       const [exactRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
         {
@@ -1697,6 +1727,13 @@ export async function GET(request: NextRequest) {
         "exact_query"
       );
       const exactRowsCount = (exactRows as any[])?.length ?? 0;
+      frRuntimeDebug.fr_source_lookup_exact_count = exactRowsCount;
+      if (exactRowsCount > 0) {
+        frRuntimeDebug.fr_source_lookup_failed_reason = null;
+      } else if (postcodeNormForSource || cityNormForSource || streetNormForSource) {
+        frRuntimeDebug.fr_source_lookup_failed_reason =
+          !streetNormForSource ? "no_street_for_lookup" : !postcodeNormForSource && !cityNormForSource ? "no_postcode_or_city" : "no_matching_rows_in_property_latest_facts";
+      }
       console.log("[FR_SOURCE] source_rows_exact=" + exactRowsCount);
       console.log("[FR_GOLD] after_exact_query", { rows: exactRowsCount });
       console.log("[FR_SQL] query_ok=true");
@@ -2080,7 +2117,7 @@ export async function GET(request: NextRequest) {
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-            AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+            AND ${frBqPostcodeMatchSql}
             AND ${frBqStreetMatchSql}
             AND ${frBqHouseNumberMatchSql}
             AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
@@ -2088,11 +2125,11 @@ export async function GET(request: NextRequest) {
         `;
           const similarParams = {
             country: country || "",
-            city: cityNorm || "",
-            postcode: postcodeNorm || "",
+            city: cityNormForSource || cityNorm || "",
+            postcode: postcodeNormForSource || "",
             street: streetNorm || "",
-            street_normalized: streetNormalizedDet || "",
-            house_number: houseNumberNorm || "",
+            street_normalized: streetNormForSource || "",
+            house_number: houseNumberNormForSource || "",
             house_number_norm: houseNumberNormForMatch || "",
           };
           let [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
@@ -2114,7 +2151,7 @@ export async function GET(request: NextRequest) {
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+              AND ${frBqPostcodeMatchSql}
               AND ${frBqStreetMatchSql}
               AND ${frBqHouseNumberNearbySql}
               AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
@@ -2487,7 +2524,7 @@ export async function GET(request: NextRequest) {
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+              AND ${frBqPostcodeMatchSql}
               AND ${frBqStreetMatchSql}
               AND ${frBqHouseNumberMatchSql}
             LIMIT 200
@@ -2499,11 +2536,11 @@ export async function GET(request: NextRequest) {
               query: profileQuery,
               params: {
                 country: country || "",
-                city: cityNorm || "",
-                postcode: postcodeNorm || "",
+                city: cityNormForSource || cityNorm || "",
+                postcode: postcodeNormForSource || "",
                 street: streetNorm || "",
-                street_normalized: streetNormalizedDet || "",
-                house_number: houseNumberNorm || "",
+                street_normalized: streetNormForSource || "",
+                house_number: houseNumberNormForSource || "",
                 house_number_norm: houseNumberNormForMatch || "",
               },
             },
@@ -2583,7 +2620,7 @@ export async function GET(request: NextRequest) {
           FROM \`streetiq-bigquery.streetiq_gold.${buildingTable}\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-            AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+            AND ${frBqPostcodeMatchSql}
             AND ${frBqStreetMatchSql}
             AND ${frBqHouseNumberMatchSql}
           LIMIT 50
@@ -2591,11 +2628,11 @@ export async function GET(request: NextRequest) {
         console.log("[FR_GOLD] before_building_query");
         const buildingParams = {
           country: country || "",
-          city: cityNorm || "",
-          postcode: postcodeNorm || "",
+          city: cityNormForSource || cityNorm || "",
+          postcode: postcodeNormForSource || "",
           street: streetNorm || "",
-          street_normalized: streetNormalizedDet || "",
-          house_number: houseNumberNorm || "",
+          street_normalized: streetNormForSource || "",
+          house_number: houseNumberNormForSource || "",
           house_number_norm: houseNumberNormForMatch || "",
         };
         console.log("[FR_PARAMS]", { query: "building_same_address_query", ...buildingParams });
@@ -2730,7 +2767,7 @@ export async function GET(request: NextRequest) {
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-            AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+            AND ${frBqPostcodeMatchSql}
             AND ${frBqStreetMatchSql}
             AND (LOWER(TRIM(CAST(property_type AS STRING))) LIKE '%maison%'
                  OR LOWER(TRIM(CAST(property_type AS STRING))) LIKE '%villa%'
@@ -2745,10 +2782,10 @@ export async function GET(request: NextRequest) {
               query: sameStreetHouseQuery,
               params: {
                 country: country || "",
-                city: cityNorm || "",
-                postcode: postcodeNorm || "",
+                city: cityNormForSource || cityNorm || "",
+                postcode: postcodeNormForSource || "",
                 street: streetNorm || "",
-                street_normalized: streetNormalizedDet || "",
+                street_normalized: streetNormForSource || "",
               },
             },
             "same_street_house_fallback"
@@ -2870,7 +2907,7 @@ export async function GET(request: NextRequest) {
         FROM \`streetiq-bigquery.streetiq_gold.${communeTable}\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+          AND ${frBqPostcodeMatchSql}
         LIMIT 20
       `;
 
@@ -2940,10 +2977,10 @@ export async function GET(request: NextRequest) {
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
       const streetParams = {
         country: country || "",
-        city: cityNorm || "",
-        postcode: postcodeNorm || "",
+        city: cityNormForSource || cityNorm || "",
+        postcode: postcodeNormForSource || "",
         street: streetNorm || "",
-        street_normalized: streetNormalizedDet || "",
+        street_normalized: streetNormForSource || "",
         property_type: propertyType || "",
       };
       console.log("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
@@ -2987,7 +3024,7 @@ export async function GET(request: NextRequest) {
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+              AND ${frBqPostcodeMatchSql}
               AND ${frBqStreetMatchSql}
             LIMIT 200
           `;
@@ -2996,10 +3033,10 @@ export async function GET(request: NextRequest) {
               query: factsStreetQuery,
               params: {
                 country: country || "",
-                city: cityNorm || "",
-                postcode: postcodeNorm || "",
+                city: cityNormForSource || cityNorm || "",
+                postcode: postcodeNormForSource || "",
                 street: streetNorm || "",
-                street_normalized: streetNormalizedDet || "",
+                street_normalized: streetNormForSource || "",
               },
             },
             "street_from_facts_fallback"
@@ -3052,6 +3089,7 @@ export async function GET(request: NextRequest) {
 
       frRuntimeDebug.street_rows_count = streetFallbackRowsCount;
       frRuntimeDebug.street_usable_rows_count = streetUsableAvgRowsCount;
+      frRuntimeDebug.fr_source_lookup_street_count = streetFallbackRowsCount;
 
       const tryStreetFallback = () => {
         if (streetUsableAvgRowsCount <= 0) return null;
@@ -3208,8 +3246,8 @@ export async function GET(request: NextRequest) {
       console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
       const communeParams = {
         country: country || "",
-        city: cityNorm || "",
-        postcode: postcodeNorm || "",
+        city: cityNormForSource || cityNorm || "",
+        postcode: postcodeNormForSource || "",
       };
       console.log("[FR_PARAMS]", { query: "fallback_commune_stats_query", ...communeParams });
       const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }> ]>(
@@ -3239,13 +3277,13 @@ export async function GET(request: NextRequest) {
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
-              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+              AND ${frBqPostcodeMatchSql}
             LIMIT 300
           `;
           const [factsCommuneRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>(
             {
               query: factsCommuneQuery,
-              params: { country: country || "", city: cityNorm || "", postcode: postcodeNorm || "" },
+              params: { country: country || "", city: cityNormForSource || cityNorm || "", postcode: postcodeNormForSource || "" },
             },
             "commune_from_facts_fallback"
           );
@@ -3276,6 +3314,7 @@ export async function GET(request: NextRequest) {
 
       frRuntimeDebug.commune_rows_count = communeFallbackRowsCount;
       frRuntimeDebug.commune_usable_rows_count = communeUsableAvgRowsCount;
+      frRuntimeDebug.fr_source_lookup_commune_count = communeFallbackRowsCount;
 
       if (communeUsableAvgRowsCount > 0) {
         const avgPriceValues = communeUsableAvgRows
@@ -3370,13 +3409,13 @@ export async function GET(request: NextRequest) {
             SELECT price_per_m2, surface_m2, street, house_number, last_sale_date, city
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
-              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode))
+              AND ${frBqPostcodeMatchSql}
               AND ${filter}
             LIMIT 400
           `;
           return queryWithTimeout<[
             Array<{ price_per_m2?: unknown; street?: unknown; house_number?: unknown; last_sale_date?: unknown; city?: unknown }>
-          ]>({ query: q, params: { country: country || "", postcode: postcodeNorm } }, "nearby_fallback_query");
+          ]>({ query: q, params: { country: country || "", postcode: postcodeNormForSource } }, "nearby_fallback_query");
         };
 
         try {
