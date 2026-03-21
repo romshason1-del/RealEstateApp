@@ -576,6 +576,9 @@ export const AddressExplorer = () => {
   });
   const [isFranceSearching, setIsFranceSearching] = React.useState(false);
   const frSearchStartedAtRef = React.useRef<number | null>(null);
+  const [isSearching, setIsSearching] = React.useState(false);
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const suggestionExplicitlySelectedRef = React.useRef(false);
 
   React.useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
@@ -784,11 +787,21 @@ export const AddressExplorer = () => {
     [hydrateSearchContext, map],
   );
 
-  const handleSearch = React.useCallback(async () => {
-    if (!query.trim()) return;
+  const handleSearch = React.useCallback(async (searchValueOverride?: string) => {
+    const rawTyped = (searchValueOverride ?? searchInputRef.current?.value ?? query).trim();
+    if (!rawTyped) return;
 
-    const typedAddress = query.trim();
+    const typedAddress = rawTyped;
     const normalizedQuery = typedAddress.toLowerCase();
+    suggestionExplicitlySelectedRef.current = false;
+    setIsSearching(true);
+    const firstSuggestion = searchPredictions[0];
+    console.log("[SEARCH_INPUT] raw_typed_value=" + typedAddress);
+    console.log("[SEARCH_INPUT] selected_suggestion_value=" + (firstSuggestion?.description ?? "(none)"));
+    console.log("[SEARCH_INPUT] suggestion_explicitly_selected=false");
+    console.log("[SEARCH_INPUT] final_search_value=typed");
+    console.log("[SEARCH_INPUT] final_search_text=" + typedAddress);
+
     const looksLikeFrance = /^\d{5}\b|(?:paris|marseille|lyon|cannes|nice|france)\b/i.test(typedAddress) || normalizedQuery.includes("rue") || normalizedQuery.includes("avenue") || normalizedQuery.includes("chemin");
     if (looksLikeFrance) {
       setIsFranceSearching(true);
@@ -803,6 +816,7 @@ export const AddressExplorer = () => {
       normalizedQuery === "near me restaurant" ||
       normalizedQuery === "near me restaurants"
     ) {
+      setIsSearching(false);
       const targetLocation = currentLocation ?? searchBiasLocation ?? center;
       if (!targetLocation) {
         setLocationNotice("Live location is unavailable. Enable location or search a full address.");
@@ -856,14 +870,17 @@ export const AddressExplorer = () => {
           hydrateSearchContext(franceCenter, typedAddress);
           map?.panTo(franceCenter);
           map?.setZoom(10);
+          setIsSearching(false);
           return;
         }
+        setIsSearching(false);
         setError("Location not found. Try a different address or city.");
         return;
       }
 
       const nextCenter = extractGeocodeLatLng(results[0].geometry.location);
       if (!nextCenter) {
+        setIsSearching(false);
         setError("Location not found. Try a different address or city.");
         return;
       }
@@ -872,7 +889,6 @@ export const AddressExplorer = () => {
       const addressForCard = countryProfile.countryCode === "FR" ? typedAddress : formattedAddress;
 
       setSearchPredictions([]);
-      setQuery(formattedAddress);
       setCenter(nextCenter);
       setSelectedRestaurant(null);
       setRestaurants([]);
@@ -887,6 +903,12 @@ export const AddressExplorer = () => {
       setDismissedBuilding(null);
       setError(null);
       setIsFranceSearching(false);
+      setIsSearching(false);
+      if (countryProfile.countryCode === "FR") {
+        setQuery(typedAddress);
+      } else {
+        setQuery(formattedAddress);
+      }
       if (looksLikeFrance && frSearchStartedAtRef.current) {
         console.log("[FR_UI] first_result_render_ms=" + String(Date.now() - frSearchStartedAtRef.current));
         console.log("[FR_UI] loading_state_visible=true");
@@ -898,8 +920,9 @@ export const AddressExplorer = () => {
     } catch {
       setError("Search is temporarily unavailable. Please try again.");
       setIsFranceSearching(false);
+      setIsSearching(false);
     }
-  }, [center, currentLocation, geocodeRequest, hydrateSearchContext, map, query, searchBiasLocation]);
+  }, [center, currentLocation, geocodeRequest, hydrateSearchContext, map, query, searchBiasLocation, searchPredictions]);
 
   const handleGeolocationError = React.useCallback(
     (geoError: GeolocationPositionError | null) => {
@@ -1246,6 +1269,12 @@ export const AddressExplorer = () => {
 
       const rawTyped = query.trim();
       const selectedFormattedFromPred = prediction.description;
+      suggestionExplicitlySelectedRef.current = true;
+      console.log("[SEARCH_INPUT] raw_typed_value=" + (rawTyped || "(empty)"));
+      console.log("[SEARCH_INPUT] selected_suggestion_value=" + selectedFormattedFromPred);
+      console.log("[SEARCH_INPUT] suggestion_explicitly_selected=true");
+      console.log("[SEARCH_INPUT] final_search_value=suggestion");
+      console.log("[SEARCH_INPUT] final_search_text=" + selectedFormattedFromPred);
       console.log("[FR_INPUT] raw_input=" + (rawTyped || "(empty)"));
       console.log("[FR_INPUT] selected_suggestion=" + selectedFormattedFromPred);
       console.log("[FR_INPUT] used_for_search=suggestion");
@@ -2169,6 +2198,7 @@ export const AddressExplorer = () => {
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-amber-400" />
               <input
+                ref={searchInputRef}
                 value={query}
                 onChange={(event) => {
                   const nextQuery = event.target.value;
@@ -2187,8 +2217,10 @@ export const AddressExplorer = () => {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
+                    event.stopPropagation();
                     setIsSearchDropdownOpen(false);
-                    void handleSearch();
+                    const rawValue = (event.currentTarget as HTMLInputElement).value?.trim() ?? "";
+                    void handleSearch(rawValue || undefined);
                   }
                 }}
                 placeholder="Search addresses or streets..."
@@ -2201,6 +2233,7 @@ export const AddressExplorer = () => {
                       <button
                         key={prediction.placeId}
                         type="button"
+                        tabIndex={-1}
                         onClick={() => handleSelectSearchPrediction(prediction)}
                         className="w-full rounded-xl px-3 py-2 text-left text-sm text-white transition-colors hover:bg-white/5"
                       >
@@ -2215,10 +2248,10 @@ export const AddressExplorer = () => {
             <button
               type="button"
               onClick={() => void handleSearch()}
-              disabled={isFranceSearching}
+              disabled={isSearching}
               className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-black transition-colors hover:bg-amber-300 disabled:opacity-90 disabled:cursor-wait"
             >
-              {isFranceSearching ? (
+              {isSearching ? (
                 <span className="size-5 animate-spin rounded-full border-2 border-black border-t-transparent" />
               ) : (
                 <Search className="size-5" />
