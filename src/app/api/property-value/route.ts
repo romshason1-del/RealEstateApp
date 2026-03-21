@@ -969,6 +969,64 @@ export async function GET(request: NextRequest) {
         return [];
       };
 
+      // Early candidate discovery from property_latest_facts (France source) for apartment evidence
+      const frBqStreetMatchSqlEarly = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%')`;
+      const normHn = (hn: string) => {
+        let s = (hn ?? "").toString().trim().toUpperCase();
+        s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
+        s = s.replace(/[-–—\s]+/g, "").replace(/[^0-9A-Z]/g, "");
+        return s || "";
+      };
+      const houseNumberNormForEarly = normHn(houseNumberNorm);
+      const frBqHouseMatchEarly = `(TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING)) OR REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(CAST(house_number AS STRING))), r'\\s+', ''), r'[^0-9A-Z]', '') = @house_number_norm)`;
+
+      let earlyCandidateRows: Array<Record<string, unknown>> = [];
+      let apartmentEvidenceFromFacts = false;
+      let candidateLotsFromFacts: string[] = [];
+      if (cityNorm && postcodeNorm && streetNorm && houseNumberNorm) {
+        try {
+          const earlyQuery = `
+            SELECT unit_number, property_type
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = 'fr'
+              AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode))
+              AND ${frBqStreetMatchSqlEarly}
+              AND ${frBqHouseMatchEarly}
+            LIMIT 100
+          `;
+          const [earlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            {
+              query: earlyQuery,
+              params: {
+                city: cityNorm || "",
+                postcode: postcodeNorm || "",
+                street_normalized: streetNormalizedDet || "",
+                house_number: houseNumberNorm || "",
+                house_number_norm: houseNumberNormForEarly || "",
+              },
+            },
+            "early_candidate_discovery"
+          );
+          earlyCandidateRows = (earlyRows ?? []) as Array<Record<string, unknown>>;
+          const lots = new Set<string>();
+          let appartCount = 0;
+          for (const r of earlyCandidateRows) {
+            const pt = String((r as any).property_type ?? "").toLowerCase();
+            if (pt.includes("appartement")) appartCount++;
+            const un = (r as any).unit_number;
+            if (un != null && String(un).trim()) lots.add(String(un).trim().replace(/^0+/, "") || String(un).trim());
+          }
+          apartmentEvidenceFromFacts = lots.size >= 2 || appartCount >= 2;
+          candidateLotsFromFacts = Array.from(lots).filter(Boolean);
+          console.log("[FR_SOURCE] source_path=facts");
+          console.log("[FR_SOURCE] candidate_rows_found=" + String(earlyCandidateRows.length));
+          console.log("[FR_CLASSIFY] apartment_evidence=" + (apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts" : "none_from_facts"));
+        } catch (e) {
+          console.log("[FR_SOURCE] early_candidate_query_error", (e as Error)?.message);
+        }
+      }
+
       const detectionQuery = `
         WITH candidates AS (
           SELECT
@@ -1046,12 +1104,12 @@ export async function GET(request: NextRequest) {
         detectedTypeLower.includes("appart") || detectedTypeLower.includes("apartment") || detectedTypeLower.includes("multi");
       const houseFromType = detectedTypeLower.includes("maison") || detectedTypeLower.includes("house") || detectedTypeLower.includes("villa");
 
-      const detectedApartment = isMultiUnitDetected || apartmentFromType;
+      const detectedApartment = isMultiUnitDetected || apartmentFromType || apartmentEvidenceFromFacts;
       const detectedHouse = isHouseLikeDetected || houseFromType;
 
-      // Final apartment-vs-house decision rule (gold-table driven).
+      // Final apartment-vs-house decision rule (gold-table + facts driven).
       // - If house-like evidence exists, run house-direct flow.
-      // - Else if multi-unit / apartment-like evidence exists, ask for apartment/lot.
+      // - Else if multi-unit / apartment-like evidence exists (incl. from property_latest_facts), ask for apartment/lot.
       const detectClass: "apartment" | "house" | "unclear" = detectedHouse ? "house" : detectedApartment ? "apartment" : "unclear";
       frRuntimeDebug.detect_class = detectClass;
       const flowPropertyType = detectClass === "house" ? "house" : detectClass === "apartment" ? "apartment" : "unknown";
@@ -1065,7 +1123,7 @@ export async function GET(request: NextRequest) {
         detectClass,
       });
 
-      const candidateLots = getStringArray(detectRow, [
+      const candidateLotsFromIntelligence = getStringArray(detectRow, [
         "candidate_lots",
         "candidateLots",
         "available_lots",
@@ -1073,7 +1131,9 @@ export async function GET(request: NextRequest) {
         "lots",
         "candidate_lot",
       ]);
+      const candidateLots = candidateLotsFromFacts.length > 0 ? candidateLotsFromFacts : candidateLotsFromIntelligence;
 
+      console.log("[FR_CLASSIFY] should_prompt_lot=" + String(detectClass === "apartment" && !submittedLotPresent));
       console.log("[FR_GOLD] intelligence_apartment_vs_house", {
         detectClass,
         isMultiUnitDetected,
@@ -3097,6 +3157,7 @@ export async function GET(request: NextRequest) {
       if (communeUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_commune_avg_price");
 
       const exactHouseCandidates = frRuntimeDebug.exact_house_row_count ?? 0;
+      console.log("[FR_LADDER] exact=" + String(exactHouseCandidates || exactApartmentRowsCount) + " building=" + String(sameBuildingUsableRowsCount) + " street=" + String(streetUsableAvgRowsCount) + " commune=" + String(communeUsableAvgRowsCount));
       const buildingCandidates = frRuntimeDebug.building_similar_unit_candidates_count ?? sameBuildingRowsCount;
       const streetCandidates = streetFallbackRowsCount;
       const communeCandidates = communeFallbackRowsCount;
@@ -3151,6 +3212,7 @@ export async function GET(request: NextRequest) {
       } else {
         frRuntimeDebug.winning_step = "no_data";
         frRuntimeDebug.winning_source_label = "No reliable data found";
+        console.log("[FR_FAIL] no_data_reason=" + (noDataReasonParts.join(" | ") || "unknown"));
       }
       frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
