@@ -117,3 +117,37 @@ export function sanitizeFrancePropertyResultForDisplay(pr: FrancePropertyResultL
     },
   };
 }
+
+/** Number grouping for France UI (commas); stable across user OS locales. */
+export const FRANCE_UI_NUMBER_LOCALE = "en-US";
+
+/**
+ * Display-only: some payloads historically sent €/m² as centimes/m²; scale when absurdly high.
+ * Does not affect valuation — formatting path only.
+ */
+export function normalizeFrancePricePerSqmForDisplay(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return raw;
+  if (raw > 100_000) return raw / 100;
+  return raw;
+}
+
+/** Whole-euro amounts: `173886` → `173,886 €`. */
+export function formatFranceEuroTotal(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  return `${Math.round(value).toLocaleString(FRANCE_UI_NUMBER_LOCALE, { maximumFractionDigits: 0, minimumFractionDigits: 0 })} €`;
+}
+
+/** €/m² with grouping; optional `(median)` suffix for headlines. */
+export function formatFranceEuroPerSqm(value: number, options?: { medianSuffix?: boolean }): string {
+  if (!Number.isFinite(value) || value <= 0) return "— €/m²";
+  const n = Math.round(normalizeFrancePricePerSqmForDisplay(value));
+  const base = `${n.toLocaleString(FRANCE_UI_NUMBER_LOCALE, { maximumFractionDigits: 0, minimumFractionDigits: 0 })} €/m²`;
+  return options?.medianSuffix ? `${base} (median)` : base;
+}
+
+/** €/m² from API/BigQuery raw (may be `{ value: n }`). */
+export function formatFranceEuroPerSqmFromUnknown(raw: unknown, options?: { medianSuffix?: boolean }): string {
+  const coerced = coerceFiniteNumber(raw);
+  if (coerced == null || coerced <= 0) return "— €/m²";
+  return formatFranceEuroPerSqm(coerced, options);
+}

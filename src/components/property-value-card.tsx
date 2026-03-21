@@ -10,6 +10,8 @@ import { toCanonicalAddress } from "@/lib/address-canonical";
 import { toEnglishDisplay, sanitizeForDisplay } from "@/lib/display-utils";
 import {
   coercePositiveNumber,
+  formatFranceEuroPerSqm,
+  formatFranceEuroTotal,
   sanitizeFrancePropertyResultForDisplay,
   type FrancePropertyResultLike,
 } from "@/lib/fr-display-safe";
@@ -168,6 +170,10 @@ type DebugPanelProps = {
 
 function DebugPanel({ address, parsed, canonical, insightsData, latest, currencySymbol }: DebugPanelProps) {
   const d = insightsData?.debug;
+  const franceDataSource =
+    insightsData != null &&
+    typeof insightsData === "object" &&
+    (insightsData as { data_source?: string }).data_source === "properties_france";
   const apiCanon = d?.canonical_address ?? {
     city_key: canonical.cityKey,
     street_key: canonical.streetKey,
@@ -242,7 +248,10 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
           <div><span className="text-zinc-500">Market value source:</span> {String(d.market_value_source)}</div>
         )}
         {d?.price_per_m2_used != null && (
-          <div><span className="text-zinc-500">Price per m² used:</span> {d.price_per_m2_used}</div>
+          <div>
+            <span className="text-zinc-500">Price per m² used:</span>{" "}
+            {franceDataSource ? formatFranceEuroPerSqm(d.price_per_m2_used) : d.price_per_m2_used}
+          </div>
         )}
         {d?.price_per_sqft_used != null && (
           <div><span className="text-zinc-500">Price per sqft used:</span> {d.price_per_sqft_used}</div>
@@ -260,7 +269,10 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
           <div><span className="text-zinc-500">Transactions count 5y:</span> {d.transactions_count_5y}</div>
         )}
         {d?.latest_transaction_amount != null && (
-          <div><span className="text-zinc-500">Latest transaction amount:</span> {d.latest_transaction_amount}</div>
+          <div>
+            <span className="text-zinc-500">Latest transaction amount:</span>{" "}
+            {franceDataSource ? formatFranceEuroTotal(d.latest_transaction_amount) : d.latest_transaction_amount}
+          </div>
         )}
         <div><span className="text-zinc-500">Records fetched:</span> {d?.records_fetched ?? "—"}</div>
         <div><span className="text-zinc-500">Records returned:</span> {d?.records_returned ?? "—"}</div>
@@ -321,9 +333,15 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
           <div className="text-[10px] uppercase tracking-wider text-emerald-400/90">Matched transaction</div>
           <div className="mt-1 space-y-0.5 text-zinc-300">
             <div>Date: {formatSaleDate(latest.transaction_date)}</div>
-            <div>Price: {formatCurrency(latest.transaction_price, currencySymbol)}</div>
+            <div>
+              Price:{" "}
+              {franceDataSource ? formatFranceEuroTotal(latest.transaction_price) : formatCurrency(latest.transaction_price, currencySymbol)}
+            </div>
             <div>Size: {latest.property_size} m²</div>
-            <div>Price/m²: {formatCurrency(latest.price_per_m2, currencySymbol)}</div>
+            <div>
+              Price/m²:{" "}
+              {franceDataSource ? formatFranceEuroPerSqm(latest.price_per_m2) : formatCurrency(latest.price_per_m2, currencySymbol)}
+            </div>
           </div>
         </div>
       )}
@@ -880,7 +898,7 @@ export function PropertyValueCard({
                   {isLoading ? (
                     <span className="inline-block h-5 w-24 animate-pulse rounded bg-zinc-600/40" aria-hidden />
                   ) : averageBuildingValueFrance != null && averageBuildingValueFrance > 0 ? (
-                    formatCurrency(averageBuildingValueFrance, currencySymbol)
+                    formatFranceEuroTotal(averageBuildingValueFrance)
                   ) : (
                     "—"
                   )}
@@ -911,7 +929,7 @@ export function PropertyValueCard({
                             <td className="px-1.5 py-0.5 text-zinc-400">{sale.lot_number ?? "—"}</td>
                             <td className="px-1.5 py-0.5 text-zinc-300">{sale.date ? formatSaleDate(sale.date) : "—"}</td>
                             <td className="px-1.5 py-0.5 text-zinc-400 truncate max-w-[48px]">{sale.type}</td>
-                            <td className="px-1.5 py-0.5 text-right font-medium text-zinc-200">{formatCurrency(sale.price, currencySymbol)}</td>
+                            <td className="px-1.5 py-0.5 text-right font-medium text-zinc-200">{formatFranceEuroTotal(sale.price)}</td>
                             <td className="px-1.5 py-0.5 text-right text-zinc-400">{sale.surface != null && sale.surface > 0 ? sale.surface : "—"}</td>
                           </tr>
                         ))}
@@ -981,10 +999,10 @@ export function PropertyValueCard({
                 )}
                 <div className="mt-0.5 text-sm font-semibold text-violet-300">
                   {frRow.exact_value != null && frRow.exact_value > 0
-                    ? formatCurrency(frRow.exact_value, currencySymbol)
+                    ? formatFranceEuroTotal(frRow.exact_value)
                     : (frRow.value_level === "building-level" || frRow.value_level === "area-level") &&
                       (frRow.street_average != null && frRow.street_average > 0)
-                    ? formatCurrency(frRow.street_average, currencySymbol)
+                    ? formatFranceEuroTotal(frRow.street_average)
                     : (frRow.exact_value_message ?? "No DVF data for this area")}
                 </div>
                 {apartmentNotMatched && frRow.exact_value_message && (
@@ -992,7 +1010,7 @@ export function PropertyValueCard({
                 )}
                 {surfaceReelleBatiFrance != null && surfaceReelleBatiFrance > 0 && frRow.exact_value != null && frRow.exact_value > 0 && (
                   <div className="mt-0.5 text-[9px] text-zinc-400">
-                    Estimated €/m²: {formatCurrency(Math.round(frRow.exact_value / surfaceReelleBatiFrance), currencySymbol)}/m²
+                    Estimated €/m²: {formatFranceEuroPerSqm(Math.round(frRow.exact_value / surfaceReelleBatiFrance))}
                   </div>
                 )}
                 <div className="mt-0.5 text-[9px] text-zinc-500">DVF government data</div>
@@ -1001,12 +1019,12 @@ export function PropertyValueCard({
                 <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Last transaction</div>
                 <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                   {frRow.last_transaction.amount > 0
-                    ? `${formatCurrency(frRow.last_transaction.amount, currencySymbol)}${frRow.last_transaction.date ? ` · Sold in: ${formatSaleDate(frRow.last_transaction.date)}` : ""}`
+                    ? `${formatFranceEuroTotal(frRow.last_transaction.amount)}${frRow.last_transaction.date ? ` · Sold in: ${formatSaleDate(frRow.last_transaction.date)}` : ""}`
                     : (frRow.last_transaction.message ?? "No recorded transaction")}
                 </div>
                 {surfaceReelleBatiFrance != null && surfaceReelleBatiFrance > 0 && frRow.last_transaction.amount > 0 && (
                   <div className="mt-0.5 text-[9px] text-zinc-400">
-                    Last transaction €/m²: {formatCurrency(Math.round(frRow.last_transaction.amount / surfaceReelleBatiFrance), currencySymbol)}/m²
+                    Last transaction €/m²: {formatFranceEuroPerSqm(Math.round(frRow.last_transaction.amount / surfaceReelleBatiFrance))}
                   </div>
                 )}
               </div>
@@ -1014,7 +1032,7 @@ export function PropertyValueCard({
                 <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Area average</div>
                 <div className="mt-0.5 text-[11px] font-medium text-zinc-300">
                   {frRow.street_average != null && frRow.street_average > 0
-                    ? formatCurrency(frRow.street_average, currencySymbol)
+                    ? formatFranceEuroTotal(frRow.street_average)
                     : (frRow.street_average_message ?? "No DVF data for this area")}
                 </div>
               </div>
@@ -1052,7 +1070,7 @@ export function PropertyValueCard({
                             <td className="px-1.5 py-0.5 text-zinc-400">{sale.lot_number ?? "—"}</td>
                             <td className="px-1.5 py-0.5 text-zinc-300">{sale.date ? formatSaleDate(sale.date) : "—"}</td>
                             <td className="px-1.5 py-0.5 text-zinc-400 truncate max-w-[48px]">{sale.type}</td>
-                            <td className="px-1.5 py-0.5 text-right font-medium text-zinc-200">{formatCurrency(sale.price, currencySymbol)}</td>
+                            <td className="px-1.5 py-0.5 text-right font-medium text-zinc-200">{formatFranceEuroTotal(sale.price)}</td>
                             <td className="px-1.5 py-0.5 text-right text-zinc-400">{sale.surface != null && sale.surface > 0 ? sale.surface : "—"}</td>
                           </tr>
                         ))}
@@ -1297,7 +1315,7 @@ export function PropertyValueCard({
                     Market Value
                   </div>
                   <div className="mt-0.5 text-sm font-semibold text-violet-300">
-                    {formatCurrency(estimate.estimated_value, currencySymbol)}
+                    {isFranceData ? formatFranceEuroTotal(estimate.estimated_value) : formatCurrency(estimate.estimated_value, currencySymbol)}
                   </div>
                   <div className="mt-0.5 text-[9px] text-violet-400/70">
                     {estimateIsStreetValue
@@ -1324,7 +1342,9 @@ export function PropertyValueCard({
                 </div>
                 <div className="mt-0.5 text-sm font-medium text-amber-200">
                   {latestBuildingAmount > 0
-                    ? formatCurrency(latestBuildingAmount, currencySymbol)
+                    ? isFranceData
+                      ? formatFranceEuroTotal(latestBuildingAmount)
+                      : formatCurrency(latestBuildingAmount, currencySymbol)
                     : "No recent building transaction available"}
                   {latest?.transaction_date && (
                     <span className="ml-1 text-[10px] text-amber-400/70">

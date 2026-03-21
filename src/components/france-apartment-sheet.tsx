@@ -11,6 +11,9 @@ import {
   coerceFiniteNumber,
   coerceNullableString,
   coercePositiveNumber,
+  formatFranceEuroPerSqmFromUnknown,
+  formatFranceEuroTotal,
+  normalizeFrancePricePerSqmForDisplay,
   unwrapScalar,
 } from "@/lib/fr-display-safe";
 
@@ -37,37 +40,12 @@ export type FranceValuationDisplay = {
   source_label?: string | null;
 };
 
-/** Whole euro amounts (totals) — French grouping (narrow no-break space). */
-function formatCurrency(value: number, symbol: string): string {
-  if (!Number.isFinite(value)) return `0\u00a0${symbol}`;
-  const n = Math.round(value);
-  return `${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}\u00a0${symbol}`;
-}
-
-/**
- * Some gold paths store €/m² as centimes/m² (×100). Values > 100k are treated as centimes.
- */
-function normalizePricePerSqmEuros(raw: number): number {
-  if (!Number.isFinite(raw) || raw <= 0) return raw;
-  if (raw > 100_000) return raw / 100;
-  return raw;
-}
-
-/** €/m² from API raw (centimes heuristic) + fr-FR grouping. Accepts `{ value: n }` from some serializers. */
-function formatPricePerSqmFromApi(rawPerM2: unknown, symbol: string, withMedianSuffix = true): string {
-  const coerced = coerceFiniteNumber(rawPerM2);
-  if (coerced == null || coerced <= 0) return `—\u00a0${symbol}/m²`;
-  const n = Math.round(normalizePricePerSqmEuros(coerced));
-  const base = `${n.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}\u00a0${symbol}/m²`;
-  return withMedianSuffix ? `${base} (median)` : base;
-}
-
 export function FranceApartmentSheet({
   address,
   position,
   postcode,
   typedAddressForFrance,
-  currencySymbol = "€",
+  currencySymbol: _currencySymbol = "€",
   onClose,
 }: FranceSheetProps) {
   const isDev = process.env.NODE_ENV !== "production";
@@ -834,7 +812,7 @@ export function FranceApartmentSheet({
       (topDisplayValueType === "price_per_m2" && topDisplayValue != null && topDisplayValue > 0 ? topDisplayValue : null) ??
       coercePositiveNumber(rd?.winning_median_price_per_m2);
     const ppm2Display =
-      ppm2FromApi != null ? normalizePricePerSqmEuros(ppm2FromApi) : null;
+      ppm2FromApi != null ? normalizeFrancePricePerSqmForDisplay(ppm2FromApi) : null;
     const isNoResult =
       !isLoadingNow &&
       (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
@@ -910,7 +888,7 @@ export function FranceApartmentSheet({
       const displayedSurface = displayedSurfaceRaw;
       const displayedPricePerSqmRaw = coercePositiveNumber(fr?.property?.pricePerSqm as unknown);
       const displayedPricePerSqm =
-        displayedPricePerSqmRaw != null ? normalizePricePerSqmEuros(displayedPricePerSqmRaw) : null;
+        displayedPricePerSqmRaw != null ? normalizeFrancePricePerSqmForDisplay(displayedPricePerSqmRaw) : null;
 
       const rangeCandidates = (fr?.comparables ?? [])
         .map((c) => {
@@ -994,9 +972,9 @@ export function FranceApartmentSheet({
         : isSuspiciousFallback
           ? "No reliable price available"
           : hasValue
-            ? formatCurrency(rawValue, currencySymbol)
+            ? formatFranceEuroTotal(rawValue)
             : hasPricePerM2Headline && ppm2FromApi != null
-              ? formatPricePerSqmFromApi(ppm2FromApi, currencySymbol, true)
+              ? formatFranceEuroPerSqmFromUnknown(ppm2FromApi, { medianSuffix: true })
             : fr?.resultType === "building_level"
               ? "No reliable building value available"
               : "—";
@@ -1123,8 +1101,8 @@ export function FranceApartmentSheet({
                     (isNoResult
                       ? "No exact data found — showing limited insights"
                       : valueRange
-                        ? `${formatCurrency(valueRange.min, currencySymbol)} – ${formatCurrency(valueRange.max, currencySymbol)}`
-                        : (mainValue.startsWith(currencySymbol) ? mainValue : mainValue))
+                        ? `${formatFranceEuroTotal(valueRange.min)} – ${formatFranceEuroTotal(valueRange.max)}`
+                        : mainValue)
                   )}
                 </div>
 
@@ -1162,7 +1140,7 @@ export function FranceApartmentSheet({
                         !isNoResult &&
                         coercePositiveNumber(fr?.property?.transactionValue as unknown) != null &&
                         unwrapScalar(fr?.property?.transactionDate as unknown) != null
-                      ? `${formatCurrency(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0, currencySymbol)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))}`
+                      ? `${formatFranceEuroTotal(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))}`
                       : "No exact recent transaction available"}
                 </div>
               </div>
@@ -1279,7 +1257,7 @@ export function FranceApartmentSheet({
                           <div>
                             Price/m²:{" "}
                             <span className="font-medium text-white">
-                              {formatPricePerSqmFromApi(fr?.property?.pricePerSqm, currencySymbol, false)}
+                              {formatFranceEuroPerSqmFromUnknown(fr?.property?.pricePerSqm, { medianSuffix: false })}
                             </span>
                           </div>
                         ) : null}
