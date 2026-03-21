@@ -99,6 +99,23 @@ export function FranceApartmentSheet({
     }
   }, [data, isDev]);
 
+  /** Temporary France exact-path price trace (raw → API → formatter); dev-only. */
+  React.useEffect(() => {
+    if (!isDev || data == null || typeof data !== "object") return;
+    const d = data as Record<string, unknown>;
+    const rd = d.fr_runtime_debug as Record<string, unknown> | undefined;
+    if (String(rd?.winning_step ?? "") !== "exact") return;
+    const fv = d.fr_valuation_display as Record<string, unknown> | undefined;
+    const fr = d.fr as { property?: { transactionValue?: unknown } } | undefined;
+    const uiInput =
+      coercePositiveNumber(fr?.property?.transactionValue as unknown) ??
+      coercePositiveNumber(fv?.last_sale_price as unknown);
+    console.log("[FR_PRICE] ui_input_last_sale_price=" + String(uiInput ?? "(null)"));
+    if (uiInput != null && uiInput > 0) {
+      console.log("[FR_PRICE] final_display_last_sale_price=" + formatFranceEuroTotal(uiInput));
+    }
+  }, [data, isDev]);
+
   // Once we have a building payload for this address, never render a no-data France state.
   const lastBuildingPayloadRef = React.useRef<typeof data>(null);
   const addressKey = React.useMemo(() => `${addressForApi.trim().toLowerCase()}|pc:${(postcode ?? "").trim().toLowerCase()}`, [addressForApi, postcode]);

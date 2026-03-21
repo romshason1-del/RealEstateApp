@@ -28,18 +28,35 @@ const FR_ERROR_CACHE = new Map<string, { data: Record<string, unknown>; ts: numb
 const FR_ERROR_CACHE_TTL_MS = 60 * 1000;
 const MAX_ADDRESS_LENGTH = 200;
 
-/**
- * France DVF / BigQuery gold tables store money fields in cents (totals and €/m²).
- * Use for API JSON only; do not use for row matching / sorting (those stay on raw cents).
- */
-function frDvfMoneyCentsToEuros(value: unknown): number | null {
+/** Parse numeric fields from BigQuery / JSON (commas, stray chars). */
+function frParseNumericLoose(value: unknown): number | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value / 100 : null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
   const raw = String(value).trim();
   if (!raw) return null;
   const cleaned = raw.replace(",", ".").replace(/[^\d.-]/g, "");
   const n = Number(cleaned);
-  return Number.isFinite(n) ? n / 100 : null;
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * France DVF-derived **staging** tables (and fallbacks like `property_area_fallback`) store money in
+ * **centimes** (1/100 €). Use for API JSON only; do not use for row matching / sorting.
+ */
+function frDvfMoneyCentsToEuros(value: unknown): number | null {
+  const n = frParseNumericLoose(value);
+  return n == null ? null : n / 100;
+}
+
+/**
+ * `streetiq_gold.property_latest_facts` uses a different fixed-point convention than raw DVF centimes:
+ * `last_sale_price` and `price_per_m2` are stored in **thousandths of a euro** (raw integer N ⇒ N/1000 €).
+ * Using centime scaling (/100) on this table inflates amounts by 10× (e.g. 173 886 € shown as 1 738 860 €).
+ * Apply this converter exactly once when reading those columns; keep sorting/matching on raw N.
+ */
+function frPropertyLatestFactsMoneyToEuros(raw: unknown): number | null {
+  const n = frParseNumericLoose(raw);
+  return n == null ? null : n / 1000;
 }
 
 /** Scale sale prices in legacy `building_sales` arrays (cents → euros). */
@@ -436,6 +453,8 @@ export async function GET(request: NextRequest) {
         exact_reject_reason: null,
         exact_lot_column_used: null,
         winning_median_price_per_m2: null,
+        /** Set when `property_latest_facts` money converter runs (1000 = thousandths of €). */
+        property_latest_facts_money_divisor: null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -579,6 +598,14 @@ export async function GET(request: NextRequest) {
             last_sale_date,
             has_display_value,
           };
+          if (String(frRuntimeDebug.winning_step) === "exact") {
+            console.log(
+              "[FR_PRICE] envelope_fr_valuation_last_sale_price=" +
+                String(last_sale_price) +
+                " envelope_property_last_transaction_amount=" +
+                String(lastSaleAmt)
+            );
+          }
           // Stable top-level fields for UI/clients (France valuation only).
           outPayload.winning_source_label = winning_source_label;
           outPayload.confidence = confidence;
@@ -1362,14 +1389,27 @@ export async function GET(request: NextRequest) {
 
       if (exactBest) {
         const surface = parseMaybeDecimal((exactBest as any).surface_m2) ?? 0;
-        const pricePerM2Euro = frDvfCentsToEurosFromRow((exactBest as any).price_per_m2) ?? 0;
-        const lastSaleEuro = frDvfCentsToEurosFromRow((exactBest as any).last_sale_price) ?? 0;
+        const rawLastSalePrice = (exactBest as any).last_sale_price;
+        const rawPricePerM2Plf = (exactBest as any).price_per_m2;
+        const nLspProbe = frParseNumericLoose(rawLastSalePrice);
+        const pricePerM2Euro = frPropertyLatestFactsMoneyToEuros(rawPricePerM2Plf) ?? 0;
+        const lastSaleEuro = frPropertyLatestFactsMoneyToEuros(rawLastSalePrice) ?? 0;
+        frRuntimeDebug.property_latest_facts_money_divisor = 1000;
+        console.log("[FR_PRICE] raw_last_sale_price=" + String(rawLastSalePrice));
+        console.log("[FR_PRICE] raw_price_per_m2_property_latest_facts=" + String(rawPricePerM2Plf));
+        if (nLspProbe != null && Number.isFinite(nLspProbe)) {
+          console.log("[FR_PRICE] probe_last_sale_euros_if_centimes_div100=" + String(nLspProbe / 100));
+          console.log("[FR_PRICE] probe_last_sale_euros_if_plf_thousandths_div1000=" + String(nLspProbe / 1000));
+        }
+        console.log("[FR_PRICE] api_last_sale_price=" + String(lastSaleEuro));
+        console.log("[FR_PRICE] api_price_per_m2_euro=" + String(pricePerM2Euro));
         const estimated =
           Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0
             ? Math.round(surface * pricePerM2Euro)
             : null;
         const hasEstimated = estimated != null;
         if (hasEstimated) {
+          console.log("[FR_PRICE] api_estimated_value_exact_surface_x_ppm=" + String(estimated));
           const winningSourceLabel = detectClass === "apartment" ? "Exact apartment" : "Exact property";
           frRuntimeDebug.exact_reject_reason = "";
           console.log("[FR_EXACT] exact_reject_reason=");
@@ -1533,7 +1573,8 @@ export async function GET(request: NextRequest) {
           const pricePerM2Values = usablePriceRows.map((r) => parseMaybeDecimal(r.price_per_m2)).filter((v): v is number => v != null && v > 0);
           const medianPricePerM2 = medianNumber(pricePerM2Values);
           if (medianPricePerM2 != null && medianPricePerM2 > 0) {
-            const medianPricePerM2Euro = medianPricePerM2 / 100;
+            frRuntimeDebug.property_latest_facts_money_divisor = 1000;
+            const medianPricePerM2Euro = frPropertyLatestFactsMoneyToEuros(medianPricePerM2) ?? 0;
             const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2Euro);
             console.log("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
