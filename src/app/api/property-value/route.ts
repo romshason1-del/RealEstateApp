@@ -237,11 +237,12 @@ export async function GET(request: NextRequest) {
   const latitude = latParam ? parseFloat(latParam) : undefined;
   const longitude = lngParam ? parseFloat(lngParam) : undefined;
 
-  if (addressParam) {
+  const addressForParse = addressParam.trim() || (rawInputAddress.trim() || "");
+  if (addressForParse) {
     const codeRaw = (countryCode ?? "").toUpperCase();
     const code = codeRaw === "RE" ? "FR" : codeRaw;
     if (code === "US") {
-      const parsed = parseUSAddressFromFullString(addressParam);
+      const parsed = parseUSAddressFromFullString(addressForParse);
       city = parsed.city || city;
       street = parsed.street || street;
       houseNumber = parsed.houseNumber || houseNumber;
@@ -265,26 +266,26 @@ export async function GET(request: NextRequest) {
             ? selParts.slice(0, -1).join(", ")
             : (parsedSelected.street || street);
       } else {
-        const parsed = parseUKAddressFromFullString(addressParam);
+        const parsed = parseUKAddressFromFullString(addressForParse);
         street = parsed.street || street;
         city = parsed.city || city;
         postcode = parsed.postcode || postcode;
         houseNumber = parsed.houseNumber || houseNumber;
       }
     } else if (code === "IT") {
-      const parsed = parseAddressFromFullString(addressParam);
+      const parsed = parseAddressFromFullString(addressForParse);
       if (parsed.city) city = city || parsed.city;
       if (parsed.street) street = street || parsed.street;
       if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
     } else if (code === "FR") {
-      const parsed = parseFRAddressFromFullString(addressParam);
+      const parsed = parseFRAddressFromFullString(addressForParse);
       if (parsed.city) city = city || parsed.city;
       if (parsed.street) street = street || parsed.street;
       if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
       if (parsed.postcode) postcode = postcode || parsed.postcode;
     } else {
       if (!city || !street) {
-        const parsed = parseAddressFromFullString(addressParam);
+        const parsed = parseAddressFromFullString(addressForParse);
         if (parsed.city) city = city || parsed.city;
         if (parsed.street) street = street || parsed.street;
         if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
@@ -379,14 +380,15 @@ export async function GET(request: NextRequest) {
     const rawInput = (addressParam || rawInputAddress || "").trim();
     const countryDetected = (countryCode ?? "").toUpperCase();
     console.log("[FR_ENTRY] raw_input=" + (rawInput || "(empty)"));
-    console.log("[FR_ENTRY] country_detected=" + (countryDetected || "(empty)"));
-    console.log("[FR_ENTRY] parser_started=true");
+    console.log("[FR_ENTRY] address_param=" + (addressParam || "(empty)"));
     try {
       console.log("[FR_STEP] entered");
       const frStartTs = Date.now();
 
       const fullRawAddress = (rawInputAddress || addressParam || rawInput || [houseNumber, street, city, postcode || zip].filter(Boolean).join(", ")).trim();
+      console.log("[FR_ENTRY] fullRawAddress=" + (fullRawAddress || "(empty)"));
       console.log("[FR_PARSE] raw_input=" + (fullRawAddress || "(empty)"));
+      console.log("[FR_PARSE] parser_started=" + (fullRawAddress ? "true" : "false"));
 
       let cityParsed = city.trim();
       let streetParsed = street.trim();
@@ -840,6 +842,30 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      if (fullRawAddress && banQueryAttempts.length === 0) {
+        const rawPc = fullRawAddress.match(/\b(\d{4,5})\b/)?.[1];
+        const beforePc = rawPc ? fullRawAddress.slice(0, fullRawAddress.indexOf(rawPc)).replace(/,+\s*$/, "").trim() : fullRawAddress;
+        const rawStreet = beforePc.replace(/^\d+[A-Za-z]?\s*/, "").trim();
+        const rawHn = fullRawAddress.match(/^(\d+[A-Za-z]?)\s/)?.[1] || "";
+        if (rawStreet.length >= 2 || rawPc) {
+          const rawStreetNorm = normalizeForBanText(rawStreet || " ");
+          const rawPrefixRegex = /^(?:RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i;
+          const rawStreetCore = rawStreetNorm.replace(rawPrefixRegex, "").replace(/\s+/g, " ").trim() || rawStreetNorm || rawStreet;
+          banQueryAttempts.push({
+            postcode: rawPc || "",
+            city_norm: "",
+            street_norm: rawStreetCore || rawStreetNorm || rawStreet,
+            house_number_norm: rawHn,
+            query_mode: "raw",
+          });
+          console.log("[FR_BAN] raw_attempt_added=true");
+        }
+      }
+      const rawAttemptAdded = banQueryAttempts.some((a) => a.query_mode === "raw");
+      if (!rawAttemptAdded && fullRawAddress && banQueryAttempts.length === 0) {
+        console.log("[FR_BAN] raw_attempt_added=false");
+      }
+      console.log("[FR_BAN] ban_attempt_count=" + banQueryAttempts.length);
       console.log("[FR_BAN] raw_query_attempted=" + (banInputPostcode || banInputStreetNorm || banInputCity ? "true" : "false"));
       console.log("[FR_BAN] query_input=" + (fullRawAddress || "(empty)"));
 

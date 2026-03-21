@@ -42,12 +42,14 @@ export function usePropertyValueInsights(
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     setIsLoading(true);
+    const isFR = (countryCode ?? "").toUpperCase() === "FR";
+    const rawForFrance = (opts?.rawInputAddress || (isFR ? address : "")).trim();
     const fetchOpts = {
       countryCode: countryCode || "IL",
       ...(opts?.latitude != null && opts?.longitude != null && Number.isFinite(opts.latitude) && Number.isFinite(opts.longitude)
         ? { latitude: opts.latitude, longitude: opts.longitude }
         : {}),
-      ...(opts?.rawInputAddress != null ? { rawInputAddress: opts.rawInputAddress } : {}),
+      ...(isFR && rawForFrance ? { rawInputAddress: rawForFrance } : opts?.rawInputAddress != null ? { rawInputAddress: opts.rawInputAddress } : {}),
       ...(opts?.selectedFormattedAddress != null ? { selectedFormattedAddress: opts.selectedFormattedAddress } : {}),
       ...((opts?.aptNumber ?? "").toString().trim() ? { aptNumber: (opts?.aptNumber ?? "").toString().trim() } : {}),
       ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),

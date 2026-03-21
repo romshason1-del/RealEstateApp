@@ -186,8 +186,22 @@ export async function fetchPropertyValueInsights(
       ? `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
       : `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${isFR ? "|final_v1" : ""}`;
   const cached = CACHE.get(key);
+  const frRawPresent = isFR && !!(options?.rawInputAddress ?? "").trim();
+  const frCachedNoData =
+    isFR &&
+    cached &&
+    (() => {
+      const d = cached.data as Record<string, unknown>;
+      const rd = d?.fr_runtime_debug as Record<string, unknown> | undefined;
+      return String(rd?.winning_step ?? "") === "no_data" || (d?.fr as Record<string, unknown> | undefined)?.resultType === "no_result";
+    })();
+  const bypassCache = frRawPresent && frCachedNoData;
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return cached.data;
+    if (isFR && process.env.NODE_ENV !== "production") {
+      console.log("[FR_CACHE] cache_hit=" + (bypassCache ? "false" : "true"));
+      if (bypassCache) console.log("[FR_CACHE] bypass_reason=typed_address_no_data_bypass");
+    }
+    if (!bypassCache) return cached.data;
   }
 
   const parsed =
@@ -315,6 +329,7 @@ export async function fetchPropertyValueInsights(
     if (res.ok && !isUKTimeoutFallback && hasValidData) {
       CACHE.set(key, { data, ts: Date.now() });
     }
+    // France no_data with rawInputAddress is never cached (avoids stale no_data for typed addresses)
 
     return data;
   } catch (err) {

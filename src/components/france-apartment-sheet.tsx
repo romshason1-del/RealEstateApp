@@ -52,7 +52,7 @@ export function FranceApartmentSheet({
 }: FranceSheetProps) {
   const isDev = process.env.NODE_ENV !== "production";
   const addressForApi = (typedAddressForFrance?.trim() || address?.trim() || "").trim();
-  const rawForApi = (rawInputAddressForFrance?.trim() || addressForApi || "").trim();
+  const rawForApi = (rawInputAddressForFrance?.trim() || typedAddressForFrance?.trim() || addressForApi || address?.trim() || "").trim();
 
   const [lotInput, setLotInput] = React.useState("");
   const [requestedLot, setRequestedLot] = React.useState<string | undefined>(undefined);
