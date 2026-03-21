@@ -1497,7 +1497,7 @@ export async function GET(request: NextRequest) {
             AND ${frBqStreetMatchSql}
             AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
             AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-          LIMIT 100
+          LIMIT 300
         `;
           const similarParams = {
             country: country || "",
@@ -1526,7 +1526,8 @@ export async function GET(request: NextRequest) {
           };
 
           const enriched: SimilarEnriched[] = [];
-          const allowRelaxedSmallCohort = rawCount <= 1;
+          // Do not over-filter: with few raw rows, allow older-than-5y rows so one reasonable same-building apartment can still win.
+          const allowRelaxedFiveYearWindow = rawCount <= 4;
           for (const row of similarRows) {
             const surf = parseMaybeDecimal((row as any).surface_m2);
             const ppmRaw = parseMaybeDecimal((row as any).price_per_m2);
@@ -1540,22 +1541,9 @@ export async function GET(request: NextRequest) {
                   ? null
                   : String(dateRaw);
 
-            console.log("[FR_BUILDING] candidate_surface=" + String(surf ?? "null"));
-            console.log("[FR_BUILDING] candidate_last_sale_date=" + String(dateStr ?? "null"));
-            console.log("[FR_BUILDING] candidate_price_per_m2=" + String(ppmEuro > 0 ? ppmEuro : "null"));
-
-            if (surf == null || surf <= 0) {
-              console.log("[FR_BUILDING] reject_reason=invalid_surface");
-              continue;
-            }
-            if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) {
-              console.log("[FR_BUILDING] reject_reason=invalid_price_per_m2");
-              continue;
-            }
-            if (!allowRelaxedSmallCohort && !frSaleDateWithinFiveYears(dateRaw)) {
-              console.log("[FR_BUILDING] reject_reason=sale_date_older_than_5y");
-              continue;
-            }
+            if (surf == null || surf <= 0) continue;
+            if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
+            if (!allowRelaxedFiveYearWindow && !frSaleDateWithinFiveYears(dateRaw)) continue;
             enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr });
           }
 
@@ -1582,6 +1570,9 @@ export async function GET(request: NextRequest) {
             p.chosenSurfaceValueForRanking ??
             (medSurfCohort != null && Number.isFinite(medSurfCohort) ? medSurfCohort : null);
 
+          const medianPpmEuro =
+            medianNumber(trimmed.map((x) => x.ppmEuro).filter((n) => n > 0 && Number.isFinite(n))) ?? 0;
+
           const sorted = [...trimmed].sort((a, b) => {
             if (targetSurface != null && Number.isFinite(targetSurface)) {
               const da = Math.abs(a.surf - targetSurface);
@@ -1590,7 +1581,14 @@ export async function GET(request: NextRequest) {
             }
             const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
             const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
-            return tb - ta;
+            if (tb !== ta) return tb - ta;
+            if (medianPpmEuro > 0) {
+              const ma = Math.abs(a.ppmEuro - medianPpmEuro);
+              const mb = Math.abs(b.ppmEuro - medianPpmEuro);
+              if (ma !== mb) return ma - mb;
+            }
+            if (a.ppmEuro !== b.ppmEuro) return a.ppmEuro - b.ppmEuro;
+            return a.surf - b.surf;
           });
 
           const best = sorted[0];
@@ -1602,9 +1600,17 @@ export async function GET(request: NextRequest) {
               ? Math.round(estSurf * best.ppmEuro)
               : null;
 
+          const selectedSurfaceDiff =
+            targetSurface != null && Number.isFinite(targetSurface)
+              ? Math.abs(best.surf - targetSurface)
+              : medSurfCohort != null && Number.isFinite(medSurfCohort)
+                ? Math.abs(best.surf - medSurfCohort)
+                : null;
+
           console.log("[FR_BUILDING] selected_surface=" + String(estSurf));
+          console.log("[FR_BUILDING] selected_surface_diff=" + String(selectedSurfaceDiff ?? "null"));
+          console.log("[FR_BUILDING] selected_sale_date=" + String(best.dateStr ?? "null"));
           console.log("[FR_BUILDING] selected_price_per_m2=" + String(best.ppmEuro));
-          console.log("[FR_BUILDING] selected_last_sale_date=" + String(best.dateStr ?? "null"));
 
           frRuntimeDebug.winning_step = "building_similar_unit";
           frRuntimeDebug.winning_source_label = FR_LABEL_BUILDING_SIMILAR_UNIT;
@@ -1676,12 +1682,19 @@ export async function GET(request: NextRequest) {
         }
       };
 
-      const shouldTryBuildingSimilarUnit =
-        detectClass === "apartment" &&
-        Boolean(exactLotToken) &&
+      const buildingSimilarBase =
+        detectClass === "apartment" && Boolean(exactLotToken) && Boolean(houseNumberNorm) && Boolean(postcodeNorm);
+
+      /** Same-building address aggregate (no unit_number): prefer Appartement cohort over exact_address when it wins. */
+      const buildingSimilarAfterExactAddressNoUnit =
+        buildingSimilarBase &&
         exactTier === "EXACT_ADDRESS" &&
         exactBest != null &&
         primaryUnitNumberRaw(exactBest) == null;
+
+      /** No exact lot/unit row: still try same-address Appartement rows before generic BUILDING median / STREET. */
+      const buildingSimilarAfterExactNone =
+        buildingSimilarBase && exactTier === "NONE" && rawExactHouseNumberRowCount > 0;
 
       let exactAddressHadUsableEstimate = false;
 
@@ -1708,7 +1721,7 @@ export async function GET(request: NextRequest) {
         const hasEstimated = estimated != null;
         exactAddressHadUsableEstimate = hasEstimated;
 
-        if (hasEstimated && shouldTryBuildingSimilarUnit) {
+        if (hasEstimated && buildingSimilarAfterExactAddressNoUnit) {
           const chosenSurfaceValueForRanking =
             validInputSurfaceM2 ?? (Number.isFinite(surface) && surface > 0 ? surface : null);
           const buildingSimilarWin = await tryFranceBuildingSimilarUnit({
@@ -1806,6 +1819,14 @@ export async function GET(request: NextRequest) {
         }
         frRuntimeDebug.exact_reject_reason = frExactRejectReason;
         console.log("[FR_EXACT] exact_reject_reason=" + frExactRejectReason);
+      }
+
+      if (buildingSimilarAfterExactNone) {
+        const buildingSimilarNoneWin = await tryFranceBuildingSimilarUnit({
+          medianSurfaceM2ForFallback: null,
+          chosenSurfaceValueForRanking: validInputSurfaceM2,
+        });
+        if (buildingSimilarNoneWin) return buildingSimilarNoneWin;
       }
 
       // Same building fallback (when unit/lot was provided but exact unit match is missing):
@@ -1948,7 +1969,7 @@ export async function GET(request: NextRequest) {
 
       // Apartment + EXACT_ADDRESS (no unit_number): second chance after BUILDING median when exact row had no total estimate.
       if (
-        shouldTryBuildingSimilarUnit &&
+        buildingSimilarAfterExactAddressNoUnit &&
         exactBest &&
         !exactAddressHadUsableEstimate &&
         houseNumberNorm &&
