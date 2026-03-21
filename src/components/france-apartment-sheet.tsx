@@ -1057,9 +1057,14 @@ export function FranceApartmentSheet({
     const lastTxAmountPositive = !isLoadingNow
       ? coercePositiveNumber(fr?.property?.transactionValue as unknown)
       : null;
-    const lastTxDateLabel = !isLoadingNow
+    /** Never interpolate a raw API object into JSX (defensive; formatter should already return string | null). */
+    const lastTxDateLabelRaw = !isLoadingNow
       ? formatFranceDateLabelFromUnknown(fr?.property?.transactionDate as unknown)
       : null;
+    const lastTxDateLabel =
+      typeof lastTxDateLabelRaw === "string" && lastTxDateLabelRaw.trim().length > 0
+        ? lastTxDateLabelRaw.trim()
+        : null;
 
     const dateText = isLoadingNow ? "—" : lastTxDateLabel ?? "—";
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();

@@ -16,6 +16,26 @@ export function unwrapScalar(raw: unknown): unknown {
 }
 
 /**
+ * Extract a primitive display string from API payloads (e.g. `{ value }`, `{ text }`, `{ label }`).
+ * Never returns an object. Used for France “reference sale” line and similar UI.
+ */
+export function frPrimitiveForDisplay(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    return t.length ? t : null;
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  if (typeof raw === "boolean") return raw ? "true" : "false";
+  if (!isPlainObject(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  if ("value" in o && o.value !== undefined) return frPrimitiveForDisplay(o.value);
+  if ("text" in o && o.text !== undefined) return frPrimitiveForDisplay(o.text);
+  if ("label" in o && o.label !== undefined) return frPrimitiveForDisplay(o.label);
+  return null;
+}
+
+/**
  * Reduce France API / BigQuery `last_sale_date` / `transactionDate` payloads to a single ISO date
  * string (`YYYY-MM-DD`) or null. Handles nested `{ value }`, `{ date }`, `{ text }`, and simple
  * `{ year, month, day }` shapes. Never returns a non-primitive.
@@ -47,10 +67,17 @@ export function coerceFranceDisplayDateString(raw: unknown): string | null {
       v = o.text;
       continue;
     }
+    if ("label" in o && o.label != null) {
+      v = o.label;
+      continue;
+    }
     if ("day" in o && "month" in o && "year" in o) {
-      const y = Number(o.year);
-      const mo = Number(o.month);
-      const day = Number(o.day);
+      const yS = frPrimitiveForDisplay(o.year);
+      const moS = frPrimitiveForDisplay(o.month);
+      const dayS = frPrimitiveForDisplay(o.day);
+      const y = yS != null ? Number(yS) : NaN;
+      const mo = moS != null ? Number(moS) : NaN;
+      const day = dayS != null ? Number(dayS) : NaN;
       if ([y, mo, day].every((n) => Number.isFinite(n))) {
         return `${Math.trunc(y)}-${String(Math.trunc(mo)).padStart(2, "0")}-${String(Math.trunc(day)).padStart(2, "0")}`;
       }
@@ -64,15 +91,38 @@ export function coerceFranceDisplayDateString(raw: unknown): string | null {
   return null;
 }
 
-/** Human-readable date for France UI (e.g. `13 Dec 2024`), or null if missing / unparseable. */
+function frLocaleDateLabelEnGb(d: Date): string | null {
+  const lab = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return typeof lab === "string" && lab.trim() ? lab.trim() : null;
+}
+
+/**
+ * Human-readable date for France UI (e.g. `13 Dec 2024`), or null if missing / unparseable.
+ * Never returns a non-string primitive (guards against odd runtime values).
+ */
 export function formatFranceDateLabelFromUnknown(raw: unknown): string | null {
   const iso = coerceFranceDisplayDateString(raw);
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (!Number.isNaN(d.getTime())) {
-    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  if (iso != null && typeof iso === "string") {
+    const trimmed = iso.trim();
+    if (!trimmed) return null;
+    const d = new Date(trimmed);
+    if (!Number.isNaN(d.getTime())) return frLocaleDateLabelEnGb(d);
+    return trimmed;
   }
-  return iso.trim().length ? iso.trim() : null;
+
+  const prim = frPrimitiveForDisplay(raw);
+  if (!prim) return null;
+  const d2 = new Date(prim);
+  if (!Number.isNaN(d2.getTime())) return frLocaleDateLabelEnGb(d2);
+
+  const n = Number(String(prim).replace(/\s/g, ""));
+  if (Number.isFinite(n) && n > 1_000_000_000) {
+    const ms = n > 1e12 ? n : n * 1000;
+    const d3 = new Date(ms);
+    if (!Number.isNaN(d3.getTime())) return frLocaleDateLabelEnGb(d3);
+  }
+
+  return null;
 }
 
 /** Coerce to a finite number, or null. Handles `{ value: n | "n" }`. */
