@@ -292,19 +292,31 @@ export function FranceApartmentSheet({
             ? "house"
             : "unclear";
 
-  // Lot prompt genuinely required: apartment flow AND backend asked for lot AND no lot provided.
-  const lotPromptGenuinelyRequired =
-    effectiveDetectClass === "apartment" && parsed?.prompt_for_apartment === true && !(requestedLot ?? "").trim();
+  // Detect class from API when available (fr_runtime_debug), else use computed effectiveDetectClass.
+  const detectClassFromApi = (parsed as any)?.fr_runtime_debug?.detect_class ?? (data as any)?.fr_runtime_debug?.detect_class;
+  const frDetectFinalClass: "apartment" | "house" | "unclear" =
+    detectClassFromApi === "apartment" || detectClassFromApi === "house" || detectClassFromApi === "unclear"
+      ? detectClassFromApi
+      : effectiveDetectClass;
 
-  // House-direct flow: robust — allow when no active lot prompt or we have a usable result.
+  // Lot prompt required: apartment detected AND no lot provided. Do not require prompt_for_apartment —
+  // when backend returns a fallback valuation, it may omit that flag; we still need to prompt.
+  const lotPromptGenuinelyRequired =
+    (frDetectFinalClass === "apartment" || effectiveDetectClass === "apartment") && !(requestedLot ?? "").trim();
+
+  // Apartment block active: lot required and no lot submitted. Triggers lot prompt UI.
+  const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
+
+  // Lot prompt visible: apartment block active or apartment+no-lot with apartment input shown.
+  const lotPromptVisible = apartmentBlockActive || (effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim() && shouldShowApartmentInput);
+
+  // House-direct flow: never bypass apartment lot prompt. Only house/unclear or when we have house result.
   const isHouseDirectFlow =
     effectiveDetectClass === "house" ||
+    frDetectFinalClass === "house" ||
     (effectiveDetectClass === "unclear" && !shouldShowApartmentInput) ||
-    (frAddressFetchDone && effectiveData && parsed?.prompt_for_apartment !== true) ||
-    (effectiveDetectClass === "apartment" && parsed?.prompt_for_apartment !== true && frAddressFetchDone);
-
-  // Apartment block active: only when lot is genuinely required and we have no usable result yet.
-  const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
+    (frAddressFetchDone && effectiveData && parsed?.prompt_for_apartment !== true && effectiveDetectClass !== "apartment") ||
+    (normalized?.resultType === "exact_house" && frAddressFetchDone);
 
   // Close result card ONLY when apartment block is active. Never close for house/direct flows.
   React.useEffect(() => {
@@ -1353,6 +1365,10 @@ export function FranceApartmentSheet({
                 {isFranceDebugOpen ? (
                   <div className="mt-0.5 rounded-[8px] border border-white/10 bg-black/15 px-2 py-1.5 overflow-hidden">
                     <div className="max-h-[140px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-300/90 space-y-0.5">
+                      <div>fr_detect_final_class: {frDetectFinalClass}</div>
+                      <div>fr_should_prompt_lot: {toDebugStr(parsed?.prompt_for_apartment ?? rd?.fr_should_prompt_lot)}</div>
+                      <div>fr_lot_prompt_visible: {String(lotPromptVisible)}</div>
+                      <div>fr_lot_prompt_reason: {lotPromptGenuinelyRequired ? "apartment_no_lot" : "—"}</div>
                       <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
                       <div>fr_ui_house_flow_active: {String(isHouseDirectFlow)}</div>
                       <div>fr_ui_apartment_block_active: {String(apartmentBlockActive)}</div>
@@ -1641,7 +1657,7 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
-          {!isHouseLikeUI && hasMultiUnitEvidence ? (
+          {((!isHouseLikeUI && hasMultiUnitEvidence) || apartmentBlockActive) ? (
             <div className="mt-3 rounded-xl border border-zinc-500/20 bg-black/35 px-3 py-2.5">
               <div className="text-[10px] font-medium text-zinc-400">Apartment / lot number</div>
               <div className="mt-2 flex gap-2">
@@ -1671,6 +1687,14 @@ export function FranceApartmentSheet({
                   {isLoading ? "Searching…" : "Search"}
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {isDev && apartmentBlockActive ? (
+            <div className="mt-2 rounded-lg border border-amber-400/20 bg-black/20 px-2 py-1.5 font-mono text-[9px] text-zinc-400">
+              <div>fr_detect_final_class: {frDetectFinalClass}</div>
+              <div>fr_lot_prompt_visible: true</div>
+              <div>fr_ui_apartment_block_active: true</div>
             </div>
           ) : null}
         </div>
