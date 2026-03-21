@@ -59,6 +59,32 @@ function frPropertyLatestFactsMoneyToEuros(raw: unknown): number | null {
   return n == null ? null : n / 1000;
 }
 
+/** Sale date within last 5 years (France building-similar cohort). */
+function frSaleDateWithinFiveYears(raw: unknown): boolean {
+  if (raw === null || raw === undefined) return false;
+  const d = raw instanceof Date ? raw : new Date(String(raw));
+  const t = d.getTime();
+  if (!Number.isFinite(t) || Number.isNaN(t)) return false;
+  const fiveYearsMs = 5 * 365.25 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  return t <= now + 86400000 && now - t <= fiveYearsMs;
+}
+
+/**
+ * Remove bottom/top `fraction` of items by numeric score (e.g. 0.1 = 10%).
+ * No-op if too few rows or trim would empty the list.
+ */
+function frTrimFractionExtremes<T>(items: T[], getNumeric: (x: T) => number, fraction: number): T[] {
+  if (items.length < 3) return items;
+  const decorated = items.map((item) => ({ item, v: getNumeric(item) }));
+  decorated.sort((a, b) => a.v - b.v);
+  const n = decorated.length;
+  const dropEach = Math.floor(n * fraction);
+  if (dropEach < 1) return items;
+  if (n - 2 * dropEach < 1) return items;
+  return decorated.slice(dropEach, n - dropEach).map((x) => x.item);
+}
+
 /** Scale sale prices in legacy `building_sales` arrays (cents → euros). */
 function mapFranceBuildingSalesPricesToEuros(sales: unknown[] | undefined | null): Array<Record<string, unknown>> {
   if (!Array.isArray(sales)) return [];
@@ -458,6 +484,8 @@ export async function GET(request: NextRequest) {
         exact_level: null as "EXACT_UNIT" | "EXACT_ADDRESS" | "NONE" | null,
         exact_unit_row_count: null as number | null,
         exact_address_row_count: null as number | null,
+        building_similar_unit_candidates_count: null as number | null,
+        building_similar_unit_after_filters_count: null as number | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -1692,6 +1720,181 @@ export async function GET(request: NextRequest) {
         // If building-level estimate can't be computed, continue the ladder to street/commune fallback.
         }
       }
+
+      const FR_LABEL_BUILDING_SIMILAR_UNIT = "Based on similar apartments in this building";
+      if (houseNumberNorm && postcodeNorm) {
+        console.log("[FR_FLOW] ladder_step_started=BUILDING_SIMILAR_UNIT");
+        console.log("[FR_STEP] building_similar_unit_lookup_start");
+        const similarUnitQuery = `
+          SELECT
+            surface_m2,
+            price_per_m2,
+            last_sale_price,
+            last_sale_date,
+            property_type
+          FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+          WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+            AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+            AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+            AND ${frBqStreetMatchSql}
+            AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+            AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+          LIMIT 100
+        `;
+        const similarParams = {
+          country: country || "",
+          city: cityNorm || "",
+          postcode: postcodeNorm || "",
+          street: streetNorm || "",
+          street_normalized: streetNormalizedDet || "",
+          house_number: houseNumberNorm || "",
+        };
+        try {
+          const [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: similarUnitQuery, params: similarParams },
+            "building_similar_unit_query"
+          );
+          const similarRows = similarRowsRaw ?? [];
+          const rawCount = similarRows.length;
+          frRuntimeDebug.building_similar_unit_candidates_count = rawCount;
+          console.log("[FR_GOLD] after_building_similar_unit_query", { rows: rawCount });
+
+          type SimilarEnriched = {
+            raw: Record<string, unknown>;
+            surf: number;
+            ppmEuro: number;
+            lastSaleEuro: number;
+            dateStr: string | null;
+          };
+
+          const enriched: SimilarEnriched[] = [];
+          for (const row of similarRows) {
+            const surf = parseMaybeDecimal((row as any).surface_m2);
+            const ppmRaw = parseMaybeDecimal((row as any).price_per_m2);
+            const ppmEuro = frPropertyLatestFactsMoneyToEuros((row as any).price_per_m2) ?? 0;
+            const lastSaleEuro = frPropertyLatestFactsMoneyToEuros((row as any).last_sale_price) ?? 0;
+            const dateRaw = (row as any).last_sale_date;
+            if (surf == null || surf <= 0) continue;
+            if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
+            if (!frSaleDateWithinFiveYears(dateRaw)) continue;
+            const dateStr =
+              dateRaw === null || dateRaw === undefined
+                ? null
+                : String(dateRaw).trim() === ""
+                  ? null
+                  : String(dateRaw);
+            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr });
+          }
+
+          const afterFilters = enriched.length;
+          frRuntimeDebug.building_similar_unit_after_filters_count = afterFilters;
+          console.log("[FR_BUILDING] candidates_count=" + String(afterFilters));
+
+          if (afterFilters > 0) {
+            let trimmed = frTrimFractionExtremes(enriched, (x) => x.ppmEuro, 0.1);
+            if (trimmed.length === 0) trimmed = enriched;
+
+            const medSurfCohort = medianNumber(trimmed.map((x) => x.surf));
+            const targetSurface =
+              validInputSurfaceM2 ??
+              medianSurfaceM2ForFallback ??
+              (medSurfCohort != null && Number.isFinite(medSurfCohort) ? medSurfCohort : null);
+
+            const sorted = [...trimmed].sort((a, b) => {
+              if (targetSurface != null && Number.isFinite(targetSurface)) {
+                const da = Math.abs(a.surf - targetSurface);
+                const db = Math.abs(b.surf - targetSurface);
+                if (da !== db) return da - db;
+              }
+              const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
+              const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
+              return tb - ta;
+            });
+
+            const best = sorted[0];
+            if (best) {
+              const estSurf =
+                validInputSurfaceM2 ??
+                medianSurfaceM2ForFallback ??
+                best.surf;
+              const estimated =
+                Number.isFinite(estSurf) && estSurf > 0 && best.ppmEuro > 0
+                  ? Math.round(estSurf * best.ppmEuro)
+                  : null;
+
+              console.log("[FR_BUILDING] selected_surface=" + String(estSurf));
+              console.log("[FR_BUILDING] selected_price_per_m2=" + String(best.ppmEuro));
+
+              frRuntimeDebug.winning_step = "building_similar_unit";
+              frRuntimeDebug.winning_source_label = FR_LABEL_BUILDING_SIMILAR_UNIT;
+              frRuntimeDebug.has_surface_for_estimate = estSurf != null && estSurf > 0;
+              frRuntimeDebug.chosen_surface_value = estSurf;
+              frRuntimeDebug.winning_median_price_per_m2 = best.ppmEuro;
+              frRuntimeDebug.property_latest_facts_money_divisor = 1000;
+
+              console.log("[FR_DEBUG] winning_valuation_step", {
+                winningValuationStep: "building_similar_unit",
+                winningSourceLabel: FR_LABEL_BUILDING_SIMILAR_UNIT,
+              });
+
+              return frReturn(
+                {
+                  address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+                  data_source: "properties_france",
+                  fr_detect: detectClass,
+                  property_result: {
+                    exact_value: estimated,
+                    exact_value_message:
+                      estimated == null
+                        ? `${FR_LABEL_BUILDING_SIMILAR_UNIT} — total estimate needs surface where available.`
+                        : null,
+                    value_level: "building-level",
+                    last_transaction: {
+                      amount: best.lastSaleEuro,
+                      date: best.dateStr,
+                      message:
+                        best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row",
+                    },
+                    street_average: best.ppmEuro > 0 ? best.ppmEuro : null,
+                    street_average_message: FR_LABEL_BUILDING_SIMILAR_UNIT,
+                    livability_rating: "FAIR",
+                  },
+                  fr: emptyFranceResponse({
+                    success: true,
+                    resultType: "building_similar_unit" as any,
+                    confidence: "high",
+                    requestedLot: requestedLotNorm,
+                    normalizedLot: normalizedRequestedLot,
+                    property: {
+                      transactionDate: best.dateStr,
+                      transactionValue: best.lastSaleEuro > 0 ? best.lastSaleEuro : null,
+                      pricePerSqm: best.ppmEuro,
+                      surfaceArea: Number.isFinite(estSurf) && estSurf > 0 ? estSurf : null,
+                      rooms: null,
+                      propertyType: "Appartement",
+                      building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                      postalCode: postcodeNorm || null,
+                      commune: cityNorm || null,
+                    },
+                    buildingStats: {
+                      transactionCount: trimmed.length,
+                      avgPricePerSqm: best.ppmEuro,
+                      avgTransactionValue: estimated,
+                    },
+                    comparables: [],
+                    matchExplanation: FR_LABEL_BUILDING_SIMILAR_UNIT,
+                  }),
+                },
+                "valuation_response"
+              );
+            }
+          }
+        } catch (err) {
+          console.error("[FR_BUILDING] building_similar_unit_query_failed", err);
+        }
+        console.log("[FR_STEP] building_similar_unit_lookup_done");
+      }
+
       if (!houseNumberNorm) console.log("[FR_STEP] building_lookup_done");
 
       // Use the gold-table driven apartment-vs-house decision for the valuation ladder.

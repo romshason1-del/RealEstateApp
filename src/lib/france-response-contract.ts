@@ -4,6 +4,8 @@ export type FranceResultType =
   | "exact_address"
   | "similar_apartment_same_building"
   | "building_level"
+  /** Median / best-match from Appartement rows at same address (no unit match); surface-ranked, 5y, trimmed */
+  | "building_similar_unit"
   | "nearby_comparable"
   | "no_reliable_data"
   // Backward-compat: older naming used by earlier iterations

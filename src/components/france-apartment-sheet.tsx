@@ -184,6 +184,12 @@ export function FranceApartmentSheet({
     return r.result_level === "exact_property" && r.property_result?.value_level === "property-level";
   };
 
+  const isFranceBuildingSimilarWin = React.useCallback((d: typeof data) => {
+    if (!d || typeof d !== "object") return false;
+    const r = d as any;
+    return r.data_source === "properties_france" && r.fr?.resultType === "building_similar_unit";
+  }, []);
+
   const franceResultPriority = React.useCallback((d: unknown): number => {
     const rt = (d as any)?.fr?.resultType as string | undefined;
     switch (rt) {
@@ -192,6 +198,7 @@ export function FranceApartmentSheet({
         return 5;
       case "similar_apartment_same_building":
         return 4;
+      case "building_similar_unit":
       case "building_level":
       case "building_fallback":
         return 3;
@@ -338,6 +345,7 @@ export function FranceApartmentSheet({
     if (rt === "exact_address") return "Exact address match";
     if (rt === "similar_apartment_same_building")
       return isHouseLikeUI ? "Similar house in this building" : "Similar apartment in this building";
+    if (rt === "building_similar_unit") return "Similar apartments in this building";
     if (rt === "building_level" || rt === "building_fallback")
       return "Similar properties in this building";
     if (rt === "nearby_comparable" || rt === "comparables_only") {
@@ -356,6 +364,7 @@ export function FranceApartmentSheet({
     if (rt === "exact_apartment") return "Last recorded transaction";
     if (rt === "exact_address") return "Address-level transaction";
     if (rt === "similar_apartment_same_building") return "Similar apartment transaction";
+    if (rt === "building_similar_unit") return "Building apartment estimate";
     if (rt === "building_level" || rt === "building_fallback") return "Building average";
     if (rt === "nearby_comparable" || rt === "comparables_only") return "Best available nearby comparable";
     return null;
@@ -375,11 +384,15 @@ export function FranceApartmentSheet({
     (Array.isArray(buildingSales) && buildingSales.length > 0) ||
     ((averageBuildingValue ?? 0) > 0) ||
     (Array.isArray(availableLots) && availableLots.length > 0) ||
-    (parsed?.multiple_units === true);
+    (parsed?.multiple_units === true) ||
+    (isFranceBuildingSimilarWin(effectiveData) &&
+      (((parsed?.property_result?.exact_value as number) ?? 0) > 0 ||
+        (coercePositiveNumber(normalized?.property?.pricePerSqm as unknown) ?? 0) > 0));
 
   type Phase =
     | "initial_building_state"
     | "exact_apartment_match_state"
+    | "building_similar_match_state"
     | "searched_no_exact_match_but_building_exists_state"
     | "no_result_state";
 
@@ -388,11 +401,12 @@ export function FranceApartmentSheet({
   const phase: Phase = React.useMemo(() => {
     if (apartmentLotGateActive) return "initial_building_state";
     if (isExactApartment(effectiveData)) return "exact_apartment_match_state";
+    if (isFranceBuildingSimilarWin(effectiveData)) return "building_similar_match_state";
     if (!hasSubmittedLotSearch) {
       return hasUsefulBuildingData ? "initial_building_state" : "no_result_state";
     }
     return hasUsefulBuildingData ? "searched_no_exact_match_but_building_exists_state" : "no_result_state";
-  }, [effectiveData, hasSubmittedLotSearch, hasUsefulBuildingData, apartmentLotGateActive]);
+  }, [effectiveData, hasSubmittedLotSearch, hasUsefulBuildingData, apartmentLotGateActive, isFranceBuildingSimilarWin]);
 
   // Houses/single-unit properties should not require apartment/lot input.
   // As soon as we have enough data to infer "house", open the results directly from the address.
@@ -428,6 +442,12 @@ export function FranceApartmentSheet({
         ? { label: "Exact house match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
         : { label: "Exact apartment match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
     }
+    if (phase === "building_similar_match_state") {
+      return {
+        label: "Similar apartments in this building",
+        tone: "bg-teal-500/10 border-teal-500/25 text-teal-200",
+      };
+    }
     if (phase === "searched_no_exact_match_but_building_exists_state") {
       const rt = normalized?.resultType;
       if (rt === "similar_apartment_same_building") {
@@ -462,6 +482,12 @@ export function FranceApartmentSheet({
       }
       if (isHouseLikeUI) return lot ? `Matched house / lot ${lot}` : "Matched house / lot";
       return lot ? `Matched apartment / lot ${lot}` : "Matched apartment / lot";
+    }
+    if (phase === "building_similar_match_state") {
+      const lot = (requestedLot ?? "").trim();
+      return lot
+        ? `No exact unit in registry for lot ${lot}. Estimate from similar apartments at this address.`
+        : "No exact unit in registry. Estimate from similar apartments at this address.";
     }
     if (phase === "searched_no_exact_match_but_building_exists_state") {
       const lot = (requestedLot ?? "").trim();
@@ -832,14 +858,20 @@ export function FranceApartmentSheet({
 
     const txFromProp = coercePositiveNumber(fr?.property?.transactionValue as unknown);
     const rawValue =
-      txFromProp ??
-      fvEst ??
-      topEstimated ??
-      coercePositiveNumber(pr?.exact_value) ??
-      (fr?.resultType === "building_level"
-        ? coercePositiveNumber(fr?.buildingStats?.avgTransactionValue as unknown) ??
-          coercePositiveNumber(legacy?.averageBuildingValue as unknown)
-        : null);
+      fr?.resultType === "building_similar_unit"
+        ? fvEst ??
+          topEstimated ??
+          coercePositiveNumber(pr?.exact_value) ??
+          txFromProp ??
+          null
+        : txFromProp ??
+          fvEst ??
+          topEstimated ??
+          coercePositiveNumber(pr?.exact_value) ??
+          (fr?.resultType === "building_level"
+            ? coercePositiveNumber(fr?.buildingStats?.avgTransactionValue as unknown) ??
+              coercePositiveNumber(legacy?.averageBuildingValue as unknown)
+            : null);
     const hasValue = typeof rawValue === "number" && rawValue > 0;
     const ppm2FromApi =
       coercePositiveNumber(fr?.property?.pricePerSqm as unknown) ??
@@ -887,12 +919,14 @@ export function FranceApartmentSheet({
       if (ws === "exact_address") return "Based on exact address match";
       if (ws === "building_level" || ws === "building_fallback")
         return "Based on similar properties in this building";
+      if (ws === "building_similar_unit") return "Based on similar apartments in this building";
       if (ws === "street_fallback") return "Based on similar properties on the same street";
       if (ws === "commune_fallback") return "Based on similar properties in the same commune";
       if (fr?.resultType === "exact_apartment") return "Based on exact property match";
       if (fr?.resultType === "exact_address") return "Based on exact address match";
       if (fr?.resultType === "building_level" || fr?.resultType === "building_fallback")
         return "Based on similar properties in this building";
+      if (fr?.resultType === "building_similar_unit") return "Based on similar apartments in this building";
       if (fr?.resultType === "nearby_comparable")
         return isHouseLikeUI
           ? "Based on nearby comparable houses"
@@ -1181,7 +1215,12 @@ export function FranceApartmentSheet({
                         coercePositiveNumber(fr?.property?.transactionValue as unknown) != null &&
                         unwrapScalar(fr?.property?.transactionDate as unknown) != null
                       ? `${formatFranceEuroTotal(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))}`
-                      : "No exact recent transaction available"}
+                      : fr?.resultType === "building_similar_unit" &&
+                          !isNoResult &&
+                          coercePositiveNumber(fr?.property?.transactionValue as unknown) != null &&
+                          unwrapScalar(fr?.property?.transactionDate as unknown) != null
+                        ? `${formatFranceEuroTotal(coercePositiveNumber(fr?.property?.transactionValue as unknown) ?? 0)} • ${formatDisplayDate(String(unwrapScalar(fr?.property?.transactionDate as unknown) ?? ""))} (reference sale)`
+                        : "No exact recent transaction available"}
                 </div>
               </div>
 
@@ -1231,6 +1270,8 @@ export function FranceApartmentSheet({
                       <div>exact_address_row_count: {toDebugStr(rd?.exact_address_row_count)}</div>
                       <div>building_rows_count: {toDebugStr(rd?.building_rows_count)}</div>
                       <div>building_usable_rows_count: {toDebugStr(rd?.building_usable_rows_count)}</div>
+                      <div>building_similar_unit_candidates_count: {toDebugStr(rd?.building_similar_unit_candidates_count)}</div>
+                      <div>building_similar_unit_after_filters_count: {toDebugStr(rd?.building_similar_unit_after_filters_count)}</div>
                       <div>street_rows_count: {toDebugStr(rd?.street_rows_count)}</div>
                       <div>street_usable_rows_count: {toDebugStr(rd?.street_usable_rows_count)}</div>
                       <div>commune_rows_count: {toDebugStr(rd?.commune_rows_count)}</div>
