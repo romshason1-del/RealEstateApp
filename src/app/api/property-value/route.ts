@@ -1629,10 +1629,26 @@ export async function GET(request: NextRequest) {
           )`
         : "TRUE";
 
+      type BuildingProfile = {
+        building_id: string;
+        median_price_per_m2: number;
+        avg_price_per_m2: number;
+        min_price_per_m2: number;
+        max_price_per_m2: number;
+        transaction_count: number;
+        surface_min: number | null;
+        surface_max: number | null;
+        surface_median: number | null;
+        apartment_count: number;
+        house_count: number;
+      };
+
       const tryFranceBuildingSimilarUnit = async (p: {
         medianSurfaceM2ForFallback: number | null;
         /** Prefer surfaces closest to this (input > exact row > building median). */
         chosenSurfaceValueForRanking: number | null;
+        /** Building profile for low-candidate fallback and ranking. */
+        buildingProfile?: BuildingProfile | null;
       }): Promise<ReturnType<typeof frReturn> | null> => {
         try {
           if (!houseNumberNorm || !postcodeNorm) {
@@ -1770,8 +1786,14 @@ export async function GET(request: NextRequest) {
             p.chosenSurfaceValueForRanking ??
             (medSurfCohort != null && Number.isFinite(medSurfCohort) ? medSurfCohort : null);
 
+          const cohortMedian = medianNumber(trimmed.map((x) => x.ppmEuro).filter((n) => n > 0 && Number.isFinite(n))) ?? 0;
           const medianPpmEuro =
-            medianNumber(trimmed.map((x) => x.ppmEuro).filter((n) => n > 0 && Number.isFinite(n))) ?? 0;
+            p.buildingProfile && rawCount <= 2 && p.buildingProfile.transaction_count > 0
+              ? p.buildingProfile.median_price_per_m2
+              : cohortMedian;
+          if (p.buildingProfile && rawCount <= 2) {
+            console.log("[FR_BUILDING_PROFILE] used_in=building (low candidates, using building median)");
+          }
 
           const sorted = [...trimmed].sort((a, b) => {
             if (targetSurface != null && Number.isFinite(targetSurface)) {
@@ -1800,9 +1822,14 @@ export async function GET(request: NextRequest) {
           }
 
           const estSurf = validInputSurfaceM2 ?? p.medianSurfaceM2ForFallback ?? best.surf;
-          // When chosen_surface_value is missing, use robust median building price_per_m2 for estimate.
           const ppmForEstimate =
-            p.chosenSurfaceValueForRanking != null ? best.ppmEuro : (medianPpmEuro > 0 ? medianPpmEuro : best.ppmEuro);
+            p.buildingProfile && rawCount <= 2 && p.buildingProfile.transaction_count > 0
+              ? p.buildingProfile.median_price_per_m2
+              : p.chosenSurfaceValueForRanking != null
+                ? best.ppmEuro
+                : medianPpmEuro > 0
+                  ? medianPpmEuro
+                  : best.ppmEuro;
           const estimated =
             Number.isFinite(estSurf) && estSurf > 0 && ppmForEstimate > 0 ? Math.round(estSurf * ppmForEstimate) : null;
 
@@ -2038,10 +2065,82 @@ export async function GET(request: NextRequest) {
         console.log("[FR_EXACT] exact_reject_reason=" + frExactRejectReason);
       }
 
+      let buildingProfile: BuildingProfile | null = null;
+      if (houseNumberNorm && streetNorm && cityNorm && postcodeNorm) {
+        const buildingId = [cityNorm, postcodeNorm, streetNormalizedDet || streetNorm, houseNumberNorm]
+          .filter(Boolean)
+          .join("|")
+          .toLowerCase();
+        try {
+          const profileQuery = `
+            SELECT price_per_m2, surface_m2, property_type
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+              AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+              AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+              AND ${frBqStreetMatchSql}
+              AND ${frBqHouseNumberMatchSql}
+            LIMIT 200
+          `;
+          const [profileRows] = await queryWithTimeout<
+            [Array<{ price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown }>]
+          >(
+            {
+              query: profileQuery,
+              params: {
+                country: country || "",
+                city: cityNorm || "",
+                postcode: postcodeNorm || "",
+                street: streetNorm || "",
+                street_normalized: streetNormalizedDet || "",
+                house_number: houseNumberNorm || "",
+                house_number_norm: houseNumberNormForMatch || "",
+              },
+            },
+            "building_profile_query"
+          );
+          const rows = (profileRows ?? []) as Array<{ price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown }>;
+          const withPpm = rows
+            .map((r: { price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown }) => ({
+              ppm: frPropertyLatestFactsMoneyToEuros(r.price_per_m2) as number | null,
+              surf: parseMaybeDecimal(r.surface_m2) as number | null,
+              pt: String(r.property_type ?? "").trim().toLowerCase(),
+            }))
+            .filter((x): x is { ppm: number; surf: number | null; pt: string } => x.ppm != null && x.ppm > 0);
+          const apartmentCount = withPpm.filter((x) => x.pt.includes("appartement")).length;
+          const houseCount = withPpm.filter((x) =>
+            x.pt.includes("maison") || x.pt.includes("villa") || x.pt.includes("pavillon") || x.pt === "local" || x.pt === ""
+          ).length;
+          if (withPpm.length >= 1) {
+            const ppmValues = withPpm.map((x) => x.ppm);
+            const surfValues = withPpm.map((x) => x.surf).filter((v): v is number => v != null && v > 0);
+            buildingProfile = {
+              building_id: buildingId,
+              median_price_per_m2: medianNumber(ppmValues) ?? ppmValues[0]!,
+              avg_price_per_m2: ppmValues.reduce((a, b) => a + b, 0) / ppmValues.length,
+              min_price_per_m2: Math.min(...ppmValues),
+              max_price_per_m2: Math.max(...ppmValues),
+              transaction_count: withPpm.length,
+              surface_min: surfValues.length > 0 ? Math.min(...surfValues) : null,
+              surface_max: surfValues.length > 0 ? Math.max(...surfValues) : null,
+              surface_median: surfValues.length > 0 ? medianNumber(surfValues) : null,
+              apartment_count: apartmentCount,
+              house_count: houseCount,
+            };
+            console.log("[FR_BUILDING_PROFILE] building_id=" + buildingId);
+            console.log("[FR_BUILDING_PROFILE] median_price_per_m2=" + String(buildingProfile.median_price_per_m2));
+            console.log("[FR_BUILDING_PROFILE] transaction_count=" + String(buildingProfile.transaction_count));
+          }
+        } catch (e) {
+          console.log("[FR_BUILDING_PROFILE] query_error", (e as Error)?.message);
+        }
+      }
+
       if (buildingSimilarAfterExactNone) {
         const buildingSimilarNoneWin = await tryFranceBuildingSimilarUnit({
           medianSurfaceM2ForFallback: null,
           chosenSurfaceValueForRanking: validInputSurfaceM2,
+          buildingProfile,
         });
         if (buildingSimilarNoneWin) return buildingSimilarNoneWin;
       }
@@ -2201,6 +2300,7 @@ export async function GET(request: NextRequest) {
         const buildingSimilarLate = await tryFranceBuildingSimilarUnit({
           medianSurfaceM2ForFallback,
           chosenSurfaceValueForRanking,
+          buildingProfile,
         });
         if (buildingSimilarLate) return buildingSimilarLate;
       }
@@ -2363,6 +2463,67 @@ export async function GET(request: NextRequest) {
           AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
         LIMIT 20
       `;
+
+      // Building profile fallback: prefer over street when available
+      const tryBuildingProfileFallback = (): ReturnType<typeof frReturn> | null => {
+        if (!buildingProfile || buildingProfile.transaction_count < 1) return null;
+        const forHouses = detectClass === "house" && buildingProfile.house_count > 0;
+        const forApartments = detectClass === "apartment" && (buildingProfile.apartment_count > 0 || buildingProfile.transaction_count > 0);
+        if (!forHouses && !forApartments) return null;
+        const medianPpm = buildingProfile.median_price_per_m2;
+        const surfaceForEst = validInputSurfaceM2 ?? buildingProfile.surface_median ?? medianSurfaceM2ForFallback;
+        const estimated = surfaceForEst != null && surfaceForEst > 0 ? Math.round(surfaceForEst * medianPpm) : null;
+        const fallbackSource = "Similar properties in this building";
+        console.log("[FR_BUILDING_PROFILE] used_in=fallback");
+        frRuntimeDebug.winning_step = "building_profile";
+        frRuntimeDebug.winning_source_label = fallbackSource;
+        frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+        return frReturn(
+          {
+            address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+            data_source: "properties_france",
+            fr_detect: frDetectToUse,
+            property_result: {
+              exact_value: estimated,
+              exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
+              value_level: "building-level",
+              last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+              street_average: medianPpm,
+              street_average_message: fallbackSource,
+              livability_rating: "FAIR",
+            },
+            fr: emptyFranceResponse({
+              success: true,
+              resultType: "building_level",
+              confidence: "medium",
+              requestedLot: requestedLotNorm,
+              normalizedLot: normalizedRequestedLot,
+              property: {
+                transactionDate: null,
+                transactionValue: estimated,
+                pricePerSqm: medianPpm,
+                surfaceArea: surfaceForEst ?? null,
+                rooms: null,
+                propertyType: detectClass === "house" ? "Maison" : "Appartement",
+                building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                postalCode: postcodeNorm || null,
+                commune: cityNorm || null,
+              },
+              buildingStats: {
+                transactionCount: buildingProfile.transaction_count,
+                avgPricePerSqm: medianPpm,
+                avgTransactionValue: estimated,
+              },
+              comparables: [],
+              matchExplanation: fallbackSource,
+            }),
+          },
+          "valuation_response"
+        );
+      };
+
+      const buildingProfileWin = tryBuildingProfileFallback();
+      if (buildingProfileWin) return buildingProfileWin;
 
       console.log("[FR_FLOW] ladder_step_started=STREET");
       console.log("[FR_STEP] street_lookup_start");
