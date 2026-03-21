@@ -103,6 +103,8 @@ type BuildingInsight = {
   selectedFormattedAddress?: string;
   /** France: exact typed address when user pressed Enter (sent to API as-is) */
   typedAddressForFrance?: string;
+  /** France: raw input as typed (for fallback parsing) */
+  rawInputAddressForFrance?: string;
   /** France: postcode from Google address_components (avoids "Postcode required" when formatted_address omits it) */
   postcode?: string;
   /** Debug: raw country short_name from Google address_components (e.g. FR, RE) */
@@ -572,6 +574,8 @@ export const AddressExplorer = () => {
     email: "",
     password: "",
   });
+  const [isFranceSearching, setIsFranceSearching] = React.useState(false);
+  const frSearchStartedAtRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
@@ -785,6 +789,15 @@ export const AddressExplorer = () => {
 
     const typedAddress = query.trim();
     const normalizedQuery = typedAddress.toLowerCase();
+    const looksLikeFrance = /^\d{5}\b|(?:paris|marseille|lyon|cannes|nice|france)\b/i.test(typedAddress) || normalizedQuery.includes("rue") || normalizedQuery.includes("avenue") || normalizedQuery.includes("chemin");
+    if (looksLikeFrance) {
+      setIsFranceSearching(true);
+      frSearchStartedAtRef.current = Date.now();
+      console.log("[FR_INPUT] raw_input=" + typedAddress);
+      console.log("[FR_INPUT] used_for_search=typed");
+      console.log("[FR_INPUT] suggestion_explicitly_clicked=false");
+      console.log("[FR_UI] search_started_at=" + String(frSearchStartedAtRef.current));
+    }
     if (
       normalizedQuery === "near me" ||
       normalizedQuery === "near me restaurant" ||
@@ -828,9 +841,18 @@ export const AddressExplorer = () => {
           restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
           restaurantMarkersRef.current = [];
           const insight = getPropertyInsight(franceCenter, typedAddress);
-          setSelectedBuilding({ ...insight, typedAddressForFrance: typedAddress });
+          setSelectedBuilding({
+            ...insight,
+            typedAddressForFrance: typedAddress,
+            rawInputAddressForFrance: typedAddress,
+          });
           setDismissedBuilding(null);
           setError(null);
+          setIsFranceSearching(false);
+          if (frSearchStartedAtRef.current) {
+            console.log("[FR_UI] first_result_render_ms=" + String(Date.now() - frSearchStartedAtRef.current));
+            console.log("[FR_UI] loading_state_visible=true");
+          }
           hydrateSearchContext(franceCenter, typedAddress);
           map?.panTo(franceCenter);
           map?.setZoom(10);
@@ -860,15 +882,22 @@ export const AddressExplorer = () => {
       setSelectedBuilding({
         ...insight,
         typedAddressForFrance: countryProfile.countryCode === "FR" ? typedAddress : undefined,
+        rawInputAddressForFrance: countryProfile.countryCode === "FR" ? typedAddress : undefined,
       });
       setDismissedBuilding(null);
       setError(null);
+      setIsFranceSearching(false);
+      if (looksLikeFrance && frSearchStartedAtRef.current) {
+        console.log("[FR_UI] first_result_render_ms=" + String(Date.now() - frSearchStartedAtRef.current));
+        console.log("[FR_UI] loading_state_visible=true");
+      }
       hydrateSearchContext(nextCenter, formattedAddress);
       map?.panTo(nextCenter);
       map?.setZoom(16);
       // Places fetched only via "Search this area" button (cost control)
     } catch {
       setError("Search is temporarily unavailable. Please try again.");
+      setIsFranceSearching(false);
     }
   }, [center, currentLocation, geocodeRequest, hydrateSearchContext, map, query, searchBiasLocation]);
 
@@ -1213,9 +1242,14 @@ export const AddressExplorer = () => {
 
   const handleSelectSearchPrediction = React.useCallback(
     async (prediction: AutocompletePredictionItem) => {
-      if (!window.google?.maps) {
-        return;
-      }
+      if (!window.google?.maps) return;
+
+      const rawTyped = query.trim();
+      const selectedFormattedFromPred = prediction.description;
+      console.log("[FR_INPUT] raw_input=" + (rawTyped || "(empty)"));
+      console.log("[FR_INPUT] selected_suggestion=" + selectedFormattedFromPred);
+      console.log("[FR_INPUT] used_for_search=suggestion");
+      console.log("[FR_INPUT] suggestion_explicitly_clicked=true");
 
       setSearchPredictions([]);
       setIsSearchDropdownOpen(false);
@@ -1238,14 +1272,19 @@ export const AddressExplorer = () => {
         const selectedFormatted =
           results[0].formatted_address ?? prediction.description;
         const displayAddress = selectedFormatted;
+        const countryFromComponents = results[0].address_components?.find((c) => c.types.includes("country"))?.short_name?.trim();
+        const isFrance = (countryFromComponents ?? "").toUpperCase() === "FR" || (countryFromComponents ?? "").toUpperCase() === "RE";
+
         setQuery(displayAddress);
         setCenter(nextCenter);
         setSelectedRestaurant(null);
         const insight = getPropertyInsight(nextCenter, displayAddress, results[0].address_components);
         setSelectedBuilding({
           ...insight,
-          rawInputAddress: query.trim() || undefined,
-          selectedFormattedAddress: selectedFormatted,
+          rawInputAddress: isFrance ? undefined : (rawTyped || undefined),
+          selectedFormattedAddress: isFrance ? undefined : selectedFormatted,
+          typedAddressForFrance: isFrance ? displayAddress : undefined,
+          rawInputAddressForFrance: isFrance ? (rawTyped || displayAddress) : undefined,
         });
         setDismissedBuilding(null);
         setError(null);
@@ -1255,7 +1294,6 @@ export const AddressExplorer = () => {
         hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(16);
-        // Places fetched only via "Search this area" button (cost control)
       } catch {
         setError("Search is temporarily unavailable. Please try again.");
       }
@@ -2177,9 +2215,14 @@ export const AddressExplorer = () => {
             <button
               type="button"
               onClick={() => void handleSearch()}
-              className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-black transition-colors hover:bg-amber-300"
+              disabled={isFranceSearching}
+              className="inline-flex size-12 shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-black transition-colors hover:bg-amber-300 disabled:opacity-90 disabled:cursor-wait"
             >
-              <Search className="size-5" />
+              {isFranceSearching ? (
+                <span className="size-5 animate-spin rounded-full border-2 border-black border-t-transparent" />
+              ) : (
+                <Search className="size-5" />
+              )}
             </button>
           </div>
         </div>
@@ -2397,6 +2440,7 @@ export const AddressExplorer = () => {
                 address={selectedBuilding.address}
                 position={selectedBuilding.position}
                 typedAddressForFrance={selectedBuilding.typedAddressForFrance}
+                rawInputAddressForFrance={selectedBuilding.rawInputAddressForFrance}
                 postcode={selectedBuilding.postcode}
                 currencySymbol={selectedBuilding.currencySymbol}
                 onClose={dismissSelectedBuilding}

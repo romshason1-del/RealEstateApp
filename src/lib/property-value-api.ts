@@ -168,6 +168,7 @@ export async function fetchPropertyValueInsights(
   const isFR = code === "FR";
   const raw = (isUK && options?.rawInputAddress) ? `|raw:${options.rawInputAddress.trim()}` : "";
   const sel = (isUK && options?.selectedFormattedAddress) ? `|sel:${options.selectedFormattedAddress.trim()}` : "";
+  const frRaw = (isFR && options?.rawInputAddress) ? `|raw:${options.rawInputAddress.trim()}` : "";
   const apt = (options?.aptNumber ?? "").trim();
   const frPostcode = (isFR && options?.postcode) ? `|pc:${options.postcode.trim()}` : "";
   const normalizeFranceAddress = (a: string) =>
@@ -182,8 +183,8 @@ export async function fetchPropertyValueInsights(
   const addrForKey = isFR ? normalizeFranceAddress(address) : address.trim().toLowerCase();
   const key =
     Number.isFinite(lat) && Number.isFinite(lng)
-      ? `${addrForKey}${raw}${sel}${apt ? `|apt:${apt}` : ""}${frPostcode}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
-      : `${addrForKey}${raw}${sel}${apt ? `|apt:${apt}` : ""}${frPostcode}${isFR ? "|final_v1" : ""}`;
+      ? `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
+      : `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${isFR ? "|final_v1" : ""}`;
   const cached = CACHE.get(key);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.data;
@@ -269,6 +270,7 @@ export async function fetchPropertyValueInsights(
     }
     if (isUK && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
     if (isUK && options?.selectedFormattedAddress) params.set("selectedFormattedAddress", options.selectedFormattedAddress);
+    if (isFR && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
     if (isFR) {

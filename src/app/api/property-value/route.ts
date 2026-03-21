@@ -161,6 +161,23 @@ function validateInput(
   return { valid: true };
 }
 
+/** Normalize French commune/city for source lookup. PARIS 4E ARRONDISSEMENT -> PARIS, etc. */
+function normalizeCityForFranceSource(city: string): string {
+  const c = (city ?? "").trim().toUpperCase();
+  if (!c) return "";
+  const m = c.match(/^(PARIS|MARSEILLE|LYON|LYONS)\s*(?:\d{1,2}(?:ER|E|ÈME)?\s*(?:ARRONDISSEMENT)?)?$/i);
+  if (m) return m[1].toUpperCase();
+  return c;
+}
+
+/** Check if two city strings match (handles arrondissements). */
+function frCityMatches(userCity: string, banCity: string): boolean {
+  const u = normalizeCityForFranceSource(userCity);
+  const b = normalizeCityForFranceSource(banCity);
+  if (!u || !b) return true;
+  return u === b || b.startsWith(u + " ") || u.startsWith(b + " ");
+}
+
 const ROUTE_TIMEOUT_MS = 6000;
 const ROUTE_TIMEOUT_MS_UK = 20000;
 const ROUTE_TIMEOUT_MS_FR = 15000;
@@ -776,6 +793,9 @@ export async function GET(request: NextRequest) {
       const banInputStreetNorm = streetNormalizedDet || normalizeForBanText(streetNorm);
       const banInputHouseNumber = normalizeHouseNumberForBan(houseNumberNorm);
 
+      console.log("[FR_BAN] raw_city=" + (banInputCity || "(empty)"));
+      console.log("[FR_BAN] raw_postcode=" + (banInputPostcode || "(empty)"));
+
       const banQueryAttempts: Array<{ postcode: string; city_norm: string; street_norm: string; house_number_norm: string }> = [];
       const streetForBan = banInputStreetNorm || banInputCity || "";
       if (banInputPostcode || streetForBan) {
@@ -798,10 +818,6 @@ export async function GET(request: NextRequest) {
           banInputHouseNumber,
         });
 
-        // Match against the normalized BAN dataset.
-        // Ranking preference:
-        // exact postcode > exact city_norm > exact street_norm > exact house_number_norm
-        // House-number is NOT required for selection; it's only used for ranking.
         const banLookupQuery = `
           SELECT
             *
@@ -818,10 +834,10 @@ export async function GET(request: NextRequest) {
             (LOWER(TRIM(city)) = LOWER(TRIM(@city_norm))) DESC,
             (street_norm = @street_norm) DESC,
             (TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number_norm AS STRING))) DESC
-          LIMIT 1
+          LIMIT 10
         `;
 
-        let banRows: Array<Record<string, unknown>> | undefined;
+        let banRows: Array<Record<string, unknown>> = [];
         for (let i = 0; i < banQueryAttempts.length; i++) {
           const attempt = banQueryAttempts[i];
           const banParams = {
@@ -836,17 +852,45 @@ export async function GET(request: NextRequest) {
             { query: banLookupQuery, params: banParams },
             "ban_normalized_lookup_query"
           );
-          banRows = rows ?? [];
-          if (banRows.length > 0) break;
+          const rawRows = (rows ?? []) as Array<Record<string, unknown>>;
+          const pickStr = (r: Record<string, unknown>, keys: string[]): string => {
+            for (const k of keys) {
+              const v = r?.[k];
+              if (typeof v === "string" && v.trim()) return v.trim();
+            }
+            return "";
+          };
+          const filtered = rawRows.filter((r) => {
+            const banPc = pickStr(r, ["postcode", "postal_code", "code_postal"]);
+            const banCityVal = pickStr(r, ["city_norm", "normalized_city", "city"]);
+            if (banInputPostcode && banPc && banInputPostcode.trim() !== banPc.trim()) return false;
+            if (banInputCity && banCityVal && !frCityMatches(banInputCity, banCityVal)) return false;
+            return true;
+          });
+          if (filtered.length > 0) {
+            banRows = filtered;
+            break;
+          }
         }
 
         console.log("[FR_BAN] after_ban_query");
-        const banRowsCount = (banRows as any[])?.length ?? 0;
+        const banRowsCount = banRows?.length ?? 0;
         console.log("[FR_BAN] ban_rows_count", { banRowsCount });
-        console.log("[FR_BAN] first_ban_row", { first: (banRows as any[])?.[0] ?? null });
         frRuntimeDebug.ban_rows_count = banRowsCount;
 
         const banRow = (banRows?.[0] ?? null) as Record<string, unknown> | null;
+        if (banRow) {
+          const selCity = banRow.city_norm ?? banRow.city ?? banRow.normalized_city;
+          const selPc = banRow.postcode ?? banRow.postal_code ?? banRow.code_postal;
+          console.log("[FR_BAN] selected_city=" + String(selCity ?? "(empty)"));
+          console.log("[FR_BAN] selected_postcode=" + String(selPc ?? "(empty)"));
+          const selReason = banInputPostcode && String(selPc ?? "").trim() === banInputPostcode.trim()
+            ? "exact_postcode_match"
+            : banInputCity && frCityMatches(banInputCity, String(selCity ?? ""))
+              ? "exact_city_match"
+              : "best_available_after_filter";
+          console.log("[FR_BAN] selection_reason=" + selReason);
+        }
         if (banRow) {
           const pickString = (keys: string[]): string | null => {
             for (const k of keys) {
@@ -1019,6 +1063,14 @@ export async function GET(request: NextRequest) {
       };
 
       // Early candidate discovery from property_latest_facts (France source) for apartment evidence
+      const cityNormForSource = normalizeCityForFranceSource(cityNorm);
+      console.log("[FR_SOURCE] normalized_city=" + (cityNormForSource || "(empty)"));
+      console.log("[FR_SOURCE] normalized_street=" + (streetNormalizedDet || "(empty)"));
+      console.log("[FR_SOURCE] lookup_keys=postcode|street|house|city");
+
+      const frBqCityMatchSql = cityNormForSource
+        ? `(LOWER(TRIM(city)) = LOWER(@city_main) OR LOWER(TRIM(city)) LIKE CONCAT(LOWER(@city_main), ' %'))`
+        : "TRUE";
       const frBqStreetMatchSqlEarly = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%')`;
       const normHn = (hn: string) => {
         let s = (hn ?? "").toString().trim().toUpperCase();
@@ -1041,8 +1093,8 @@ export async function GET(request: NextRequest) {
             SELECT unit_number, property_type
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
-              AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
               AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode))
+              AND ${frBqCityMatchSql}
               AND ${frBqStreetMatchSqlEarly}
               AND ${frBqHouseMatchEarly}
             LIMIT 100
@@ -1052,6 +1104,7 @@ export async function GET(request: NextRequest) {
               query: earlyQuery,
               params: {
                 city: cityNorm || "",
+                city_main: cityNormForSource || cityNorm || "",
                 postcode: postcodeNorm || "",
                 street_normalized: streetNormalizedDet || "",
                 house_number: houseNumberNorm || "",
@@ -1079,6 +1132,9 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      const detCityMatchSql = cityNormForSource
+        ? `(LOWER(TRIM(city)) = LOWER(@city_main) OR LOWER(TRIM(city)) LIKE CONCAT(LOWER(@city_main), ' %'))`
+        : "TRUE";
       const detectionQuery = `
         WITH candidates AS (
           SELECT
@@ -1093,8 +1149,8 @@ export async function GET(request: NextRequest) {
         SELECT
           *
         FROM candidates
-        WHERE LOWER(TRIM(city)) = LOWER(TRIM(@city))
-          AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+        WHERE TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+          AND ${detCityMatchSql}
           AND TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number AS STRING))
           AND (
             street_norm_clean LIKE CONCAT('%', @normalizedStreet, '%')
@@ -1110,6 +1166,7 @@ export async function GET(request: NextRequest) {
         console.log("[FR_GOLD] before_intelligence_detection_query");
         const detectParams = {
           city: cityNorm || "",
+          city_main: cityNormForSource || cityNorm || "",
           postcode: postcodeNorm || "",
           normalizedStreet: streetNormalizedDet || "",
           house_number: houseNumberNorm || "",
@@ -1159,11 +1216,21 @@ export async function GET(request: NextRequest) {
       const detectedApartment = isMultiUnitDetected || apartmentFromType || apartmentEvidenceFromFacts;
       const detectedHouse = isHouseLikeDetected || houseFromType;
 
+      const apartmentEvidenceDesc =
+        apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
+        : isMultiUnitDetected ? "building_intelligence_multi_unit"
+        : apartmentFromType ? "detected_type_appartement"
+        : "none";
+      const multiUnitEvidenceDesc = isMultiUnitDetected ? "true" : "false";
+
       // Final apartment-vs-house decision rule (gold-table + facts driven).
       // - If house-like evidence exists, run house-direct flow.
       // - Else if multi-unit / apartment-like evidence exists (incl. from property_latest_facts), ask for apartment/lot.
       const detectClass: "apartment" | "house" | "unclear" = detectedHouse ? "house" : detectedApartment ? "apartment" : "unclear";
       frRuntimeDebug.detect_class = detectClass;
+      console.log("[FR_CLASSIFY] apartment_evidence=" + apartmentEvidenceDesc);
+      console.log("[FR_CLASSIFY] multi_unit_evidence=" + multiUnitEvidenceDesc);
+      console.log("[FR_CLASSIFY] detect_class=" + detectClass);
       const flowPropertyType = detectClass === "house" ? "house" : detectClass === "apartment" ? "apartment" : "unknown";
       console.log("[FR_FLOW] property_type=" + flowPropertyType);
       console.log("[FR_STEP] apartment_detection_done");
@@ -1321,8 +1388,8 @@ export async function GET(request: NextRequest) {
           *
         FROM \`streetiq-bigquery.streetiq_gold.${exactTable}\`
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
-          AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
+          AND ${frBqCityMatchSql}
           AND ${frBqStreetMatchSql}
           AND ${frBqHouseNumberMatchSql}
         LIMIT 50
@@ -1386,6 +1453,7 @@ export async function GET(request: NextRequest) {
       const exactParams = {
         country: country || "",
         city: cityNorm || "",
+        city_main: cityNormForSource || cityNorm || "",
         postcode: postcodeNorm || "",
         street: streetNorm || "",
         street_normalized: streetNormalizedDet || "",
@@ -1400,7 +1468,9 @@ export async function GET(request: NextRequest) {
         },
         "exact_query"
       );
-      console.log("[FR_GOLD] after_exact_query", { rows: (exactRows as any[])?.length ?? 0 });
+      const exactRowsCount = (exactRows as any[])?.length ?? 0;
+      console.log("[FR_SOURCE] source_rows_exact=" + exactRowsCount);
+      console.log("[FR_GOLD] after_exact_query", { rows: exactRowsCount });
       console.log("[FR_SQL] query_ok=true");
       console.log("[FR_SQL] rows_count=", (exactRows as any[])?.length ?? 0);
       console.log("[FR_SQL] columns_detected=", Object.keys(exactTableInspection.sampleRow ?? {}));
@@ -3102,7 +3172,7 @@ export async function GET(request: NextRequest) {
               const streetRaw = String(r.street ?? "").trim().toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
               const streetNormRow = streetRaw.replace(/^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i, "").trim();
               const streetMatch = streetNorm && (streetNormRow.includes(streetNormalizedDet || "") || (streetNormalizedDet || "").includes(streetNormRow) || streetNormRow === streetNormalizedDet);
-              const cityMatch = cityNorm && String(r.city ?? "").trim().toLowerCase() === cityNorm.toLowerCase();
+              const cityMatch = cityNorm && frCityMatches(cityNorm, String(r.city ?? "").trim());
               const hnRaw = r.house_number;
               const hnNum = extractHouseNumberNumeric(String(hnRaw ?? ""));
               const houseDist = houseNumberNumericTarget != null && hnNum != null ? Math.abs(hnNum - houseNumberNumericTarget) : 999;
@@ -3208,7 +3278,7 @@ export async function GET(request: NextRequest) {
       if (streetUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_street_avg_price");
       if (communeUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_commune_avg_price");
 
-      const exactHouseCandidates = frRuntimeDebug.exact_house_row_count ?? 0;
+      const exactHouseCandidates = Number(frRuntimeDebug.exact_house_row_count) || 0;
       console.log("[FR_LADDER] exact=" + String(exactHouseCandidates || exactApartmentRowsCount) + " building=" + String(sameBuildingUsableRowsCount) + " street=" + String(streetUsableAvgRowsCount) + " commune=" + String(communeUsableAvgRowsCount));
       const buildingCandidates = frRuntimeDebug.building_similar_unit_candidates_count ?? sameBuildingRowsCount;
       const streetCandidates = streetFallbackRowsCount;
@@ -3264,7 +3334,11 @@ export async function GET(request: NextRequest) {
       } else {
         frRuntimeDebug.winning_step = "no_data";
         frRuntimeDebug.winning_source_label = "No reliable data found";
-        const failedStage = !cityNorm && !streetNorm && !postcodeNorm ? "parse" : "valuation";
+        const failedStage =
+          !cityNorm && !streetNorm && !postcodeNorm ? "parse"
+          : !frRuntimeDebug.ban_match_found ? "ban_selection"
+          : exactHouseCandidates <= 0 && exactApartmentRowsCount <= 0 && sameBuildingUsableRowsCount <= 0 ? "source_lookup"
+          : "valuation";
         console.log("[FR_FAIL] no_data_reason=" + (noDataReasonParts.join(" | ") || "unknown"));
         console.log("[FR_FAIL] failed_stage=" + failedStage);
       }

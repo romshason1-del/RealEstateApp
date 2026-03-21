@@ -22,6 +22,7 @@ type FranceSheetProps = {
   position: { lat: number; lng: number };
   postcode?: string;
   typedAddressForFrance?: string;
+  rawInputAddressForFrance?: string;
   currencySymbol?: string;
   onClose: () => void;
 };
@@ -45,6 +46,7 @@ export function FranceApartmentSheet({
   position,
   postcode,
   typedAddressForFrance,
+  rawInputAddressForFrance,
   currencySymbol: _currencySymbol = "€",
   onClose,
 }: FranceSheetProps) {
@@ -74,12 +76,11 @@ export function FranceApartmentSheet({
   const { data, isLoading, refetch } = usePropertyValueInsights(addressForApi, "FR", {
     latitude: position.lat,
     longitude: position.lng,
-    // Ensure the exact typed lot is used immediately after submit, even if state batching
-    // delays `requestedLot` by one render.
     aptNumber: requestedLot ?? (hasSubmittedLotSearch ? lotInput : undefined),
     postcode,
     refetchTrigger: trigger,
     countryCode: "FR",
+    rawInputAddress: rawInputAddressForFrance?.trim() || undefined,
   });
 
   React.useEffect(() => {
