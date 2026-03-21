@@ -123,7 +123,7 @@ function validateInput(
   street: string,
   countryCode?: string,
   postcode?: string,
-  opts?: { latitude?: number; longitude?: number }
+  opts?: { latitude?: number; longitude?: number; addressParam?: string; rawInputAddress?: string }
 ): { valid: boolean; error?: string } {
   const code = (countryCode ?? "").toUpperCase();
   const isUK = code === "UK" || code === "GB";
@@ -143,9 +143,10 @@ function validateInput(
   }
   const isFR = code === "FR";
   if (isFR) {
-    const hasCityOrStreet = !!(city.trim() || street.trim());
-    if (!hasCityOrStreet) return { valid: false, error: "city or street required for France addresses" };
-    if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
+    const hasParsed = !!(city.trim() || street.trim() || (postcode ?? "").trim());
+    const hasFullAddress = !!((opts?.addressParam ?? "").trim() || (opts?.rawInputAddress ?? "").trim());
+    if (!hasParsed && !hasFullAddress) return { valid: false, error: "city, street, postcode, or full address required for France addresses" };
+    if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH || ((postcode ?? "").trim().length || 0) > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
     return { valid: true };
   }
   if (!city || typeof city !== "string" || city.trim().length === 0) {
@@ -274,7 +275,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const validation = validateInput(city.trim(), street.trim(), countryCode, ((postcode ?? "").trim() || (zip ?? "").trim()), { latitude, longitude });
+  const validation = validateInput(city.trim(), street.trim(), countryCode, ((postcode ?? "").trim() || (zip ?? "").trim()), { latitude, longitude, addressParam, rawInputAddress });
   if (!validation.valid) {
     return NextResponse.json(
       { message: validation.error, error: "INVALID_INPUT" },
@@ -361,9 +362,31 @@ export async function GET(request: NextRequest) {
     try {
       console.log("[FR_STEP] entered");
       const frStartTs = Date.now();
-        console.log("[ENV_CHECK]", {
-          hasKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
-        });
+
+      const fullRawAddress = (addressParam || rawInputAddress || [houseNumber, street, city, postcode || zip].filter(Boolean).join(", ")).trim();
+      console.log("[FR_PARSE] raw_input=" + (fullRawAddress || "(empty)"));
+
+      let cityParsed = city.trim();
+      let streetParsed = street.trim();
+      let houseNumberParsed = houseNumber.trim();
+      let postcodeParsed = (postcode || zip || "").trim();
+
+      if (fullRawAddress && (!cityParsed || !streetParsed || !postcodeParsed)) {
+        const parsed = parseFRAddressFromFullString(fullRawAddress);
+        if (parsed.city) cityParsed = cityParsed || parsed.city;
+        if (parsed.street) streetParsed = streetParsed || parsed.street;
+        if (parsed.houseNumber) houseNumberParsed = houseNumberParsed || parsed.houseNumber;
+        if (parsed.postcode) postcodeParsed = postcodeParsed || parsed.postcode;
+        if (!parsed.city && !parsed.street && !parsed.postcode) {
+          const fallback = parseAddressFromFullString(fullRawAddress);
+          if (fallback.city) cityParsed = cityParsed || fallback.city;
+          if (fallback.street) streetParsed = streetParsed || fallback.street;
+          if (fallback.houseNumber) houseNumberParsed = houseNumberParsed || fallback.houseNumber;
+        }
+      }
+
+      console.log("[FR_PARSE] parsed_address=" + JSON.stringify({ city: cityParsed || "(empty)", street: streetParsed || "(empty)", houseNumber: houseNumberParsed || "(empty)", postcode: postcodeParsed || "(empty)" }));
+
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
       // Strict: any non-empty apt param skips lot prompt (avoids normalize edge cases vs raw UI input).
@@ -383,10 +406,10 @@ export async function GET(request: NextRequest) {
         normalizedLot: normalizedRequestedLot,
       });
       console.log("[FR_GOLD] request_start", {
-        city: city.trim(),
-        street: street.trim(),
-        houseNumber: houseNumber.trim(),
-        postcode: (postcode || zip || "").trim(),
+        city: cityParsed,
+        street: streetParsed,
+        houseNumber: houseNumberParsed,
+        postcode: postcodeParsed,
         aptNumber: (aptNumber ?? "").trim(),
       });
       console.log("[FR_BAN] entered_france_flow", {
@@ -409,10 +432,10 @@ export async function GET(request: NextRequest) {
         return new Response(JSON.stringify({ success: false, error: "BigQuery init failed" }), { status: 200 });
       }
       const country = "FR";
-      let cityNorm = city.trim();
-      let streetNorm = street.trim();
-      let postcodeNorm = (postcode || zip || "").trim();
-      let houseNumberNorm = houseNumber.trim();
+      let cityNorm = cityParsed;
+      let streetNorm = streetParsed;
+      let postcodeNorm = postcodeParsed;
+      let houseNumberNorm = houseNumberParsed;
       // Use the normalized lot token for exact matching (avoid leading-zero mismatches).
       const unitNumberNorm = normalizedRequestedLot ?? "";
       const propertyType = (searchParams.get("property_type") ?? searchParams.get("propertyType") ?? "").trim() || null;
@@ -750,8 +773,22 @@ export async function GET(request: NextRequest) {
 
       const banInputPostcode = postcodeNorm.replace(/\s+/g, "").trim();
       const banInputCity = normalizeForBanText(cityNorm);
-      const banInputStreetNorm = streetNormalizedDet; // already unaccented, uppercased, prefix-stripped
+      const banInputStreetNorm = streetNormalizedDet || normalizeForBanText(streetNorm);
       const banInputHouseNumber = normalizeHouseNumberForBan(houseNumberNorm);
+
+      const banQueryAttempts: Array<{ postcode: string; city_norm: string; street_norm: string; house_number_norm: string }> = [];
+      const streetForBan = banInputStreetNorm || banInputCity || "";
+      if (banInputPostcode || streetForBan) {
+        banQueryAttempts.push({ postcode: banInputPostcode || "", city_norm: banInputCity || "", street_norm: streetForBan, house_number_norm: banInputHouseNumber || "" });
+        if (banInputPostcode && streetForBan) {
+          banQueryAttempts.push({ postcode: banInputPostcode, city_norm: "", street_norm: streetForBan, house_number_norm: banInputHouseNumber || "" });
+        }
+        if (banInputCity && streetForBan && !banInputPostcode) {
+          banQueryAttempts.push({ postcode: "", city_norm: banInputCity, street_norm: streetForBan, house_number_norm: banInputHouseNumber || "" });
+        }
+      }
+
+      console.log("[FR_BAN] raw_query_attempted=" + (banInputPostcode || banInputStreetNorm || banInputCity ? "true" : "false"));
 
       try {
         console.log("[FR_BAN] before_ban_query", {
@@ -784,20 +821,24 @@ export async function GET(request: NextRequest) {
           LIMIT 1
         `;
 
-        const banParams = {
-          postcode: banInputPostcode || "",
-          city_norm: banInputCity || "",
-          street_norm: banInputStreetNorm || "",
-          house_number_norm: banInputHouseNumber || "",
-        };
-        console.log("[FR_PARAMS]", { query: "ban_normalized_lookup_query", ...banParams });
-        const [banRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-          {
-            query: banLookupQuery,
-            params: banParams,
-          },
-          "ban_normalized_lookup_query"
-        );
+        let banRows: Array<Record<string, unknown>> | undefined;
+        for (let i = 0; i < banQueryAttempts.length; i++) {
+          const attempt = banQueryAttempts[i];
+          const banParams = {
+            postcode: attempt.postcode || "",
+            city_norm: attempt.city_norm || "",
+            street_norm: attempt.street_norm || "",
+            house_number_norm: attempt.house_number_norm || "",
+          };
+          if (!attempt.street_norm && !attempt.postcode) continue;
+          console.log("[FR_PARAMS]", { query: "ban_normalized_lookup_query", attempt: i + 1, ...banParams });
+          const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: banLookupQuery, params: banParams },
+            "ban_normalized_lookup_query"
+          );
+          banRows = rows ?? [];
+          if (banRows.length > 0) break;
+        }
 
         console.log("[FR_BAN] after_ban_query");
         const banRowsCount = (banRows as any[])?.length ?? 0;
@@ -836,11 +877,19 @@ export async function GET(request: NextRequest) {
           const houseExact = banHouse ? banHouse.trim().toUpperCase() === banInputHouseNumber.trim().toUpperCase() : false;
 
           let banQuality: string;
+          const matchLevel = postcodeExact && cityExact && streetExact && houseExact ? "full"
+            : (postcodeExact && cityExact && streetExact) || (postcodeExact && streetExact) ? "street"
+            : postcodeExact || cityExact || streetExact ? "postcode"
+            : "none";
+          const partialMatch = !houseExact && (banCity || banPostcode || banStreetNorm);
           if (postcodeExact && cityExact && streetExact && houseExact) banQuality = "exact_postcode_city_street_house";
           else if (postcodeExact && cityExact && streetExact && !houseExact) banQuality = "exact_postcode_city_street_same_street_no_house";
           else if (postcodeExact && streetExact && !cityExact) banQuality = "exact_postcode_street_same_street_no_house";
           else if (streetExact && !postcodeExact) banQuality = "street_same_no_exact_postcode_or_city";
           else banQuality = "ban_match_found";
+
+          console.log("[FR_BAN] match_level=" + matchLevel);
+          console.log("[FR_BAN] partial_match=" + String(partialMatch));
 
           // Source of truth: overwrite inputs for the rest of the FR pipeline.
           if (banCity) {
@@ -978,12 +1027,15 @@ export async function GET(request: NextRequest) {
         return s || "";
       };
       const houseNumberNormForEarly = normHn(houseNumberNorm);
-      const frBqHouseMatchEarly = `(TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING)) OR REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(CAST(house_number AS STRING))), r'\\s+', ''), r'[^0-9A-Z]', '') = @house_number_norm)`;
+      const frBqHouseMatchEarly = houseNumberNorm
+        ? `(TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING)) OR REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(CAST(house_number AS STRING))), r'\\s+', ''), r'[^0-9A-Z]', '') = @house_number_norm)`
+        : "TRUE";
 
       let earlyCandidateRows: Array<Record<string, unknown>> = [];
       let apartmentEvidenceFromFacts = false;
       let candidateLotsFromFacts: string[] = [];
-      if (cityNorm && postcodeNorm && streetNorm && houseNumberNorm) {
+      const hasAddressForDiscovery = (cityNorm || postcodeNorm) && streetNorm;
+      if (hasAddressForDiscovery) {
         try {
           const earlyQuery = `
             SELECT unit_number, property_type
@@ -3212,7 +3264,9 @@ export async function GET(request: NextRequest) {
       } else {
         frRuntimeDebug.winning_step = "no_data";
         frRuntimeDebug.winning_source_label = "No reliable data found";
+        const failedStage = !cityNorm && !streetNorm && !postcodeNorm ? "parse" : "valuation";
         console.log("[FR_FAIL] no_data_reason=" + (noDataReasonParts.join(" | ") || "unknown"));
+        console.log("[FR_FAIL] failed_stage=" + failedStage);
       }
       frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
