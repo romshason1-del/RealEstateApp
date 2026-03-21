@@ -92,31 +92,64 @@ type GoldRow = {
   data_source: string;
 };
 
-function dvfToGoldRow(cols: string[]): GoldRow | null {
-  if (cols.length < 39) return null;
+/**
+ * DVF lot columns (0-indexed): 1er lot, 2ème lot, 3ème lot, 4ème lot, 5ème lot
+ */
+const DVF_LOT_COLS = [24, 26, 28, 30, 32];
+
+/**
+ * Collect all non-empty lot values from a DVF row.
+ * Uses 1er lot (col 24) through 5ème lot (col 32).
+ */
+function extractLotValues(cols: string[]): string[] {
+  const lots: string[] = [];
+  for (const idx of DVF_LOT_COLS) {
+    const v = (cols[idx] ?? "").trim();
+    if (v && !lots.includes(v)) lots.push(v);
+  }
+  return lots;
+}
+
+/**
+ * Use Surface Carrez (cols 25,27,29,31,33) when surface_reelle_bati is null.
+ * Carrez is typical for co-ownership apartments.
+ */
+function extractSurfaceM2(cols: string[]): number | null {
+  const surfBati = parseFrenchNumber(cols[38] ?? "");
+  if (Number.isFinite(surfBati) && surfBati > 0) return surfBati;
+  for (const idx of [25, 27, 29, 31, 33]) {
+    const carrez = parseFrenchNumber(cols[idx] ?? "");
+    if (Number.isFinite(carrez) && carrez > 0) return carrez;
+  }
+  return null;
+}
+
+/**
+ * Transform one DVF row into one or more GoldRows.
+ * Emits one row per non-empty lot to preserve apartment/building coverage.
+ * When all lots are empty (e.g. house), emits one row with unit_number=null.
+ */
+function dvfToGoldRows(cols: string[]): GoldRow[] {
+  if (cols.length < 39) return [];
 
   const nature = (cols[9] ?? "").trim();
-  if (nature !== "Vente") return null;
+  if (nature !== "Vente") return [];
 
   const price = parseFrenchNumber(cols[10] ?? "");
-  if (!Number.isFinite(price) || price <= 0) return null;
+  if (!Number.isFinite(price) || price <= 0) return [];
 
   const commune = (cols[17] ?? "").trim();
   const voie = (cols[15] ?? "").trim();
   const noVoie = (cols[11] ?? "").trim();
   const codePostal = (cols[16] ?? "").trim();
-  const lotNumberRaw = (cols[24] ?? "").trim();
-  const unitNumber = lotNumberRaw || null;
 
-  if (!commune && !voie) return null;
+  if (!commune && !voie) return [];
   const streetRaw = voie || commune;
   const houseNumber = noVoie || "0";
-  if (!streetRaw.trim()) return null;
+  if (!streetRaw.trim()) return [];
 
   const dateStr = parseFrenchDate(cols[8] ?? "");
-  const surfaceStr = (cols[38] ?? "").trim();
-  const surface = surfaceStr ? parseFrenchNumber(surfaceStr) : NaN;
-  const surfaceM2 = Number.isFinite(surface) && surface > 0 ? surface : null;
+  const surfaceM2 = extractSurfaceM2(cols);
   const typeLocalRaw = (cols[36] ?? "").trim() || "Local";
   const propertyType = mapTypeLocal(typeLocalRaw);
 
@@ -124,13 +157,13 @@ function dvfToGoldRow(cols: string[]): GoldRow | null {
   const pricePerM2 =
     surfaceM2 != null && surfaceM2 > 0 ? Math.round((price / surfaceM2) * 1000) : null;
 
-  return {
+  const lots = extractLotValues(cols);
+  const base: Omit<GoldRow, "unit_number"> = {
     country: "FR",
     city: commune,
     postcode: codePostal,
     street: voie || commune,
     house_number: normalizeHouseNumber(houseNumber),
-    unit_number: unitNumber,
     property_type: propertyType,
     surface_m2: surfaceM2,
     last_sale_date: dateStr,
@@ -138,6 +171,12 @@ function dvfToGoldRow(cols: string[]): GoldRow | null {
     price_per_m2: pricePerM2,
     data_source: "dvf",
   };
+
+  if (lots.length === 0) {
+    return [{ ...base, unit_number: null }];
+  }
+
+  return lots.map((unitNumber) => ({ ...base, unit_number: unitNumber }));
 }
 
 function buildDedupKey(r: GoldRow): string {
@@ -146,7 +185,12 @@ function buildDedupKey(r: GoldRow): string {
   return `${r.country}\0${r.city}\0${r.postcode}\0${streetNorm}\0${r.house_number}\0${unitPart}`;
 }
 
-async function processFile(filePath: string): Promise<{ rawCount: number; dedupedRows: GoldRow[] }> {
+/**
+ * Dedup: keep latest per (country, city, postcode, street_norm, house_number, unit_number).
+ * Same key = same address+unit candidate. Most recent sale wins.
+ * We do NOT collapse different units or different addresses.
+ */
+async function processFile(filePath: string): Promise<{ rawCount: number; goldRowsGenerated: number; dedupedRows: GoldRow[] }> {
   const keyToBest = new Map<string, GoldRow>();
 
   const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
@@ -154,6 +198,7 @@ async function processFile(filePath: string): Promise<{ rawCount: number; dedupe
 
   let lineNum = 0;
   let rawCount = 0;
+  let goldRowsGenerated = 0;
 
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -163,21 +208,25 @@ async function processFile(filePath: string): Promise<{ rawCount: number; dedupe
     if (lineNum === 1) continue;
 
     const cols = parsePipeLine(line);
-    const gold = dvfToGoldRow(cols);
-    if (!gold) continue;
+    const goldRows = dvfToGoldRows(cols);
+    if (goldRows.length === 0) continue;
 
     rawCount++;
-    const key = buildDedupKey(gold);
-    const existing = keyToBest.get(key);
-    const goldDate = gold.last_sale_date ? new Date(gold.last_sale_date).getTime() : 0;
-    const existingDate = existing?.last_sale_date ? new Date(existing.last_sale_date).getTime() : 0;
+    goldRowsGenerated += goldRows.length;
 
-    if (!existing || goldDate >= existingDate) {
-      keyToBest.set(key, gold);
+    for (const gold of goldRows) {
+      const key = buildDedupKey(gold);
+      const existing = keyToBest.get(key);
+      const goldDate = gold.last_sale_date ? new Date(gold.last_sale_date).getTime() : 0;
+      const existingDate = existing?.last_sale_date ? new Date(existing.last_sale_date).getTime() : 0;
+
+      if (!existing || goldDate >= existingDate) {
+        keyToBest.set(key, gold);
+      }
     }
   }
 
-  return { rawCount, dedupedRows: Array.from(keyToBest.values()) };
+  return { rawCount, goldRowsGenerated, dedupedRows: Array.from(keyToBest.values()) };
 }
 
 async function main() {
@@ -229,12 +278,14 @@ async function main() {
   for (const f of files) console.log("  -", path.basename(f));
 
   let totalBefore = 0;
+  let totalGoldGenerated = 0;
   const keyToBest = new Map<string, GoldRow>();
 
   for (const f of files) {
     console.log("[FR_FACTS] Processing", path.basename(f), "...");
-    const { rawCount, dedupedRows } = await processFile(f);
+    const { rawCount, goldRowsGenerated, dedupedRows } = await processFile(f);
     totalBefore += rawCount;
+    totalGoldGenerated += goldRowsGenerated;
     for (const r of dedupedRows) {
       const key = buildDedupKey(r);
       const existing = keyToBest.get(key);
@@ -263,11 +314,18 @@ async function main() {
   console.log("");
   console.log("[FR_FACTS] ========== SUMMARY ==========");
   console.log("[FR_FACTS] total_france_fact_rows_before=" + String(totalBefore));
+  console.log("[FR_FACTS] total_gold_rows_generated=" + String(totalGoldGenerated));
   console.log("[FR_FACTS] total_france_fact_rows_after=" + String(totalAfter));
   console.log("[FR_FACTS] distinct_city_count=" + String(cities.size));
   console.log("[FR_FACTS] distinct_street_house_number_count=" + String(streetHouse.size));
   console.log("[FR_FACTS] distinct_apartment_address_candidate_count=" + String(addressCandidates.size));
   console.log("[FR_FACTS] ================================");
+  console.log("");
+  console.log("[FR_FACTS] DEDUP_KEY_BEFORE=country|city|postcode|street_norm|house_number|unit_number (unit from col 24 only)");
+  console.log("[FR_FACTS] DEDUP_KEY_AFTER=country|city|postcode|street_norm|house_number|unit_number (unit from cols 24,26,28,30,32)");
+  console.log("[FR_FACTS] LOT_COLUMNS_NOW_USED=1er lot (24), 2eme lot (26), 3eme lot (28), 4eme lot (30), 5eme lot (32)");
+  console.log("[FR_FACTS] EMIT_STRATEGY=one row per non-empty lot (multi-lot DVF rows expand to multiple gold rows)");
+  console.log("[FR_FACTS] SURFACE_FALLBACK=Surface Carrez (cols 25,27,29,31,33) when surface_reelle_bati (38) null");
 
   const outDir = path.join(root, "output");
   fs.mkdirSync(outDir, { recursive: true });
@@ -292,6 +350,11 @@ async function main() {
     /appartement|appart/i.test(r.property_type)
   ).length;
   console.log("[FR_FACTS] Houses:", houseCount, "| Apartments:", aptCount);
+  console.log("");
+  console.log("[FR_FACTS] EXPECTED_IMPACT:");
+  console.log("[FR_FACTS]   exact_house: more rows (unchanged key; more address coverage from multi-lot expansion)");
+  console.log("[FR_FACTS]   exact_address: more rows (address+unit candidates preserved via 5 lot columns + multi-row emit)");
+  console.log("[FR_FACTS]   building_similar_unit: more candidates (same-building apartments from lot2..5, Surface Carrez fallback)");
   console.log("");
   console.log("[FR_FACTS] To load into BigQuery property_latest_facts:");
   console.log("  bq load --source_format=NEWLINE_DELIMITED_JSON \\");

@@ -55,3 +55,7 @@ ValeursFoncieres-2024.txt
 node_modules
 .vercel
 .env.local
+
+output/*.ndjson
+
+output/*.ndjson
