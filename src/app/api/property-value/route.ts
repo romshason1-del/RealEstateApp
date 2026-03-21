@@ -407,6 +407,7 @@ export async function GET(request: NextRequest) {
         no_data_reason: null,
         submitted_lot_present: null,
         exact_match_reason: null,
+        exact_reject_reason: null,
         exact_lot_column_used: null,
         winning_median_price_per_m2: null,
       };
@@ -1083,6 +1084,10 @@ export async function GET(request: NextRequest) {
       console.log("[FR_EXACT] lot_column_used=" + String(exactPrimaryLotColumn ?? "none"));
       console.log("[FR_EXACT] lot_like_schema_columns=" + JSON.stringify(lotLikeColsFromSchema));
 
+      // Align with `normalizeStreetForDetection`: strip voie prefixes on the table side so
+      // BAN "RUE …" matches facts "…" and vice versa.
+      const frBqStreetMatchSql = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|ROUTE|IMPASSE)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%'))`;
+
       const exactQuery = `
         SELECT
           *
@@ -1090,7 +1095,7 @@ export async function GET(request: NextRequest) {
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
-          AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
+          AND ${frBqStreetMatchSql}
           AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         LIMIT 50
       `;
@@ -1221,11 +1226,23 @@ export async function GET(request: NextRequest) {
         return tokens;
       };
 
+      /** Facts row has a non-null unit_number (only then do we enforce submitted lot vs row). */
+      const primaryUnitNumberRaw = (r: Record<string, unknown>): string | null => {
+        const un = (r as any).unit_number;
+        if (un === null || un === undefined) return null;
+        const s = typeof un === "number" ? String(un) : String(un).trim();
+        return s === "" ? null : s;
+      };
+
       const exactMatchingRows = !exactLotToken
         ? []
-        : (exactRows as Array<Record<string, unknown>>).filter((r) =>
-            extractLotTokensFromRow(r).some((t) => t === exactLotToken)
-          );
+        : (exactRows as Array<Record<string, unknown>>).filter((r) => {
+            const tokens = extractLotTokensFromRow(r);
+            // Building-level row: no unit_number and no resolvable lot tokens — do not reject
+            // just because the user submitted a lot (e.g. cadastral lot ≠ apartment unit).
+            if (primaryUnitNumberRaw(r) == null && tokens.length === 0) return true;
+            return tokens.some((t) => t === exactLotToken);
+          });
 
       const exactApartmentRowsCount = exactMatchingRows.length;
       const exactUsableRowsCount = exactMatchingRows.filter((r) => {
@@ -1255,7 +1272,7 @@ export async function GET(request: NextRequest) {
         const sampleTokens = sample ? extractLotTokensFromRow(sample) : [];
         console.log("[FR_EXACT] sample_row_lot_tokens=" + JSON.stringify(sampleTokens));
         exactMatchReason =
-          "address_rows_exist_but_no_lot_column_value_matches_submitted_token_" + String(exactLotToken);
+          "address_rows_exist_but_no_row_passed_lot_filter_for_token_" + String(exactLotToken);
       } else if (exactUsableRowsCount === 0) {
         exactMatchReason = "lot_rows_matched_but_missing_usable_surface_m2_or_price_per_m2";
       } else {
@@ -1285,6 +1302,31 @@ export async function GET(request: NextRequest) {
         return db.localeCompare(da);
       })[0];
 
+      const logRowForFrExact =
+        (usableExactRows.length > 0 ? usableExactRows[0] : null) ??
+        (exactMatchingRows.length > 0 ? exactMatchingRows[0] : null) ??
+        ((exactRows as Array<Record<string, unknown>>)[0] ?? null);
+      const factStreetRawForLog = logRowForFrExact ? String((logRowForFrExact as any).street ?? "") : "";
+      console.log("[FR_EXACT] normalized_ban_street=" + String(streetNormalizedDet || ""));
+      console.log(
+        "[FR_EXACT] normalized_fact_street=" +
+          (factStreetRawForLog ? normalizeStreetForDetection(factStreetRawForLog) : "—")
+      );
+      console.log(
+        "[FR_EXACT] matched_house_number=" +
+          (logRowForFrExact ? String((logRowForFrExact as any).house_number ?? "") : "—")
+      );
+      {
+        const un = logRowForFrExact ? (logRowForFrExact as any).unit_number : undefined;
+        const unLog =
+          !logRowForFrExact
+            ? "—"
+            : un === null || un === undefined || String(un).trim() === ""
+              ? "null"
+              : String(un);
+        console.log("[FR_EXACT] matched_unit_number=" + unLog);
+      }
+
       if (exactBest) {
         const surface = parseMaybeDecimal((exactBest as any).surface_m2) ?? 0;
         const pricePerM2 = parseMaybeDecimal((exactBest as any).price_per_m2) ?? 0;
@@ -1294,6 +1336,8 @@ export async function GET(request: NextRequest) {
         const hasEstimated = estimated != null;
         if (hasEstimated) {
           const winningSourceLabel = detectClass === "apartment" ? "Exact apartment" : "Exact property";
+          frRuntimeDebug.exact_reject_reason = "";
+          console.log("[FR_EXACT] exact_reject_reason=");
           console.log("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "exact",
             winningSourceLabel,
@@ -1347,6 +1391,25 @@ export async function GET(request: NextRequest) {
         // If the row exists but we couldn't compute an estimated value, continue the ladder.
       }
 
+      {
+        let frExactRejectReason: string;
+        if (exactBest) {
+          frExactRejectReason = "matched_row_but_could_not_compute_total_estimate";
+        } else if (!exactLotToken) {
+          frExactRejectReason = "skipped_apartment_exact_no_submitted_lot_token";
+        } else if (rawExactHouseNumberRowCount === 0) {
+          frExactRejectReason = "no_property_latest_facts_rows_for_address_key";
+        } else if (exactApartmentRowsCount === 0) {
+          frExactRejectReason = "lot_or_unit_filter_removed_all_rows";
+        } else if (exactUsableRowsCount === 0) {
+          frExactRejectReason = "no_usable_surface_m2_or_price_per_m2_after_lot_filter";
+        } else {
+          frExactRejectReason = "no_usable_exact_best_after_sort";
+        }
+        frRuntimeDebug.exact_reject_reason = frExactRejectReason;
+        console.log("[FR_EXACT] exact_reject_reason=" + frExactRejectReason);
+      }
+
       // Same building fallback (when unit/lot was provided but exact unit match is missing):
       // Uses property_latest_facts with the same address key but without unit_number filtering.
       const MIN_SAME_BUILDING_USABLE_ROWS = 2;
@@ -1376,7 +1439,7 @@ export async function GET(request: NextRequest) {
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
             AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
-            AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
+            AND ${frBqStreetMatchSql}
             AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
           LIMIT 50
         `;
@@ -1515,7 +1578,7 @@ export async function GET(request: NextRequest) {
         WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
           AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
           AND TRIM(CAST(postcode AS STRING)) = TRIM(CAST(@postcode AS STRING))
-          AND REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', @street_normalized, '%')
+          AND ${frBqStreetMatchSql}
           AND (@property_type = "" OR LOWER(TRIM(property_type)) = LOWER(TRIM(@property_type)))
         LIMIT 20
       `;
