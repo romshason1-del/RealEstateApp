@@ -1,5 +1,7 @@
 export type FranceResultType =
   | "exact_apartment"
+  /** True house match: property_type house-like, no unit_number required */
+  | "exact_house"
   /** Address/house match from property_latest_facts without unit_number evidence for the submitted lot */
   | "exact_address"
   | "similar_apartment_same_building"
@@ -13,7 +15,7 @@ export type FranceResultType =
   | "comparables_only"
   | "no_result";
 
-export type FranceConfidence = "high" | "medium_high" | "medium" | "low_medium" | "low";
+export type FranceConfidence = "very_high" | "high" | "medium_high" | "medium" | "low_medium" | "low";
 
 export type FranceNormalizedProperty = {
   transactionDate?: string | null;

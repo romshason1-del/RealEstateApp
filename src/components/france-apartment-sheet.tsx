@@ -105,7 +105,7 @@ export function FranceApartmentSheet({
     const d = data as Record<string, unknown>;
     const rd = d.fr_runtime_debug as Record<string, unknown> | undefined;
     const ws = String(rd?.winning_step ?? "");
-    if (ws !== "exact_unit" && ws !== "exact_address") return;
+    if (ws !== "exact_unit" && ws !== "exact_address" && ws !== "exact_house") return;
     const fv = d.fr_valuation_display as Record<string, unknown> | undefined;
     const fr = d.fr as { property?: { transactionValue?: unknown } } | undefined;
     const uiInput =
@@ -180,7 +180,7 @@ export function FranceApartmentSheet({
     const r = d as any;
     if (r.data_source !== "properties_france") return false;
     const rt = r.fr?.resultType as string | undefined;
-    if (rt === "exact_apartment" || rt === "exact_address") return true;
+    if (rt === "exact_apartment" || rt === "exact_address" || rt === "exact_house") return true;
     return r.result_level === "exact_property" && r.property_result?.value_level === "property-level";
   };
 
@@ -195,6 +195,7 @@ export function FranceApartmentSheet({
     switch (rt) {
       case "exact_apartment":
       case "exact_address":
+      case "exact_house":
         return 5;
       case "similar_apartment_same_building":
         return 4;
@@ -343,6 +344,7 @@ export function FranceApartmentSheet({
     const rt = normalized?.resultType;
     if (rt === "exact_apartment") return isHouseLikeUI ? "Exact property match" : "Exact lot match";
     if (rt === "exact_address") return "Exact address match";
+    if (rt === "exact_house") return "Exact house match";
     if (rt === "similar_apartment_same_building")
       return isHouseLikeUI ? "Similar house in this building" : "Similar apartment in this building";
     if (rt === "building_similar_unit") return "Similar apartments in this building";
@@ -363,6 +365,7 @@ export function FranceApartmentSheet({
     const rt = normalized?.resultType;
     if (rt === "exact_apartment") return "Last recorded transaction";
     if (rt === "exact_address") return "Address-level transaction";
+    if (rt === "exact_house") return "Last recorded transaction";
     if (rt === "similar_apartment_same_building") return "Similar apartment transaction";
     if (rt === "building_similar_unit") return "Building apartment estimate";
     if (rt === "building_level" || rt === "building_fallback") return "Building average";
@@ -435,6 +438,9 @@ export function FranceApartmentSheet({
 
   const badge = React.useMemo(() => {
     if (phase === "exact_apartment_match_state") {
+      if (normalized?.resultType === "exact_house") {
+        return { label: "Exact house match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+      }
       if (normalized?.resultType === "exact_address") {
         return { label: "Exact address match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
       }
@@ -637,6 +643,8 @@ export function FranceApartmentSheet({
               ? "Exact apartment"
               : (normalized as any)?.resultType === "exact_address"
                 ? "Exact address match"
+                : (normalized as any)?.resultType === "exact_house"
+                  ? "Exact house match"
               : (normalized as any)?.resultType === "building_level"
                 ? "Similar properties in this building"
                 : finalStreetAvgMessage ?? "No reliable data found";
@@ -646,6 +654,8 @@ export function FranceApartmentSheet({
           ? "exact_unit"
           : (normalized as any)?.resultType === "exact_address"
             ? "exact_address"
+            : (normalized as any)?.resultType === "exact_house"
+              ? "exact_house"
           : finalStreetAvgMessage === "Similar properties on same street"
             ? "street_fallback"
             : finalStreetAvgMessage === "Similar properties in same commune"
@@ -719,6 +729,8 @@ export function FranceApartmentSheet({
               ? "exact_unit"
               : fr.resultType === "exact_address"
                 ? "exact_address"
+                : fr.resultType === "exact_house"
+                  ? "exact_house"
               : fr.resultType === "building_level"
                 ? "building_level"
                 : fr.resultType === "nearby_comparable"
@@ -980,6 +992,7 @@ export function FranceApartmentSheet({
       const ws = winningStepStr;
       if (ws === "exact_unit") return "Based on exact property match";
       if (ws === "exact_address") return "Based on exact address match";
+      if (ws === "exact_house") return "Based on exact house match";
       if (ws === "building_level" || ws === "building_fallback")
         return "Based on similar properties in this building";
       if (ws === "building_similar_unit") return "Based on similar apartments in this building";
@@ -987,6 +1000,7 @@ export function FranceApartmentSheet({
       if (ws === "commune_fallback") return "Based on similar properties in the same commune";
       if (fr?.resultType === "exact_apartment") return "Based on exact property match";
       if (fr?.resultType === "exact_address") return "Based on exact address match";
+      if (fr?.resultType === "exact_house") return "Based on exact house match";
       if (fr?.resultType === "building_level" || fr?.resultType === "building_fallback")
         return "Based on similar properties in this building";
       if (fr?.resultType === "building_similar_unit") return "Based on similar apartments in this building";
@@ -1126,7 +1140,7 @@ export function FranceApartmentSheet({
       if (isLoadingNow) return "—";
       const amt = lastTxAmountPositive;
       if (
-        (fr?.resultType === "exact_apartment" || fr?.resultType === "exact_address") &&
+        (fr?.resultType === "exact_apartment" || fr?.resultType === "exact_address" || fr?.resultType === "exact_house") &&
         !isNoResult &&
         amt != null &&
         referenceSaleValue != null

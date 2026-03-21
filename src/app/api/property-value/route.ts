@@ -486,6 +486,9 @@ export async function GET(request: NextRequest) {
         exact_address_row_count: null as number | null,
         building_similar_unit_candidates_count: null as number | null,
         building_similar_unit_after_filters_count: null as number | null,
+        exact_house_row_count: null as number | null,
+        exact_house_usable_count: null as number | null,
+        exact_house_reject_reason: null as string | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -701,7 +704,7 @@ export async function GET(request: NextRequest) {
           .replace(/\s+/g, " ")
           .trim();
 
-        const prefixes = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "ROUTE", "IMPASSE"];
+        const prefixes = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "CHE", "ROUTE", "IMPASSE", "IMP", "ALLEE", "ALL"];
         const prefixRegex = new RegExp(`^(?:${prefixes.join("|")})\\.?\\s+`, "i");
         const cleaned = unified.replace(prefixRegex, "").replace(/\s+/g, " ").trim();
         return cleaned;
@@ -922,6 +925,9 @@ export async function GET(request: NextRequest) {
       });
       console.log("[FR_FLOW] ban_matched=" + String(Boolean(frRuntimeDebug.ban_match_found)));
       console.log("[FR_STEP] ban_lookup_done");
+
+      console.log("[FR_ADDR] normalized_ban_street=" + String(streetNormalizedDet || ""));
+      console.log("[FR_ADDR] normalized_house_number=" + String(houseNumberNorm || ""));
 
       const getBool = (obj: Record<string, unknown>, keys: string[]): boolean => {
         for (const k of keys) {
@@ -1177,7 +1183,7 @@ export async function GET(request: NextRequest) {
 
       // Align with `normalizeStreetForDetection`: strip voie prefixes on the table side so
       // BAN "RUE …" matches facts "…" and vice versa.
-      const frBqStreetMatchSql = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|ROUTE|IMPASSE)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%'))`;
+      const frBqStreetMatchSql = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%'))`;
 
       const exactQuery = `
         SELECT
@@ -1356,6 +1362,88 @@ export async function GET(request: NextRequest) {
         return sorted[0];
       };
 
+      const isHouseLikePropertyType = (r: Record<string, unknown>): boolean => {
+        const pt = String((r as any).property_type ?? "").trim().toLowerCase();
+        if (!pt) return false;
+        return /maison|house|maison individuelle|villa|pavillon|maisonette/i.test(pt);
+      };
+
+      if (detectClass === "house" && rawExactHouseNumberRowCount > 0) {
+        const exactHouseRows = (exactRows as Array<Record<string, unknown>>).filter(isHouseLikePropertyType);
+        const exactHouseUsable = exactHouseRows.filter(rowUsableForExact);
+        frRuntimeDebug.exact_house_row_count = exactHouseRows.length;
+        frRuntimeDebug.exact_house_usable_count = exactHouseUsable.length;
+        console.log("[FR_HOUSE] exact_house_row_count=" + String(exactHouseRows.length));
+        console.log("[FR_HOUSE] exact_house_usable_count=" + String(exactHouseUsable.length));
+
+        if (exactHouseUsable.length > 0) {
+          const houseBest = sortExactCandidates(exactHouseUsable);
+          if (houseBest) {
+            const surface = parseMaybeDecimal((houseBest as any).surface_m2) ?? 0;
+            const pricePerM2Euro = frPropertyLatestFactsMoneyToEuros((houseBest as any).price_per_m2) ?? 0;
+            const lastSaleEuro = frPropertyLatestFactsMoneyToEuros((houseBest as any).last_sale_price) ?? 0;
+            const estimated =
+              Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0
+                ? Math.round(surface * pricePerM2Euro)
+                : null;
+            frRuntimeDebug.property_latest_facts_money_divisor = 1000;
+            frRuntimeDebug.winning_step = "exact_house";
+            frRuntimeDebug.winning_source_label = "Exact house match";
+            frRuntimeDebug.has_surface_for_estimate = surface != null && surface > 0;
+            frRuntimeDebug.chosen_surface_value = surface;
+            frRuntimeDebug.winning_median_price_per_m2 =
+              Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null;
+            return frReturn(
+              {
+                address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+                data_source: "properties_france",
+                fr_detect: detectClass,
+                property_result: {
+                  exact_value: estimated,
+                  exact_value_message: null,
+                  value_level: "property-level",
+                  last_transaction: {
+                    amount: lastSaleEuro,
+                    date: (houseBest as any).last_sale_date ?? null,
+                    message: lastSaleEuro > 0 ? undefined : "No recent transaction available",
+                  },
+                  street_average: null,
+                  street_average_message: "Exact house match",
+                  livability_rating: "FAIR",
+                },
+                fr: emptyFranceResponse({
+                  success: true,
+                  resultType: "exact_house" as any,
+                  confidence: "very_high" as any,
+                  requestedLot: null,
+                  normalizedLot: null,
+                  property: {
+                    transactionDate: (houseBest as any).last_sale_date ?? null,
+                    transactionValue: lastSaleEuro > 0 ? lastSaleEuro : null,
+                    pricePerSqm: Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null,
+                    surfaceArea: Number.isFinite(surface) && surface > 0 ? surface : null,
+                    rooms: null,
+                    propertyType: String((houseBest as any).property_type ?? "Maison"),
+                    building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                    postalCode: postcodeNorm || null,
+                    commune: cityNorm || null,
+                  },
+                  buildingStats: null,
+                  comparables: [],
+                  matchExplanation: "Exact house match",
+                }),
+              },
+              "valuation_response"
+            );
+          }
+        }
+
+        const exactHouseRejectReason =
+          exactHouseRows.length === 0 ? "no_house_type_rows_at_address" : "house_rows_missing_surface_or_ppm2";
+        frRuntimeDebug.exact_house_reject_reason = exactHouseRejectReason;
+        console.log("[FR_HOUSE] exact_house_reject_reason=" + exactHouseRejectReason);
+      }
+
       let exactTier: "EXACT_UNIT" | "EXACT_ADDRESS" | "NONE" = "NONE";
       let exactMatchingRows: Array<Record<string, unknown>> = [];
       let usableUnitRows: Array<Record<string, unknown>> = [];
@@ -1451,11 +1539,12 @@ export async function GET(request: NextRequest) {
         (exactMatchingRows.length > 0 ? exactMatchingRows[0] : null) ??
         ((exactRows as Array<Record<string, unknown>>)[0] ?? null);
       const factStreetRawForLog = logRowForFrExact ? String((logRowForFrExact as any).street ?? "") : "";
+      const normalizedFactStreet = factStreetRawForLog ? normalizeStreetForDetection(factStreetRawForLog) : "";
+      console.log("[FR_ADDR] normalized_ban_street=" + String(streetNormalizedDet || ""));
+      console.log("[FR_ADDR] normalized_fact_street=" + String(normalizedFactStreet || "—"));
+      console.log("[FR_ADDR] normalized_house_number=" + String(houseNumberNorm || ""));
       console.log("[FR_EXACT] normalized_ban_street=" + String(streetNormalizedDet || ""));
-      console.log(
-        "[FR_EXACT] normalized_fact_street=" +
-          (factStreetRawForLog ? normalizeStreetForDetection(factStreetRawForLog) : "—")
-      );
+      console.log("[FR_EXACT] normalized_fact_street=" + String(normalizedFactStreet || "—"));
       console.log(
         "[FR_EXACT] matched_house_number=" +
           (logRowForFrExact ? String((logRowForFrExact as any).house_number ?? "") : "—")
@@ -1606,6 +1695,14 @@ export async function GET(request: NextRequest) {
               : medSurfCohort != null && Number.isFinite(medSurfCohort)
                 ? Math.abs(best.surf - medSurfCohort)
                 : null;
+
+          const recencyTs = best.dateStr ? new Date(best.dateStr).getTime() : 0;
+          const rankingScore = (selectedSurfaceDiff ?? 0) * 1000 + (recencyTs > 0 ? 1e15 - recencyTs : 0);
+
+          console.log("[FR_SURFACE] chosen_surface_value=" + String(estSurf ?? "null"));
+          console.log("[FR_SURFACE] candidate_surface=" + String(best.surf));
+          console.log("[FR_SURFACE] surface_diff=" + String(selectedSurfaceDiff ?? "null"));
+          console.log("[FR_SURFACE] ranking_score=" + String(rankingScore));
 
           console.log("[FR_BUILDING] selected_surface=" + String(estSurf));
           console.log("[FR_BUILDING] selected_surface_diff=" + String(selectedSurfaceDiff ?? "null"));

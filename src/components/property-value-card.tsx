@@ -492,7 +492,7 @@ export function PropertyValueCard({
     };
     if (r.data_source !== "properties_france") return false;
     const rt = r.fr?.resultType;
-    if (rt === "exact_apartment" || rt === "exact_address") return true;
+    if (rt === "exact_apartment" || rt === "exact_address" || rt === "exact_house") return true;
     return r.result_level === "exact_property" && r.property_result?.value_level === "property-level";
   }, []);
 
