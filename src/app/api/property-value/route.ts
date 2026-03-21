@@ -573,6 +573,8 @@ export async function GET(request: NextRequest) {
         fr_detect_multi_unit_source: null as "ban" | "source" | "building_intel" | "none" | null,
         fr_detect_ban_strength_used: null as boolean | null,
         fr_should_prompt_lot: null as boolean | null,
+        fr_label_safety_override: null as boolean | null,
+        fr_confidence_adjustment_reason: null as string | null,
         exact_rows_count: null,
         exact_usable_rows_count: null,
         building_rows_count: null,
@@ -676,9 +678,48 @@ export async function GET(request: NextRequest) {
             pr?.exact_value_message ??
             ""
         ).trim();
-        const confidence = String((frObj?.confidence as string) ?? "low");
+        let confidence = String((frObj?.confidence as string) ?? "low");
+
+        const banStrengthPassed = frRuntimeDebug.fr_ban_similarity_threshold_passed === true;
+        const winningStep = String(frRuntimeDebug.winning_step ?? "");
+        const isBuildingLevelStep =
+          winningStep === "building_level" ||
+          winningStep === "building_similar_unit" ||
+          winningStep === "building_profile";
+        const labelSaysInBuilding =
+          /in this building|similar properties in this building/i.test(winning_source_label);
+        const needsLabelSafetyOverride =
+          !banStrengthPassed && isBuildingLevelStep && labelSaysInBuilding;
+        const needsConfidenceDowngrade =
+          !banStrengthPassed && isBuildingLevelStep && /high|very_high/i.test(confidence);
+
+        const adjustmentReasons: string[] = [];
+        frRuntimeDebug.fr_label_safety_override = needsLabelSafetyOverride;
+        if (needsLabelSafetyOverride) {
+          winning_source_label = "Based on similar properties in the area";
+          adjustmentReasons.push("weak_ban_label_safe");
+        }
+        if (needsConfidenceDowngrade) {
+          confidence = /very_high/i.test(confidence) ? "medium" : "medium";
+          adjustmentReasons.push("weak_ban_confidence_downgraded");
+        }
+        frRuntimeDebug.fr_confidence_adjustment_reason =
+          adjustmentReasons.length > 0 ? adjustmentReasons.join(";") : null;
 
         let outPayload: Record<string, unknown> = { ...payload };
+        if (needsLabelSafetyOverride || needsConfidenceDowngrade) {
+          if (outPayload.fr && typeof outPayload.fr === "object") {
+            const frUpdate: Record<string, unknown> = { confidence };
+            if (needsLabelSafetyOverride) {
+              frUpdate.matchExplanation = "Based on similar properties in the area.";
+            }
+            outPayload.fr = { ...(outPayload.fr as Record<string, unknown>), ...frUpdate };
+          }
+          if (needsLabelSafetyOverride && outPayload.property_result && typeof outPayload.property_result === "object") {
+            const pr = outPayload.property_result as Record<string, unknown>;
+            outPayload.property_result = { ...pr, street_average_message: "Based on similar properties in the area." };
+          }
+        }
         const hasWinningStep = frRuntimeDebug.winning_step != null && String(frRuntimeDebug.winning_step) !== "";
 
         if (tag === "valuation_response") {
