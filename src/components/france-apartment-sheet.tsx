@@ -11,7 +11,6 @@ import {
   coerceFiniteNumber,
   coerceNullableString,
   coercePositiveNumber,
-  formatFranceDateLabelFromUnknown,
   formatFranceEuroPerSqmFromUnknown,
   formatFranceEuroTotal,
   normalizeFrancePricePerSqmForDisplay,
@@ -835,6 +834,69 @@ export function FranceApartmentSheet({
       }
     };
 
+    /**
+     * Text between "•" and "reference sale" on the France result card. Only primitives: unwrap
+     * value / text / label / date (never `String(object)` → "[object Object]").
+     */
+    function referenceSaleDateLabelFromRaw(raw: unknown): string | null {
+      const formatEnGb = (d: Date): string | null => {
+        if (Number.isNaN(d.getTime())) return null;
+        const lab = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+        return typeof lab === "string" && lab.trim() ? lab.trim() : null;
+      };
+
+      const step = (v: unknown, depth: number): string | null => {
+        if (depth > 14) return null;
+        if (v === null || v === undefined) return null;
+        if (typeof v === "string") {
+          const t = v.trim();
+          return t.length ? t : null;
+        }
+        if (typeof v === "number" && Number.isFinite(v)) return String(v);
+        if (typeof v !== "object" || Array.isArray(v)) return null;
+        const o = v as Record<string, unknown>;
+        if ("value" in o && o.value !== undefined) return step(o.value, depth + 1);
+        if ("text" in o && o.text !== undefined) return step(o.text, depth + 1);
+        if ("label" in o && o.label !== undefined) return step(o.label, depth + 1);
+        if ("date" in o && o.date !== undefined) return step(o.date, depth + 1);
+        if ("year" in o && "month" in o && "day" in o) {
+          const y = step(o.year, depth + 1);
+          const mo = step(o.month, depth + 1);
+          const day = step(o.day, depth + 1);
+          if (y != null && mo != null && day != null) {
+            const ys = Number(y);
+            const ms = Number(mo);
+            const ds = Number(day);
+            if ([ys, ms, ds].every((n) => Number.isFinite(n))) {
+              return `${Math.trunc(ys)}-${String(Math.trunc(ms)).padStart(2, "0")}-${String(Math.trunc(ds)).padStart(2, "0")}`;
+            }
+          }
+        }
+        return null;
+      };
+
+      const prim = step(raw, 0);
+      if (!prim) return null;
+      const d = new Date(prim);
+      const label = formatEnGb(d);
+      if (label) return label;
+      const n = Number(prim.replace(/\s/g, ""));
+      if (Number.isFinite(n) && n > 1_000_000_000) {
+        const ms = n > 1e12 ? n : n * 1000;
+        const d2 = new Date(ms);
+        return formatEnGb(d2);
+      }
+      return null;
+    }
+
+    const referenceSaleValue: string | null = isLoadingNow
+      ? null
+      : referenceSaleDateLabelFromRaw(fr?.property?.transactionDate as unknown);
+
+    if (!isLoadingNow && fr?.resultType === "building_similar_unit") {
+      console.log("[FR_UI_REF_SALE]", referenceSaleValue, typeof referenceSaleValue);
+    }
+
     const title = isLoadingNow
       ? "Searching DVF…"
       : badge?.label ??
@@ -1057,16 +1119,27 @@ export function FranceApartmentSheet({
     const lastTxAmountPositive = !isLoadingNow
       ? coercePositiveNumber(fr?.property?.transactionValue as unknown)
       : null;
-    /** Never interpolate a raw API object into JSX (defensive; formatter should already return string | null). */
-    const lastTxDateLabelRaw = !isLoadingNow
-      ? formatFranceDateLabelFromUnknown(fr?.property?.transactionDate as unknown)
-      : null;
-    const lastTxDateLabel =
-      typeof lastTxDateLabelRaw === "string" && lastTxDateLabelRaw.trim().length > 0
-        ? lastTxDateLabelRaw.trim()
-        : null;
 
-    const dateText = isLoadingNow ? "—" : lastTxDateLabel ?? "—";
+    const dateText = isLoadingNow ? "—" : referenceSaleValue ?? "—";
+
+    const lastTransactionSummaryLine = (() => {
+      if (isLoadingNow) return "—";
+      const amt = lastTxAmountPositive;
+      if (
+        (fr?.resultType === "exact_apartment" || fr?.resultType === "exact_address") &&
+        !isNoResult &&
+        amt != null &&
+        referenceSaleValue != null
+      ) {
+        return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
+      }
+      if (fr?.resultType === "building_similar_unit" && !isNoResult && amt != null) {
+        return referenceSaleValue != null
+          ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue} reference sale`
+          : `${formatFranceEuroTotal(amt)} • reference sale`;
+      }
+      return "No exact recent transaction available";
+    })();
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
@@ -1207,18 +1280,7 @@ export function FranceApartmentSheet({
                   Last transaction
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
-                  {isLoadingNow
-                    ? "—"
-                    : (fr?.resultType === "exact_apartment" || fr?.resultType === "exact_address") &&
-                        !isNoResult &&
-                        lastTxAmountPositive != null &&
-                        lastTxDateLabel
-                      ? `${formatFranceEuroTotal(lastTxAmountPositive)} • ${lastTxDateLabel}`
-                      : fr?.resultType === "building_similar_unit" && !isNoResult && lastTxAmountPositive != null
-                        ? lastTxDateLabel
-                          ? `${formatFranceEuroTotal(lastTxAmountPositive)} • ${lastTxDateLabel} reference sale`
-                          : `${formatFranceEuroTotal(lastTxAmountPositive)} • reference sale`
-                        : "No exact recent transaction available"}
+                  {lastTransactionSummaryLine}
                 </div>
               </div>
 
