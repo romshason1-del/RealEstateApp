@@ -1346,6 +1346,7 @@ export function FranceApartmentSheet({
                       <div>building_usable_rows_count: {toDebugStr(rd?.building_usable_rows_count)}</div>
                       <div>building_similar_unit_candidates_count: {toDebugStr(rd?.building_similar_unit_candidates_count)}</div>
                       <div>building_similar_unit_after_filters_count: {toDebugStr(rd?.building_similar_unit_after_filters_count)}</div>
+                      <div>building_similar_unit_reject_reason: {toDebugStr(rd?.building_similar_unit_reject_reason)}</div>
                       <div>street_rows_count: {toDebugStr(rd?.street_rows_count)}</div>
                       <div>street_usable_rows_count: {toDebugStr(rd?.street_usable_rows_count)}</div>
                       <div>commune_rows_count: {toDebugStr(rd?.commune_rows_count)}</div>

@@ -489,6 +489,7 @@ export async function GET(request: NextRequest) {
         exact_house_row_count: null as number | null,
         exact_house_usable_count: null as number | null,
         exact_house_reject_reason: null as string | null,
+        building_similar_unit_reject_reason: null as string | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -1569,7 +1570,12 @@ export async function GET(request: NextRequest) {
         chosenSurfaceValueForRanking: number | null;
       }): Promise<ReturnType<typeof frReturn> | null> => {
         try {
-          if (!houseNumberNorm || !postcodeNorm) return null;
+          if (!houseNumberNorm || !postcodeNorm) {
+            const rr = !houseNumberNorm ? "missing_house_number" : "missing_postcode";
+            frRuntimeDebug.building_similar_unit_reject_reason = rr;
+            console.log("[FR_BUILDING] reject_reason=" + rr);
+            return null;
+          }
           console.log("[FR_FLOW] ladder_step_started=BUILDING_SIMILAR_UNIT");
           console.log("[FR_STEP] building_similar_unit_lookup_start");
           const similarUnitQuery = `
@@ -1641,6 +1647,7 @@ export async function GET(request: NextRequest) {
           console.log("[FR_BUILDING] after_filters_count=" + String(afterFilters));
 
           if (afterFilters === 0) {
+            frRuntimeDebug.building_similar_unit_reject_reason = "no_candidates_after_quality_filters";
             console.log("[FR_BUILDING] reject_reason=no_candidates_after_quality_filters");
             return null;
           }
@@ -1681,13 +1688,18 @@ export async function GET(request: NextRequest) {
           });
 
           const best = sorted[0];
-          if (!best) return null;
+          if (!best) {
+            frRuntimeDebug.building_similar_unit_reject_reason = "no_best_after_sort";
+            console.log("[FR_BUILDING] reject_reason=no_best_after_sort");
+            return null;
+          }
 
           const estSurf = validInputSurfaceM2 ?? p.medianSurfaceM2ForFallback ?? best.surf;
+          // When chosen_surface_value is missing, use robust median building price_per_m2 for estimate.
+          const ppmForEstimate =
+            p.chosenSurfaceValueForRanking != null ? best.ppmEuro : (medianPpmEuro > 0 ? medianPpmEuro : best.ppmEuro);
           const estimated =
-            Number.isFinite(estSurf) && estSurf > 0 && best.ppmEuro > 0
-              ? Math.round(estSurf * best.ppmEuro)
-              : null;
+            Number.isFinite(estSurf) && estSurf > 0 && ppmForEstimate > 0 ? Math.round(estSurf * ppmForEstimate) : null;
 
           const selectedSurfaceDiff =
             targetSurface != null && Number.isFinite(targetSurface)
@@ -1699,7 +1711,7 @@ export async function GET(request: NextRequest) {
           const recencyTs = best.dateStr ? new Date(best.dateStr).getTime() : 0;
           const rankingScore = (selectedSurfaceDiff ?? 0) * 1000 + (recencyTs > 0 ? 1e15 - recencyTs : 0);
 
-          console.log("[FR_SURFACE] chosen_surface_value=" + String(estSurf ?? "null"));
+          console.log("[FR_SURFACE] chosen_surface_value=" + String(targetSurface ?? "null"));
           console.log("[FR_SURFACE] candidate_surface=" + String(best.surf));
           console.log("[FR_SURFACE] surface_diff=" + String(selectedSurfaceDiff ?? "null"));
           console.log("[FR_SURFACE] ranking_score=" + String(rankingScore));
@@ -1709,11 +1721,12 @@ export async function GET(request: NextRequest) {
           console.log("[FR_BUILDING] selected_sale_date=" + String(best.dateStr ?? "null"));
           console.log("[FR_BUILDING] selected_price_per_m2=" + String(best.ppmEuro));
 
+          frRuntimeDebug.building_similar_unit_reject_reason = null;
           frRuntimeDebug.winning_step = "building_similar_unit";
           frRuntimeDebug.winning_source_label = FR_LABEL_BUILDING_SIMILAR_UNIT;
           frRuntimeDebug.has_surface_for_estimate = estSurf != null && estSurf > 0;
           frRuntimeDebug.chosen_surface_value = estSurf;
-          frRuntimeDebug.winning_median_price_per_m2 = best.ppmEuro;
+          frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
           frRuntimeDebug.property_latest_facts_money_divisor = 1000;
 
           console.log("[FR_DEBUG] winning_valuation_step", {
@@ -1739,7 +1752,7 @@ export async function GET(request: NextRequest) {
                   message:
                     best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row",
                 },
-                street_average: best.ppmEuro > 0 ? best.ppmEuro : null,
+                street_average: ppmForEstimate > 0 ? ppmForEstimate : null,
                 street_average_message: FR_LABEL_BUILDING_SIMILAR_UNIT,
                 livability_rating: "FAIR",
               },
@@ -1752,7 +1765,7 @@ export async function GET(request: NextRequest) {
                 property: {
                   transactionDate: best.dateStr,
                   transactionValue: best.lastSaleEuro > 0 ? best.lastSaleEuro : null,
-                  pricePerSqm: best.ppmEuro,
+                  pricePerSqm: ppmForEstimate > 0 ? ppmForEstimate : best.ppmEuro,
                   surfaceArea: Number.isFinite(estSurf) && estSurf > 0 ? estSurf : null,
                   rooms: null,
                   propertyType: "Appartement",
@@ -1762,7 +1775,7 @@ export async function GET(request: NextRequest) {
                 },
                 buildingStats: {
                   transactionCount: trimmed.length,
-                  avgPricePerSqm: best.ppmEuro,
+                  avgPricePerSqm: ppmForEstimate > 0 ? ppmForEstimate : best.ppmEuro,
                   avgTransactionValue: estimated,
                 },
                 comparables: [],
@@ -1772,6 +1785,7 @@ export async function GET(request: NextRequest) {
             "valuation_response"
           );
         } catch (err) {
+          frRuntimeDebug.building_similar_unit_reject_reason = "building_similar_unit_query_failed";
           console.error("[FR_BUILDING] building_similar_unit_query_failed", err);
           return null;
         } finally {
