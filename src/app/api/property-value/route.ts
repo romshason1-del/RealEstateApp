@@ -28,6 +28,32 @@ const FR_ERROR_CACHE = new Map<string, { data: Record<string, unknown>; ts: numb
 const FR_ERROR_CACHE_TTL_MS = 60 * 1000;
 const MAX_ADDRESS_LENGTH = 200;
 
+/**
+ * France DVF / BigQuery gold tables store money fields in cents (totals and €/m²).
+ * Use for API JSON only; do not use for row matching / sorting (those stay on raw cents).
+ */
+function frDvfMoneyCentsToEuros(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value / 100 : null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const cleaned = raw.replace(",", ".").replace(/[^\d.-]/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n / 100 : null;
+}
+
+/** Scale sale prices in legacy `building_sales` arrays (cents → euros). */
+function mapFranceBuildingSalesPricesToEuros(sales: unknown[] | undefined | null): Array<Record<string, unknown>> {
+  if (!Array.isArray(sales)) return [];
+  return sales.map((s) => {
+    const row = s as Record<string, unknown>;
+    return {
+      ...row,
+      price: frDvfMoneyCentsToEuros(row.price) ?? 0,
+    };
+  });
+}
+
 function buildCacheKey(
   city: string,
   street: string,
@@ -1021,6 +1047,13 @@ export async function GET(request: NextRequest) {
         return Number.isFinite(n) ? n : null;
       };
 
+      /** Cents → euros for display payloads (uses same parsing as ladder raw reads). */
+      const frDvfCentsToEurosFromRow = (raw: unknown): number | null => {
+        const n = parseMaybeDecimal(raw);
+        if (n == null || !Number.isFinite(n)) return null;
+        return n / 100;
+      };
+
       // Temporary strict runtime SQL diagnostics for France ladder.
       const inspectFranceTable = async (
         ladderStep: "EXACT" | "BUILDING" | "STREET" | "COMMUNE",
@@ -1329,10 +1362,12 @@ export async function GET(request: NextRequest) {
 
       if (exactBest) {
         const surface = parseMaybeDecimal((exactBest as any).surface_m2) ?? 0;
-        const pricePerM2 = parseMaybeDecimal((exactBest as any).price_per_m2) ?? 0;
-        const estimated = Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2) && pricePerM2 > 0
-          ? Math.round(surface * pricePerM2)
-          : null;
+        const pricePerM2Euro = frDvfCentsToEurosFromRow((exactBest as any).price_per_m2) ?? 0;
+        const lastSaleEuro = frDvfCentsToEurosFromRow((exactBest as any).last_sale_price) ?? 0;
+        const estimated =
+          Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0
+            ? Math.round(surface * pricePerM2Euro)
+            : null;
         const hasEstimated = estimated != null;
         if (hasEstimated) {
           const winningSourceLabel = detectClass === "apartment" ? "Exact apartment" : "Exact property";
@@ -1347,7 +1382,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.has_surface_for_estimate = surface != null && surface > 0;
           frRuntimeDebug.chosen_surface_value = surface;
           frRuntimeDebug.winning_median_price_per_m2 =
-            Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null;
+            Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null;
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -1357,9 +1392,9 @@ export async function GET(request: NextRequest) {
               exact_value_message: null,
               value_level: "property-level",
               last_transaction: {
-                amount: Number((exactBest as any).last_sale_price ?? 0) || 0,
+                amount: lastSaleEuro,
                 date: (exactBest as any).last_sale_date ?? null,
-                message: Number((exactBest as any).last_sale_price ?? 0) > 0 ? undefined : "No recent transaction available",
+                message: lastSaleEuro > 0 ? undefined : "No recent transaction available",
               },
               street_average: null,
               street_average_message: detectClass === "apartment" ? "Exact apartment" : "Exact property",
@@ -1373,8 +1408,8 @@ export async function GET(request: NextRequest) {
               normalizedLot: normalizedRequestedLot,
               property: {
                 transactionDate: (exactBest as any).last_sale_date ?? null,
-                transactionValue: Number((exactBest as any).last_sale_price ?? 0) || null,
-                pricePerSqm: Number.isFinite(pricePerM2) && pricePerM2 > 0 ? pricePerM2 : null,
+                transactionValue: lastSaleEuro > 0 ? lastSaleEuro : null,
+                pricePerSqm: Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null,
                 surfaceArea: Number.isFinite(surface) && surface > 0 ? surface : null,
                 rooms: null,
                 propertyType: null,
@@ -1498,7 +1533,8 @@ export async function GET(request: NextRequest) {
           const pricePerM2Values = usablePriceRows.map((r) => parseMaybeDecimal(r.price_per_m2)).filter((v): v is number => v != null && v > 0);
           const medianPricePerM2 = medianNumber(pricePerM2Values);
           if (medianPricePerM2 != null && medianPricePerM2 > 0) {
-            const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2);
+            const medianPricePerM2Euro = medianPricePerM2 / 100;
+            const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2Euro);
             console.log("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
               winningSourceLabel: "Building-level estimate",
@@ -1507,7 +1543,7 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_source_label = "Building-level estimate";
             frRuntimeDebug.has_surface_for_estimate = medianSurfaceM2ForFallback != null;
             frRuntimeDebug.chosen_surface_value = medianSurfaceM2ForFallback;
-            frRuntimeDebug.winning_median_price_per_m2 = medianPricePerM2;
+            frRuntimeDebug.winning_median_price_per_m2 = medianPricePerM2Euro;
             return frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -1533,7 +1569,7 @@ export async function GET(request: NextRequest) {
                   requestedLot: requestedLotNorm,
                   normalizedLot: normalizedRequestedLot,
                   property: null,
-                  buildingStats: { transactionCount: sameBuildingUsableRowsCount, avgPricePerSqm: medianPricePerM2, avgTransactionValue: null },
+                  buildingStats: { transactionCount: sameBuildingUsableRowsCount, avgPricePerSqm: medianPricePerM2Euro, avgTransactionValue: null },
                   comparables: [],
                   matchExplanation: "Building-level estimate (median/average from same building rows).",
                 }),
@@ -1649,9 +1685,11 @@ export async function GET(request: NextRequest) {
           .filter((v): v is number => v != null && v > 0);
         const medianAvgPricePerM2 = medianNumber(avgPriceValues);
         if (medianAvgPricePerM2 == null || !Number.isFinite(medianAvgPricePerM2) || medianAvgPricePerM2 <= 0) return null;
-        const estimated = surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2) : null;
+        const medianAvgPricePerM2Euro = medianAvgPricePerM2 / 100;
+        const estimated =
+          surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2Euro) : null;
         return {
-          avgPricePerM2: medianAvgPricePerM2,
+          avgPricePerM2: medianAvgPricePerM2Euro,
           estimated,
           newestSaleDate:
             streetSaleDateColumn === "latest_sale_date"
@@ -1838,7 +1876,9 @@ export async function GET(request: NextRequest) {
           .filter((v): v is number => v != null && v > 0);
         const medianAvgPricePerM2 = medianNumber(avgPriceValues);
         if (medianAvgPricePerM2 != null && Number.isFinite(medianAvgPricePerM2) && medianAvgPricePerM2 > 0) {
-          const estimated = surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2) : null;
+          const medianAvgPricePerM2Euro = medianAvgPricePerM2 / 100;
+          const estimated =
+            surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2Euro) : null;
           // Avoid forcing "No reliable building value available" when we do not have surface.
           const frResultType = estimated == null ? "nearby_comparable" : "building_level";
           const frConfidence = estimated == null ? "low_medium" : "low";
@@ -1850,7 +1890,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_source_label = fallbackSourceCommune;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
-          frRuntimeDebug.winning_median_price_per_m2 = medianAvgPricePerM2;
+          frRuntimeDebug.winning_median_price_per_m2 = medianAvgPricePerM2Euro;
           console.log(
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
           );
@@ -1867,7 +1907,7 @@ export async function GET(request: NextRequest) {
                 date: null,
                 message: "No exact recent transaction available",
               },
-              street_average: medianAvgPricePerM2,
+              street_average: medianAvgPricePerM2Euro,
             street_average_message:
               surfaceForEstimation == null
                 ? `${fallbackSourceCommune} — comparable pricing available, but exact estimate could not be computed (missing surface).`
@@ -1883,7 +1923,7 @@ export async function GET(request: NextRequest) {
               property: {
                 transactionDate: null,
                 transactionValue: estimated,
-                pricePerSqm: medianAvgPricePerM2,
+                pricePerSqm: medianAvgPricePerM2Euro,
                 surfaceArea: surfaceForEstimation ?? null,
                 rooms: null,
                 propertyType: propertyType,
@@ -2218,6 +2258,8 @@ export async function GET(request: NextRequest) {
       }));
 
       if (result.multipleUnits) {
+        const scaledBuildingSales = mapFranceBuildingSalesPricesToEuros(result.buildingSales ?? []);
+        const averageBuildingEuro = frDvfMoneyCentsToEuros(result.averageBuildingValue) ?? 0;
         const payload = {
           address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
           data_source: "properties_france",
@@ -2226,16 +2268,16 @@ export async function GET(request: NextRequest) {
           result_level: "building",
           match_stage: result.matchStage,
           rows_at_stage: result.rowsAtStage,
-          average_building_value: result.averageBuildingValue ?? 0,
+          average_building_value: averageBuildingEuro,
           unit_count: result.unitCount ?? 0,
-          building_sales: result.buildingSales,
+          building_sales: scaledBuildingSales,
           available_lots: result.availableLots ?? [],
           property_result: {
             exact_value: null,
             exact_value_message: "Multiple units found. Please enter apartment number to see exact value.",
             value_level: "building-level",
             last_transaction: { amount: 0, date: null, message: "No DVF data" },
-            street_average: result.averageBuildingValue ?? null,
+            street_average: frDvfMoneyCentsToEuros(result.averageBuildingValue),
             street_average_message: result.unitCount != null ? (result.unitCount === 1 ? "1 unit in this building" : `Average of ${result.unitCount} units in this building`) : null,
             livability_rating: livabilityRating,
           },
@@ -2285,7 +2327,8 @@ export async function GET(request: NextRequest) {
       // Do not label a building-level payload as exact_property.
       if (exactLotMatched) {
         const lastTx = result.lastTransaction;
-        const exactValue = result.currentValue ?? (lastTx?.value ?? null);
+        const exactValue = frDvfMoneyCentsToEuros(result.currentValue ?? lastTx?.value ?? null);
+        const lastTxAmountEuro = frDvfMoneyCentsToEuros(lastTx?.value) ?? 0;
         const payload = {
           address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
           data_source: "properties_france",
@@ -2304,11 +2347,11 @@ export async function GET(request: NextRequest) {
             exact_value_message: exactValue == null ? "No recorded transaction for this apartment" : null,
             value_level: "property-level" as const,
             last_transaction: {
-              amount: lastTx?.value ?? 0,
+              amount: lastTxAmountEuro,
               date: lastTx?.date ?? null,
-              message: lastTx?.value ? undefined : "No recorded transaction",
+              message: lastTxAmountEuro > 0 ? undefined : "No recorded transaction",
             },
-            street_average: result.areaAverageValue,
+            street_average: frDvfMoneyCentsToEuros(result.areaAverageValue),
             street_average_message: result.areaAverageValue == null ? "No DVF data for this area" : null,
             livability_rating: livabilityRating,
           },
@@ -2362,7 +2405,8 @@ export async function GET(request: NextRequest) {
       }
 
       if (result.apartmentNotMatched || requestedLot) {
-        const buildingVal = result.averageBuildingValue ?? result.currentValue ?? 0;
+        const buildingVal =
+          frDvfMoneyCentsToEuros(result.averageBuildingValue ?? result.currentValue ?? null) ?? 0;
         const payload = {
           address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
           data_source: "properties_france",
@@ -2370,7 +2414,7 @@ export async function GET(request: NextRequest) {
           prompt_for_apartment: true,
           apartment_not_matched: true,
           average_building_value: buildingVal,
-          building_sales: result.buildingSales,
+          building_sales: mapFranceBuildingSalesPricesToEuros(result.buildingSales ?? []),
           available_lots: result.availableLots ?? [],
           match_stage: result.matchStage,
           result_level: "building",
@@ -2381,7 +2425,7 @@ export async function GET(request: NextRequest) {
             exact_value_message: `Apartment/lot ${aptTrimmed} was not found in DVF data. Showing building-level estimate.`,
             value_level: "building-level",
             last_transaction: { amount: 0, date: null, message: "No recorded transaction for this apartment" },
-            street_average: result.areaAverageValue,
+            street_average: frDvfMoneyCentsToEuros(result.areaAverageValue),
             street_average_message: null,
             livability_rating: livabilityRating,
           },
@@ -2473,8 +2517,13 @@ export async function GET(request: NextRequest) {
           resultType === "similar_apartment_same_building" && sim
             ? {
                 transactionDate: sim?.date ?? null,
-                transactionValue: sim?.value ?? null,
-                pricePerSqm: sim?.surface && sim?.value ? Math.round(((sim?.value ?? 0) / (sim?.surface ?? 1)) * 100) / 100 : null,
+                transactionValue: frDvfMoneyCentsToEuros(sim?.value) ?? null,
+                pricePerSqm: (() => {
+                  const s = sim!;
+                  if (s.surface == null || s.value == null) return null;
+                  const v = frDvfMoneyCentsToEuros(s.value) ?? 0;
+                  return v > 0 ? Math.round((v / (s.surface ?? 1)) * 100) / 100 : null;
+                })(),
                 surfaceArea: sim?.surface ?? null,
                 rooms: null,
                 propertyType: sim?.typeLocal ?? null,
@@ -2485,8 +2534,13 @@ export async function GET(request: NextRequest) {
             : resultType === "nearby_comparable" && nearby
               ? {
                   transactionDate: nearby?.date ?? null,
-                  transactionValue: nearby?.value ?? null,
-                  pricePerSqm: nearby?.surface && nearby?.value ? Math.round(((nearby?.value ?? 0) / (nearby?.surface ?? 1)) * 100) / 100 : null,
+                  transactionValue: frDvfMoneyCentsToEuros(nearby?.value) ?? null,
+                  pricePerSqm: (() => {
+                    const n = nearby!;
+                    if (n.surface == null || n.value == null) return null;
+                    const v = frDvfMoneyCentsToEuros(n.value) ?? 0;
+                    return v > 0 ? Math.round((v / (n.surface ?? 1)) * 100) / 100 : null;
+                  })(),
                   surfaceArea: nearby?.surface ?? null,
                   rooms: null,
                   propertyType: nearby?.typeLocal ?? null,
@@ -2664,8 +2718,9 @@ export async function GET(request: NextRequest) {
       }
 
       const lastTx = result.lastTransaction;
-      const exactValue = result.currentValue ?? (lastTx?.value ?? null);
-      const streetAvgDisplay = result.areaAverageValue;
+      const exactValue = frDvfMoneyCentsToEuros(result.currentValue ?? lastTx?.value ?? null);
+      const lastTxAmountEuroDefault = frDvfMoneyCentsToEuros(lastTx?.value) ?? 0;
+      const streetAvgDisplay = frDvfMoneyCentsToEuros(result.areaAverageValue);
       const streetAvgDisplayValue = streetAvgDisplay ?? 0;
       const isBuildingLevel = result.resultLevel === "building";
       const isAreaFallback = result.resultLevel === "commune_fallback" && streetAvgDisplayValue > 0;
@@ -2673,7 +2728,7 @@ export async function GET(request: NextRequest) {
       const matchStageHighEnough = (result.matchStage ?? 0) >= 3;
       const isExactProperty = result.resultLevel === "exact_property";
       const coerceToBuilding = hasRows && matchStageHighEnough && !isExactProperty;
-      const hasExactValue = typeof exactValue === "number" && (exactValue ?? 0) > 0;
+      const hasExactValue = (exactValue ?? 0) > 0;
       const valueLevel = coerceToBuilding
         ? "building-level"
         : isBuildingLevel
@@ -2687,16 +2742,21 @@ export async function GET(request: NextRequest) {
         ? (isAreaFallback ? "No exact match for this address. Showing postcode/area-level data." : "No DVF data for this address")
         : null;
 
+      const averageBuildingEuroCoerced =
+        frDvfMoneyCentsToEuros(
+          result.averageBuildingValue ?? result.currentValue ?? result.areaAverageValue ?? null
+        ) ?? 0;
+
       const payload = {
         address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
         data_source: "properties_france",
         multiple_units: coerceToBuilding,
         result_level: coerceToBuilding ? "building" : result.resultLevel,
-        ...(coerceToBuilding ? { average_building_value: result.averageBuildingValue ?? result.currentValue ?? streetAvgDisplay ?? 0 } : {}),
+        ...(coerceToBuilding ? { average_building_value: averageBuildingEuroCoerced } : {}),
         lot_number: result.lotNumber,
         surface_reelle_bati: result.surfaceReelleBati,
         date_mutation: lastTx?.date ?? null,
-        building_sales: result.buildingSales ?? [],
+        building_sales: mapFranceBuildingSalesPricesToEuros(result.buildingSales ?? []),
         match_stage: result.matchStage,
         rows_at_stage: result.rowsAtStage,
         property_result: {
@@ -2704,9 +2764,9 @@ export async function GET(request: NextRequest) {
           exact_value_message: exactValueMessage,
           value_level: valueLevel,
           last_transaction: {
-            amount: lastTx?.value ?? 0,
+            amount: lastTxAmountEuroDefault,
             date: lastTx?.date ?? null,
-            message: lastTx?.value ? undefined : "No recorded transaction",
+            message: lastTxAmountEuroDefault > 0 ? undefined : "No recorded transaction",
           },
           street_average: streetAvgDisplay,
           street_average_message: streetAvgDisplay == null ? "No DVF data for this area" : (isAreaFallback ? "Postcode/area average" : null),
@@ -2806,6 +2866,9 @@ export async function GET(request: NextRequest) {
             const buildingResult = await getFrancePropertyResult(codePostal, houseNum, voie, commune, null, null);
             if (buildingResult.multipleUnits || (buildingResult.rowsAtStage ?? 0) > 0) {
               const livabilityRating = mapLivabilityToRating(buildingResult.livabilityStandard);
+              const retryBuildingValueEuro = frDvfMoneyCentsToEuros(
+                buildingResult.averageBuildingValue ?? buildingResult.currentValue ?? null
+              );
               const payload = {
                 address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
                 data_source: "properties_france",
@@ -2813,18 +2876,18 @@ export async function GET(request: NextRequest) {
                 prompt_for_apartment: true,
                 apartment_not_matched: true,
                 result_level: "building",
-                average_building_value: buildingResult.averageBuildingValue ?? buildingResult.currentValue ?? 0,
+                average_building_value: retryBuildingValueEuro ?? 0,
                 unit_count: buildingResult.unitCount ?? 0,
-                building_sales: buildingResult.buildingSales ?? [],
+                building_sales: mapFranceBuildingSalesPricesToEuros(buildingResult.buildingSales ?? []),
                 available_lots: buildingResult.availableLots ?? [],
                 match_stage: buildingResult.matchStage,
                 rows_at_stage: buildingResult.rowsAtStage,
                 property_result: {
-                  exact_value: buildingResult.averageBuildingValue ?? buildingResult.currentValue ?? null,
+                  exact_value: retryBuildingValueEuro,
                   exact_value_message: `Apartment/lot ${aptTrimmed} was not found in DVF data. Showing building-level estimate.`,
                   value_level: "building-level" as const,
                   last_transaction: { amount: 0, date: null, message: "No recorded transaction for this apartment" },
-                  street_average: buildingResult.areaAverageValue ?? null,
+                  street_average: frDvfMoneyCentsToEuros(buildingResult.areaAverageValue),
                   street_average_message: null,
                   livability_rating: livabilityRating,
                 },
