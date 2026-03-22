@@ -2973,16 +2973,19 @@ export async function GET(request: NextRequest) {
           type SimilarEnriched = {
             raw: Record<string, unknown>;
             surf: number;
+            hasSurface: boolean;
             ppmEuro: number;
             lastSaleEuro: number;
             dateStr: string | null;
+            dateTs: number;
             houseDistance: number;
             lotDistance: number;
           };
           const enriched: SimilarEnriched[] = [];
-          const allowRelaxedFiveYearWindow = rawCount <= 4;
           for (const row of similarRows) {
-            const surf = parseMaybeDecimal((row as any).surface_m2);
+            const surfVal = parseMaybeDecimal((row as any).surface_m2);
+            const surf = surfVal != null && surfVal > 0 ? surfVal : 0;
+            const hasSurface = surf > 0;
             const ppmRaw = parseMaybeDecimal((row as any).price_per_m2);
             const ppmEuro = frPropertyLatestFactsMoneyToEuros((row as any).price_per_m2) ?? 0;
             const lastSaleEuro = frPropertyLatestFactsMoneyToEuros((row as any).last_sale_price) ?? 0;
@@ -2993,6 +2996,7 @@ export async function GET(request: NextRequest) {
                 : String(dateRaw).trim() === ""
                   ? null
                   : String(dateRaw);
+            const dateTs = dateStr ? new Date(dateStr).getTime() : 0;
             const rowHn = (row as any).house_number;
             const rowNum = extractHouseNumberNumeric(String(rowHn ?? ""));
             const houseDistance =
@@ -3000,10 +3004,8 @@ export async function GET(request: NextRequest) {
                 ? Math.abs(rowNum - houseNumberNumericTarget)
                 : 0;
             const lotDistance = lotDistanceFromRow(row);
-            if (surf == null || surf <= 0) continue;
             if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
-            if (!allowRelaxedFiveYearWindow && !frSaleDateWithinFiveYears(dateRaw)) continue;
-            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr, houseDistance, lotDistance });
+            enriched.push({ raw: row, surf, hasSurface, ppmEuro, lastSaleEuro, dateStr, dateTs, houseDistance, lotDistance });
           }
           const afterFilters = enriched.length;
           frRuntimeDebug.building_similar_unit_after_filters_count = afterFilters;
@@ -3017,22 +3019,22 @@ export async function GET(request: NextRequest) {
             trimmed = frTrimFractionExtremes(enriched, (x) => x.ppmEuro, 0.1);
           }
           if (trimmed.length === 0) trimmed = enriched;
-          const medSurfCohort = medianNumber(trimmed.map((x) => x.surf));
+          const surfValues = trimmed.map((x) => x.surf).filter((s) => s > 0 && Number.isFinite(s));
+          const medSurfCohort = surfValues.length > 0 ? medianNumber(surfValues) : null;
           const targetSurface =
             validInputSurfaceM2 ??
             (medSurfCohort != null && Number.isFinite(medSurfCohort) ? medSurfCohort : null);
           const cohortMedian = medianNumber(trimmed.map((x) => x.ppmEuro).filter((n) => n > 0 && Number.isFinite(n))) ?? 0;
           const sorted = [...trimmed].sort((a, b) => {
             if (exactLotToken && a.lotDistance !== b.lotDistance) return a.lotDistance - b.lotDistance;
-            if (targetSurface != null && Number.isFinite(targetSurface)) {
+            if (a.hasSurface !== b.hasSurface) return a.hasSurface ? -1 : 1;
+            if (targetSurface != null && Number.isFinite(targetSurface) && a.hasSurface && b.hasSurface) {
               const da = Math.abs(a.surf - targetSurface);
               const db = Math.abs(b.surf - targetSurface);
               if (da !== db) return da - db;
             }
             if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
-            const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
-            const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
-            if (tb !== ta) return tb - ta;
+            if (b.dateTs !== a.dateTs) return b.dateTs - a.dateTs;
             if (cohortMedian > 0) {
               const ma = Math.abs(a.ppmEuro - cohortMedian);
               const mb = Math.abs(b.ppmEuro - cohortMedian);
@@ -3043,10 +3045,12 @@ export async function GET(request: NextRequest) {
           });
           const best = sorted[0];
           if (!best) return null;
-          const estSurf = validInputSurfaceM2 ?? best.surf;
+          const estSurf = validInputSurfaceM2 ?? (best.surf > 0 ? best.surf : null) ?? medSurfCohort;
           const ppmForEstimate = cohortMedian > 0 ? cohortMedian : best.ppmEuro;
           const estimated =
-            Number.isFinite(estSurf) && estSurf > 0 && ppmForEstimate > 0 ? Math.round(estSurf * ppmForEstimate) : null;
+            estSurf != null && Number.isFinite(estSurf) && estSurf > 0 && ppmForEstimate > 0
+              ? Math.round(estSurf * ppmForEstimate)
+              : null;
           frRuntimeDebug.post_lot_relaxed_reject_reason = null;
           frRuntimeDebug.winning_step = "post_lot_relaxed";
           frRuntimeDebug.winning_source_label = "Post-lot relaxed (similar apartments)";
@@ -3085,7 +3089,7 @@ export async function GET(request: NextRequest) {
                   transactionDate: best.dateStr,
                   transactionValue: best.lastSaleEuro > 0 ? best.lastSaleEuro : null,
                   pricePerSqm: ppmForEstimate > 0 ? ppmForEstimate : best.ppmEuro,
-                  surfaceArea: Number.isFinite(estSurf) && estSurf > 0 ? estSurf : null,
+                  surfaceArea: estSurf != null && Number.isFinite(estSurf) && estSurf > 0 ? estSurf : null,
                   rooms: null,
                   propertyType: "Appartement",
                   building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
