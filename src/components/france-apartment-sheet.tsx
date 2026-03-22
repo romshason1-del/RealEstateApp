@@ -69,8 +69,7 @@ export function FranceApartmentSheet({
   } | null>(null);
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [showOptionalAptInput, setShowOptionalAptInput] = React.useState(false);
-  // TEMP: default-open in non-production to make this investigation obvious.
-  const [isFranceDebugOpen, setIsFranceDebugOpen] = React.useState(isDev);
+  const [isFranceDebugOpen, setIsFranceDebugOpen] = React.useState(false);
   const [isFranceDebugMoreOpen, setIsFranceDebugMoreOpen] = React.useState(false);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
@@ -430,16 +429,6 @@ export function FranceApartmentSheet({
     return null;
   }, [normalized?.resultType]);
 
-  const matchDetails = React.useMemo(() => {
-    const requested = coerceNullableString(normalized?.requestedLot as unknown);
-    const matched = coerceNullableString(normalized?.matchedLot as unknown);
-    if (!requested && !matched) return null;
-    if (requested && matched && requested !== matched) {
-      return { requested, matched, differs: true };
-    }
-    return { requested: requested ?? null, matched: matched ?? null, differs: false };
-  }, [normalized?.requestedLot, normalized?.matchedLot]);
-
   const hasUsefulBuildingData =
     (Array.isArray(buildingSales) && buildingSales.length > 0) ||
     ((averageBuildingValue ?? 0) > 0) ||
@@ -688,8 +677,8 @@ export function FranceApartmentSheet({
       const requestFailed = !normalized;
       const finalStreetAvgMessage = (normalized as any)?.property_result?.street_average_message ?? null;
       const winningSourceLabel =
-        finalStreetAvgMessage === "Similar properties on same street"
-          ? "Similar properties on same street"
+        finalStreetAvgMessage === "Based on recent sales on this street"
+          ? "Based on recent sales on this street"
           : finalStreetAvgMessage === "Similar properties in same commune"
             ? "Similar properties in same commune"
             : (normalized as any)?.resultType === "exact_apartment"
@@ -709,7 +698,7 @@ export function FranceApartmentSheet({
             ? "exact_address"
             : (normalized as any)?.resultType === "exact_house"
               ? "exact_house"
-          : finalStreetAvgMessage === "Similar properties on same street"
+          : finalStreetAvgMessage === "Based on recent sales on this street"
             ? "street_fallback"
             : finalStreetAvgMessage === "Similar properties in same commune"
               ? "commune_fallback"
@@ -774,7 +763,7 @@ export function FranceApartmentSheet({
     if (isDev) {
       const finalSourceLabel = (fr as any)?.property_result?.street_average_message ?? null;
       const valuationStepReached =
-        finalSourceLabel === "Similar properties on same street"
+        finalSourceLabel === "Based on recent sales on this street"
           ? "street_fallback"
           : finalSourceLabel === "Similar properties in same commune"
             ? "commune_fallback"
@@ -1044,21 +1033,20 @@ export function FranceApartmentSheet({
       if (ws === "exact_unit") return "Based on exact property match";
       if (ws === "exact_address") return "Based on exact address match";
       if (ws === "exact_house") return "Based on exact house match";
+      if (ws === "exact_approximate") return "Based on similar apartments in this building";
       if (ws === "building_level" || ws === "building_fallback")
         return "Based on similar properties in this building";
       if (ws === "building_similar_unit") return "Based on similar apartments in this building";
-      if (ws === "street_fallback") return "Based on similar properties on the same street";
+      if (ws === "street_fallback") return "Based on recent sales on this street";
       if (ws === "commune_fallback") return "Based on similar properties in the same commune";
+      if (ws === "nearby_fallback") return "Based on nearby similar properties";
       if (fr?.resultType === "exact_apartment") return "Based on exact property match";
       if (fr?.resultType === "exact_address") return "Based on exact address match";
       if (fr?.resultType === "exact_house") return "Based on exact house match";
       if (fr?.resultType === "building_level" || fr?.resultType === "building_fallback")
         return "Based on similar properties in this building";
       if (fr?.resultType === "building_similar_unit") return "Based on similar apartments in this building";
-      if (fr?.resultType === "nearby_comparable")
-        return isHouseLikeUI
-          ? "Based on nearby comparable houses"
-          : "Based on nearby comparable apartments";
+      if (fr?.resultType === "nearby_comparable") return "Based on nearby similar properties";
       if (fr?.resultType === "similar_apartment_same_building")
         return isHouseLikeUI
           ? "Based on nearby property transactions"
@@ -1363,7 +1351,7 @@ export function FranceApartmentSheet({
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
               </div>
 
-              {/* TEMP: France runtime diagnostics (investigation only) - compact by default */}
+              {isDev ? (
               <div className="mt-1">
                 <button
                   type="button"
@@ -1493,12 +1481,12 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
+              ) : null}
             </div>
 
             {/* More details (collapsed by default) */}
             {(
               transactionCount ||
-              matchDetails ||
               fr?.property?.pricePerSqm ||
               fr?.property?.surfaceArea ||
               fr?.property?.propertyType
@@ -1530,12 +1518,6 @@ export function FranceApartmentSheet({
                       <div className="mt-1 space-y-0.5 text-[10px] leading-tight text-zinc-200/80">
                         {transactionCount ? (
                           <div>Transactions: <span className="font-medium text-white">{transactionCount}</span></div>
-                        ) : null}
-                        {matchDetails?.requested ? (
-                          <div>Requested lot: <span className="font-medium text-white">{matchDetails.requested}</span></div>
-                        ) : null}
-                        {matchDetails?.matched ? (
-                          <div>Data taken from lot: <span className="font-medium text-white">{matchDetails.matched}</span></div>
                         ) : null}
                         {coercePositiveNumber(fr?.property?.surfaceArea as unknown) != null ? (
                           <div>

@@ -3588,7 +3588,7 @@ export async function GET(request: NextRequest) {
             isExactUnitTier
               ? detectClass === "apartment" ? "Exact apartment" : "Exact property"
               : isApproximateTier
-                ? "Approximate lot match (same building)"
+                ? "Based on similar apartments in this building"
                 : "Exact address match";
           const frResultType =
             isExactUnitTier ? "exact_apartment" : isApproximateTier ? "exact_address" : "exact_address";
@@ -4005,7 +4005,7 @@ export async function GET(request: NextRequest) {
 
       // Same-street house fallback: when exact_house failed but house-like rows exist on same street.
       // Do NOT use street_fallback when same-address rows exist (exact_address or building_level preferred).
-      const fallbackSourceSameStreetHouse = "Similar houses on same street";
+      const fallbackSourceSameStreetHouse = "Based on recent sales on this street";
       if (
         detectClass === "house" &&
         streetNorm &&
@@ -4267,7 +4267,7 @@ export async function GET(request: NextRequest) {
       console.log("[FR_SQL] query_ok=true");
       console.log("[FR_SQL] rows_count=", (fallbackStreetRows as any[])?.length ?? 0);
       console.log("[FR_SQL] columns_detected=", Object.keys(streetTableInspection.sampleRow ?? {}));
-      const fallbackSourceStreet = "Similar properties on same street";
+      const fallbackSourceStreet = "Based on recent sales on this street";
       const fallbackSourceCommune = "Similar properties in same commune";
 
       let streetRows = fallbackStreetRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }>;
@@ -4810,9 +4810,7 @@ export async function GET(request: NextRequest) {
           const surfaceForEst = validInputSurfaceM2 ?? medianSurfaceM2ForFallback;
           const estimated = surfaceForEst != null && surfaceForEst > 0 ? Math.round(surfaceForEst * medianPpm) : null;
 
-          const labelHouse = "Based on nearby similar houses";
-          const labelApt = "Based on nearby similar apartments";
-          const label = (tryBoth ? usedHouseFilter : isHouse) ? labelHouse : labelApt;
+          const label = "Based on nearby similar properties";
           const propType = (tryBoth ? usedHouseFilter : isHouse) ? "Maison" : "Appartement";
           const conf: "low" | "medium" = pool.length >= 15 ? "medium" : "low";
 
