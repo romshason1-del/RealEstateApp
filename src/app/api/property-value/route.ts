@@ -685,22 +685,22 @@ export async function GET(request: NextRequest) {
         // Single source of truth for lot prompt: recompute before every return so UI and debug always agree.
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
+        const payloadAsksForLot =
+          payload.multiple_units === true || payload.prompt_for_apartment === true;
         const shouldPromptLotCanonical =
           detectClass !== "house" &&
           !submittedLotPresent &&
-          (flowAsApartment ||
+          (payloadAsksForLot ||
+            flowAsApartment ||
             isLikelyBuilding ||
             buildingRowsCount > 0 ||
             buildingCandidatesCount > 0);
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
-        frRuntimeDebug.fr_lot_value_used =
-          submittedLotPresent && (frRuntimeDebug.exact_unit_row_count as number) > 0
-            ? true
-            : submittedLotPresent && (buildingRowsCount > 0 || buildingCandidatesCount > 0)
-              ? "building_ranking"
-              : false;
+        frRuntimeDebug.fr_lot_value_used = submittedLotPresent
+          ? (normalizedRequestedLot ?? (frRuntimeDebug.submitted_lot as string) ?? null)
+          : null;
         frRuntimeDebug.fr_lot_used_in_ranking =
           submittedLotPresent && (buildingRowsCount > 0 || buildingCandidatesCount > 0);
         const exactUnitCnt = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;

@@ -884,6 +884,8 @@ export function FranceApartmentSheet({
     const frRuntimeDebug =
       resolvedForDisplay?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? (parsed as any)?.fr_runtime_debug ?? null;
     const rd: any = frRuntimeDebug ?? null;
+    // Lot-related debug must match the source driving lot visibility (rdForLot) so UI and debug always agree.
+    const rdLot = rdForLot ?? rd;
     const toDebugStr = (v: any) => {
       if (v === null || v === undefined) return "—";
       if (typeof v === "string") return v;
@@ -1377,14 +1379,14 @@ export function FranceApartmentSheet({
                     <div className="max-h-[140px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-300/90 space-y-0.5">
                       <div>fr_flow_source_of_truth: {frFlowSourceOfTruth}</div>
                       <div>fr_detect_final_class: {frDetectFinalClass}</div>
-                      <div>fr_should_prompt_lot: {toDebugStr(rd?.fr_should_prompt_lot)}</div>
-                      <div>fr_lot_prompt_visible: {toDebugStr(rd?.fr_lot_prompt_visible)}</div>
+                      <div>fr_should_prompt_lot: {toDebugStr(rdLot?.fr_should_prompt_lot)}</div>
+                      <div>fr_lot_prompt_visible: {toDebugStr(rdLot?.fr_lot_prompt_visible)}</div>
                       <div>fr_lot_prompt_visible_reason: {frLotPromptVisibleReason}</div>
-                      <div>fr_lot_submitted: {toDebugStr(rd?.fr_lot_submitted)}</div>
-                      <div>fr_lot_value_used: {toDebugStr(rd?.fr_lot_value_used)}</div>
-                      <div>fr_lot_used_in_ranking: {toDebugStr(rd?.fr_lot_used_in_ranking)}</div>
-                      <div>fr_post_lot_candidate_count: {toDebugStr(rd?.fr_post_lot_candidate_count)}</div>
-                      <div>fr_post_lot_winning_reason: {toDebugStr(rd?.fr_post_lot_winning_reason)}</div>
+                      <div>fr_lot_submitted: {toDebugStr(rdLot?.fr_lot_submitted)}</div>
+                      <div>fr_lot_value_used: {toDebugStr(rdLot?.fr_lot_value_used)}</div>
+                      <div>fr_lot_used_in_ranking: {toDebugStr(rdLot?.fr_lot_used_in_ranking)}</div>
+                      <div>fr_post_lot_candidate_count: {toDebugStr(rdLot?.fr_post_lot_candidate_count)}</div>
+                      <div>fr_post_lot_winning_reason: {toDebugStr(rdLot?.fr_post_lot_winning_reason)}</div>
                       <div>fr_lot_prompt_reason: {lotPromptGenuinelyRequired ? "backend_requires_lot" : "—"}</div>
                       <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
                       <div>fr_ui_house_flow_active: {String(isHouseDirectFlow)}</div>
@@ -1451,7 +1453,7 @@ export function FranceApartmentSheet({
                         <div>fr_detect_override_reason: {toDebugStr(rd?.fr_detect_override_reason)}</div>
                         <div>fr_detect_multi_unit_source: {toDebugStr(rd?.fr_detect_multi_unit_source)}</div>
                         <div>fr_detect_ban_strength_used: {toDebugStr(rd?.fr_detect_ban_strength_used)}</div>
-                        <div>fr_should_prompt_lot: {toDebugStr(rd?.fr_should_prompt_lot)}</div>
+                        <div>fr_should_prompt_lot: {toDebugStr(rdLot?.fr_should_prompt_lot)}</div>
                         <div>fr_label_safety_override: {toDebugStr(rd?.fr_label_safety_override)}</div>
                         <div>fr_confidence_adjustment_reason: {toDebugStr(rd?.fr_confidence_adjustment_reason)}</div>
                         <div className="font-semibold text-amber-300/80 mt-0.5">Source lookup</div>
@@ -1707,12 +1709,13 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
-          {isDev && apartmentBlockActive ? (
+          {isDev && lotPromptVisible ? (
             <div className="mt-2 rounded-lg border border-amber-400/20 bg-black/20 px-2 py-1.5 font-mono text-[9px] text-zinc-400">
-              <div>fr_flow_source_of_truth: {frFlowSourceOfTruth}</div>
-              <div>fr_detect_final_class: {frDetectFinalClass}</div>
-              <div>fr_ui_house_flow_active: false</div>
-              <div>fr_ui_apartment_block_active: true</div>
+              <div>fr_should_prompt_lot: {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
+              <div>fr_lot_prompt_visible: {String(rdForLot?.fr_lot_prompt_visible ?? "—")}</div>
+              <div>fr_lot_submitted: {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
+              <div>fr_lot_value_used: {String(rdForLot?.fr_lot_value_used ?? "—")}</div>
+              <div>fr_ui_apartment_block_active: {String(apartmentBlockActive)}</div>
             </div>
           ) : null}
         </div>
