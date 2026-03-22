@@ -623,6 +623,12 @@ export async function GET(request: NextRequest) {
         fr_building_detection_reason: null as string | null,
         fr_detection_reason: null as string | null,
         fr_should_prompt_lot: null as boolean | null,
+        fr_lot_prompt_visible: null as boolean | null,
+        fr_lot_submitted: null as boolean | null,
+        fr_lot_value_used: null as boolean | string | null,
+        fr_lot_used_in_ranking: null as boolean | null,
+        fr_post_lot_candidate_count: null as number | null,
+        fr_post_lot_winning_reason: null as string | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
         exact_rows_count: null,
@@ -675,6 +681,39 @@ export async function GET(request: NextRequest) {
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
+
+        // Single source of truth for lot prompt: recompute before every return so UI and debug always agree.
+        const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
+        const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
+        const shouldPromptLotCanonical =
+          detectClass !== "house" &&
+          !submittedLotPresent &&
+          (flowAsApartment ||
+            isLikelyBuilding ||
+            buildingRowsCount > 0 ||
+            buildingCandidatesCount > 0);
+        frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
+        frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
+        frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
+        frRuntimeDebug.fr_lot_value_used =
+          submittedLotPresent && (frRuntimeDebug.exact_unit_row_count as number) > 0
+            ? true
+            : submittedLotPresent && (buildingRowsCount > 0 || buildingCandidatesCount > 0)
+              ? "building_ranking"
+              : false;
+        frRuntimeDebug.fr_lot_used_in_ranking =
+          submittedLotPresent && (buildingRowsCount > 0 || buildingCandidatesCount > 0);
+        const exactUnitCnt = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
+        frRuntimeDebug.fr_post_lot_candidate_count =
+          exactUnitCnt > 0
+            ? exactUnitCnt
+            : buildingCandidatesCount > 0
+              ? buildingCandidatesCount
+              : buildingRowsCount > 0
+                ? buildingRowsCount
+                : null;
+        frRuntimeDebug.fr_post_lot_winning_reason =
+          (frRuntimeDebug.winning_step as string) ?? (frRuntimeDebug.exact_match_reason as string) ?? null;
 
         if (tag === "prompt_lot_first" && submittedLotPresent) {
           console.error(

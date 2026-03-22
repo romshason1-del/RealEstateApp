@@ -300,9 +300,10 @@ export function FranceApartmentSheet({
       : effectiveDetectClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
 
-  // Lot input: use backend flag as source of truth. Never show when detect_class === "house".
+  // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. No local derivation.
   const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
   const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
+  const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
   const detectClassIsHouse = frDetectFinalClass === "house";
   const lotPromptGenuinelyRequired =
     backendShouldPromptLot && !detectClassIsHouse && !(requestedLot ?? "").trim();
@@ -310,8 +311,9 @@ export function FranceApartmentSheet({
   // Apartment block active: backend wants lot + no lot + not yet submitted. Triggers lot prompt UI.
   const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
 
-  // Lot prompt visible: backend says show AND not house. Do not depend on detect_class for visibility.
-  const lotPromptVisible = backendShouldPromptLot && !detectClassIsHouse;
+  // Lot prompt visible: backend fr_lot_prompt_visible (single source of truth), fallback for pre-update responses.
+  const lotPromptVisible =
+    backendLotPromptVisible ?? (backendShouldPromptLot && !detectClassIsHouse);
 
   const frLotPromptVisibleReason =
     detectClassIsHouse
@@ -1375,9 +1377,14 @@ export function FranceApartmentSheet({
                     <div className="max-h-[140px] overflow-y-auto font-mono text-[9px] leading-tight text-zinc-300/90 space-y-0.5">
                       <div>fr_flow_source_of_truth: {frFlowSourceOfTruth}</div>
                       <div>fr_detect_final_class: {frDetectFinalClass}</div>
-                      <div>fr_should_prompt_lot: {toDebugStr(parsed?.prompt_for_apartment ?? rd?.fr_should_prompt_lot)}</div>
-                      <div>fr_lot_prompt_visible: {String(lotPromptVisible)}</div>
+                      <div>fr_should_prompt_lot: {toDebugStr(rd?.fr_should_prompt_lot)}</div>
+                      <div>fr_lot_prompt_visible: {toDebugStr(rd?.fr_lot_prompt_visible)}</div>
                       <div>fr_lot_prompt_visible_reason: {frLotPromptVisibleReason}</div>
+                      <div>fr_lot_submitted: {toDebugStr(rd?.fr_lot_submitted)}</div>
+                      <div>fr_lot_value_used: {toDebugStr(rd?.fr_lot_value_used)}</div>
+                      <div>fr_lot_used_in_ranking: {toDebugStr(rd?.fr_lot_used_in_ranking)}</div>
+                      <div>fr_post_lot_candidate_count: {toDebugStr(rd?.fr_post_lot_candidate_count)}</div>
+                      <div>fr_post_lot_winning_reason: {toDebugStr(rd?.fr_post_lot_winning_reason)}</div>
                       <div>fr_lot_prompt_reason: {lotPromptGenuinelyRequired ? "backend_requires_lot" : "—"}</div>
                       <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
                       <div>fr_ui_house_flow_active: {String(isHouseDirectFlow)}</div>
