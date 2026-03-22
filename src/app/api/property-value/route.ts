@@ -5362,39 +5362,51 @@ export async function GET(request: NextRequest) {
               ? `AND ${frBqPostcodeMatchSql}`
               : "";
             const q = `
-              SELECT price_per_m2
+              SELECT price_per_m2, last_sale_price, last_sale_date
               FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
               WHERE LOWER(TRIM(country)) = 'fr'
                 AND (LOWER(TRIM(city)) = LOWER(TRIM(@city)) OR LOWER(TRIM(city)) LIKE CONCAT(LOWER(TRIM(@city)), ' %'))
                 ${postcodeClause}
               LIMIT 500
             `;
-            return queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>({
+            return queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_price?: unknown; last_sale_date?: string | null }>]>({
               query: q,
               params: { city: cityForQuery, postcode: postcodeNormForSource || "" },
             }, "commune_emergency_fallback");
           };
 
-          let ppmEuros: number[] = [];
-          const [rowsWithPostcode] = await runCommuneEmergencyQuery(true);
-          ppmEuros = (rowsWithPostcode ?? [])
-            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-            .filter((v): v is number => v != null && v > 0);
+          const rowsToPpmAndTx = (rows: Array<{ price_per_m2?: unknown; last_sale_price?: unknown; last_sale_date?: string | null }>) =>
+            rows.map((r) => ({
+              ppm: frPropertyLatestFactsMoneyToEuros(r.price_per_m2),
+              amount: frPropertyLatestFactsMoneyToEuros(r.last_sale_price),
+              date: r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null,
+            })).filter((x): x is { ppm: number; amount: number | null; date: string | null } => x.ppm != null && x.ppm > 0);
 
-          if (ppmEuros.length < 1 && (postcodeNormForSource ?? "").trim()) {
+          let ppmAndTxRows: Array<{ ppm: number; amount: number | null; date: string | null }> = [];
+          const [rowsWithPostcode] = await runCommuneEmergencyQuery(true);
+          ppmAndTxRows = rowsToPpmAndTx(rowsWithPostcode ?? []);
+
+          if (ppmAndTxRows.length < 1 && (postcodeNormForSource ?? "").trim()) {
             const [rowsCityOnly] = await runCommuneEmergencyQuery(false);
-            ppmEuros = (rowsCityOnly ?? [])
-              .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-              .filter((v): v is number => v != null && v > 0);
-            if (ppmEuros.length >= 1) {
-              console.log("[FR_EMERGENCY] commune_emergency city_only_fallback rows=" + String(ppmEuros.length));
+            ppmAndTxRows = rowsToPpmAndTx(rowsCityOnly ?? []);
+            if (ppmAndTxRows.length >= 1) {
+              console.log("[FR_EMERGENCY] commune_emergency city_only_fallback rows=" + String(ppmAndTxRows.length));
             }
           }
 
-          if (ppmEuros.length < 1) return null;
+          if (ppmAndTxRows.length < 1) return null;
+          const ppmEuros = ppmAndTxRows.map((x) => x.ppm);
           const medianPpm = medianNumber(ppmEuros) ?? ppmEuros[0];
           if (medianPpm == null || medianPpm <= 0) return null;
           const estimated = surfaceForEstimation != null && surfaceForEstimation > 0 ? Math.round(surfaceForEstimation * medianPpm) : null;
+          const communeEmergencyBest = ppmAndTxRows.filter((x) => (x.amount ?? 0) > 0).sort((a, b) =>
+            (b.date ? new Date(b.date).getTime() : 0) - (a.date ? new Date(a.date).getTime() : 0)
+          )[0] ?? ppmAndTxRows.find((x) => (x.amount ?? 0) > 0) ?? ppmAndTxRows.find((x) => x.date) ?? null;
+          const communeEmergencyLastTx = communeEmergencyBest
+            ? ((communeEmergencyBest.amount ?? 0) > 0
+                ? { amount: communeEmergencyBest.amount!, date: communeEmergencyBest.date }
+                : communeEmergencyBest.date ? { amount: 0, date: communeEmergencyBest.date } : null)
+            : null;
           const label = "Based on commune-level pricing (limited data)";
           frRuntimeDebug.winning_step = "commune_emergency";
           frRuntimeDebug.winning_source_label = label;
@@ -5406,9 +5418,9 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_empty_prevented = true;
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
-          frRuntimeDebug.fr_commune_emergency_candidate_count = ppmEuros.length;
+          frRuntimeDebug.fr_commune_emergency_candidate_count = ppmAndTxRows.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_emergency";
-          console.log("[FR_EMERGENCY] commune_emergency rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpm));
+          console.log("[FR_EMERGENCY] commune_emergency rows=" + String(ppmAndTxRows.length) + " median_ppm=" + String(medianPpm));
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -5418,7 +5430,9 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "commune-level",
-                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: communeEmergencyLastTx
+                  ? { amount: communeEmergencyLastTx.amount, date: communeEmergencyLastTx.date, message: communeEmergencyLastTx.amount > 0 ? undefined : "Representative sale date from commune" }
+                  : { amount: 0, date: null, message: "No exact recent transaction available" },
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5430,8 +5444,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: null,
-                  transactionValue: estimated,
+                  transactionDate: communeEmergencyLastTx?.date ?? null,
+                  transactionValue: (communeEmergencyLastTx?.amount ?? 0) > 0 ? communeEmergencyLastTx!.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEstimation ?? null,
                   rooms: null,
@@ -5462,7 +5476,7 @@ export async function GET(request: NextRequest) {
         if (!cityForQuery?.trim()) return null;
         try {
           const q = `
-            SELECT price_per_m2
+            SELECT price_per_m2, last_sale_price, last_sale_date
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
               AND (LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -5470,17 +5484,30 @@ export async function GET(request: NextRequest) {
                 OR LOWER(TRIM(city)) LIKE CONCAT('%', LOWER(TRIM(@city)), '%'))
             LIMIT 300
           `;
-          const [rows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>({
+          const [rows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_price?: unknown; last_sale_date?: string | null }>]>({
             query: q,
             params: { city: cityForQuery },
           }, "commune_safety_net");
-          const ppmEuros = (rows ?? [])
-            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-            .filter((v): v is number => v != null && v > 0);
-          if (ppmEuros.length < 1) return null;
+          const safetyNetRows = (rows ?? [])
+            .map((r) => ({
+              ppm: frPropertyLatestFactsMoneyToEuros(r.price_per_m2),
+              amount: frPropertyLatestFactsMoneyToEuros(r.last_sale_price),
+              date: r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null,
+            }))
+            .filter((x): x is { ppm: number; amount: number | null; date: string | null } => x.ppm != null && x.ppm > 0);
+          if (safetyNetRows.length < 1) return null;
+          const ppmEuros = safetyNetRows.map((x) => x.ppm);
           const medianPpm = medianNumber(ppmEuros) ?? ppmEuros[0];
           if (medianPpm == null || medianPpm <= 0) return null;
           const estimated = surfaceForEstimation != null && surfaceForEstimation > 0 ? Math.round(surfaceForEstimation * medianPpm) : null;
+          const safetyNetBest = safetyNetRows.filter((x) => (x.amount ?? 0) > 0).sort((a, b) =>
+            (b.date ? new Date(b.date).getTime() : 0) - (a.date ? new Date(a.date).getTime() : 0)
+          )[0] ?? safetyNetRows.find((x) => (x.amount ?? 0) > 0) ?? safetyNetRows.find((x) => x.date) ?? null;
+          const safetyNetLastTx = safetyNetBest
+            ? ((safetyNetBest.amount ?? 0) > 0
+                ? { amount: safetyNetBest.amount!, date: safetyNetBest.date }
+                : safetyNetBest.date ? { amount: 0, date: safetyNetBest.date } : null)
+            : null;
           const label = "Based on commune-level pricing (limited data)";
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = label;
@@ -5488,13 +5515,13 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_selected_layer_quality = "low";
           frRuntimeDebug.fr_selected_reason = "commune_safety_net";
           frRuntimeDebug.fr_fallback_level_used = "commune_fallback";
-          frRuntimeDebug.fr_total_rows_used = ppmEuros.length;
-          frRuntimeDebug.fr_commune_candidate_count = ppmEuros.length;
+          frRuntimeDebug.fr_total_rows_used = safetyNetRows.length;
+          frRuntimeDebug.fr_commune_candidate_count = safetyNetRows.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_fallback";
           frRuntimeDebug.fr_empty_prevented = true;
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
-          console.log("[FR_SAFETY] commune_safety_net rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpm));
+          console.log("[FR_SAFETY] commune_safety_net rows=" + String(safetyNetRows.length) + " median_ppm=" + String(medianPpm));
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -5504,7 +5531,9 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "commune-level",
-                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: safetyNetLastTx
+                  ? { amount: safetyNetLastTx.amount, date: safetyNetLastTx.date, message: safetyNetLastTx.amount > 0 ? undefined : "Representative sale date from commune" }
+                  : { amount: 0, date: null, message: "No exact recent transaction available" },
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5516,8 +5545,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: null,
-                  transactionValue: estimated,
+                  transactionDate: safetyNetLastTx?.date ?? null,
+                  transactionValue: (safetyNetLastTx?.amount ?? 0) > 0 ? safetyNetLastTx!.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEstimation ?? null,
                   rooms: null,
@@ -5548,23 +5577,36 @@ export async function GET(request: NextRequest) {
         if (!postcodeForQuery || postcodeForQuery.length < 4) return null;
         try {
           const q = `
-            SELECT price_per_m2
+            SELECT price_per_m2, last_sale_price, last_sale_date
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
               AND LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(@postcode), 5, '0')
             LIMIT 500
           `;
-          const [rows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>({
+          const [rows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_price?: unknown; last_sale_date?: string | null }>]>({
             query: q,
             params: { postcode: postcodeForQuery },
           }, "postcode_only_fallback");
-          const ppmEuros = (rows ?? [])
-            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-            .filter((v): v is number => v != null && v > 0);
-          if (ppmEuros.length < 1) return null;
+          const postcodeRows = (rows ?? [])
+            .map((r) => ({
+              ppm: frPropertyLatestFactsMoneyToEuros(r.price_per_m2),
+              amount: frPropertyLatestFactsMoneyToEuros(r.last_sale_price),
+              date: r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null,
+            }))
+            .filter((x): x is { ppm: number; amount: number | null; date: string | null } => x.ppm != null && x.ppm > 0);
+          if (postcodeRows.length < 1) return null;
+          const ppmEuros = postcodeRows.map((x) => x.ppm);
           const medianPpm = medianNumber(ppmEuros) ?? ppmEuros[0];
           if (medianPpm == null || medianPpm <= 0) return null;
           const estimated = surfaceForEstimation != null && surfaceForEstimation > 0 ? Math.round(surfaceForEstimation * medianPpm) : null;
+          const postcodeBest = postcodeRows.filter((x) => (x.amount ?? 0) > 0).sort((a, b) =>
+            (b.date ? new Date(b.date).getTime() : 0) - (a.date ? new Date(a.date).getTime() : 0)
+          )[0] ?? postcodeRows.find((x) => (x.amount ?? 0) > 0) ?? postcodeRows.find((x) => x.date) ?? null;
+          const postcodeLastTx = postcodeBest
+            ? ((postcodeBest.amount ?? 0) > 0
+                ? { amount: postcodeBest.amount!, date: postcodeBest.date }
+                : postcodeBest.date ? { amount: 0, date: postcodeBest.date } : null)
+            : null;
           const label = "Based on postcode-level pricing (limited data)";
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = label;
@@ -5572,13 +5614,13 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_selected_layer_quality = "low";
           frRuntimeDebug.fr_selected_reason = "postcode_only_fallback";
           frRuntimeDebug.fr_fallback_level_used = "commune_fallback";
-          frRuntimeDebug.fr_total_rows_used = ppmEuros.length;
-          frRuntimeDebug.fr_commune_candidate_count = ppmEuros.length;
+          frRuntimeDebug.fr_total_rows_used = postcodeRows.length;
+          frRuntimeDebug.fr_commune_candidate_count = postcodeRows.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_fallback";
           frRuntimeDebug.fr_empty_prevented = true;
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
-          console.log("[FR_HARD] postcode_only_fallback rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpm) + " postcode=" + postcodeForQuery);
+          console.log("[FR_HARD] postcode_only_fallback rows=" + String(postcodeRows.length) + " median_ppm=" + String(medianPpm) + " postcode=" + postcodeForQuery);
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -5588,7 +5630,9 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "commune-level",
-                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: postcodeLastTx
+                  ? { amount: postcodeLastTx.amount, date: postcodeLastTx.date, message: postcodeLastTx.amount > 0 ? undefined : "Representative sale date from postcode" }
+                  : { amount: 0, date: null, message: "No exact recent transaction available" },
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5600,8 +5644,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: null,
-                  transactionValue: estimated,
+                  transactionDate: postcodeLastTx?.date ?? null,
+                  transactionValue: (postcodeLastTx?.amount ?? 0) > 0 ? postcodeLastTx!.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEstimation ?? null,
                   rooms: null,
