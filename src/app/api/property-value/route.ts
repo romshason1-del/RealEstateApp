@@ -1608,56 +1608,34 @@ export async function GET(request: NextRequest) {
 
       const hasDvfRowsAtAddress = earlyCandidateRows.length > 0;
 
-      // Hybrid classification: DVF first, then heuristic, then house signals, else unclear.
-      // Never force apartment based only on city/department.
+      // Apartment requires positive evidence. Never classify based only on postcode/city/BAN/department.
+      const hasPositiveApartmentEvidence =
+        apartmentEvidenceFromFacts ||
+        isMultiUnitDetected;
+
+      // Classification: apartment ONLY with positive evidence. Otherwise: strong house → house, else unclear.
       let detectClass: "apartment" | "house" | "unclear";
       const detectUsedLot = false;
       let detectOverrideReason: string | null = null;
       let frDetectionReason: string;
 
-      if (hasDvfRowsAtAddress) {
-        if (strongHouseSignals && !strongApartmentSignals) {
-          detectClass = "house";
-          detectOverrideReason = "facts_maison_dominates";
-          frDetectionReason = "dvf_rows_house_evidence";
-        } else if (strongApartmentSignals && !strongHouseSignals) {
-          detectClass = "apartment";
-          frDetectionReason = "dvf_rows_apartment_evidence";
-        } else if (strongHouseSignals && strongApartmentSignals) {
-          detectClass = "house";
-          detectOverrideReason = "conflict_house_wins_over_apartment";
-          frDetectionReason = "dvf_rows_conflict_house_wins";
-        } else if (mediumHouseSignals && !mediumApartmentSignals) {
-          detectClass = "house";
-          detectOverrideReason = "intelligence_house_signals";
-          frDetectionReason = "dvf_rows_intelligence_house";
-        } else if (mediumApartmentSignals && !mediumHouseSignals) {
-          detectClass = "apartment";
-          frDetectionReason = "dvf_rows_intelligence_apartment";
-        } else if (mediumHouseSignals && mediumApartmentSignals) {
-          detectClass = "house";
-          detectOverrideReason = "tie_house_preferred_over_apartment";
-          frDetectionReason = "dvf_rows_tie_house";
-        } else {
-          detectClass = "apartment";
-          frDetectionReason = "dvf_rows_default_apartment";
-        }
-        if (strongHouseSignals && detectClass !== "house") {
-          detectClass = "house";
-          detectOverrideReason = "override_strong_house_ignored_other_signals";
-          frDetectionReason = "dvf_rows_strong_house_override";
-        }
-      } else if (isLikelyBuilding) {
+      if (hasPositiveApartmentEvidence && !strongHouseSignals) {
         detectClass = "apartment";
-        frDetectionReason = "no_dvf_heuristic_building";
-      } else if (mediumHouseSignals) {
+        frDetectionReason = apartmentEvidenceFromFacts
+          ? "multi_unit_from_dvf_facts"
+          : "multi_unit_from_building_intel";
+      } else if (strongHouseSignals) {
+        detectClass = "house";
+        detectOverrideReason = strongApartmentSignals ? "conflict_house_wins_over_apartment" : "facts_maison_dominates";
+        frDetectionReason = "strong_house_signals";
+      } else if (mediumHouseSignals && !hasPositiveApartmentEvidence) {
         detectClass = "house";
         detectOverrideReason = "intelligence_house_signals";
-        frDetectionReason = "no_dvf_intelligence_house";
+        frDetectionReason = "intelligence_house_signals";
       } else {
         detectClass = "unclear";
-        detectOverrideReason = "no_strong_or_medium_signals";
-        frDetectionReason = "no_dvf_no_heuristic_unclear";
+        detectOverrideReason = "no_positive_apartment_evidence";
+        frDetectionReason = "unclear_no_positive_evidence";
       }
 
       if (!allowMultiUnitFromQueries && (apartmentEvidenceFromFacts || isMultiUnitDetected)) {
@@ -1669,9 +1647,8 @@ export async function GET(request: NextRequest) {
       if (detectClass === "apartment" && allowMultiUnitFromQueries) {
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
-      const flowAsApartment = detectClass === "apartment" || isLikelyBuilding;
-      const shouldPromptLot =
-        flowAsApartment && !submittedLotPresent && (allowMultiUnitFromQueries || isLikelyBuilding);
+      const flowAsApartment = detectClass === "apartment";
+      const shouldPromptLot = flowAsApartment && !submittedLotPresent && allowMultiUnitFromQueries;
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
@@ -1696,9 +1673,7 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_house_evidence_score = strongHouseSignals ? 1 : mediumHouseSignals ? 0.5 : 0;
       frRuntimeDebug.fr_apartment_evidence_score =
         apartmentEvidenceFromFacts || isMultiUnitDetected ? 1 : allowMultiUnitFromQueries && apartmentFromType ? 0.5 : 0;
-      frRuntimeDebug.fr_detect_classification_reason =
-        detectOverrideReason ??
-        (detectClass === "apartment" ? "medium_apartment_signals" : detectClass === "house" ? "house_signals" : "unclear_no_signals");
+      frRuntimeDebug.fr_detect_classification_reason = frDetectionReason;
       frRuntimeDebug.fr_is_likely_building = isLikelyBuilding;
       frRuntimeDebug.fr_is_rural_pattern = isRuralPattern;
       frRuntimeDebug.fr_building_detection_reason = frBuildingDetectionReason;
@@ -3060,8 +3035,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Use the gold-table driven apartment-vs-house decision for the valuation ladder.
-      // When isLikelyBuilding, flow as apartment but keep detectClass for fr_detect display.
-      const frDetectToUse: "apartment" | "house" | "unclear" = flowAsApartment && detectClass === "unclear" ? "apartment" : detectClass;
+      const frDetectToUse: "apartment" | "house" | "unclear" = detectClass;
 
       // Runtime schema inspection (no guessing): detect real sale-date column per fallback table.
       const detectSaleDateColumn = (columns: string[]): "latest_sale_date" | "newest_sale_date" | null => {
@@ -3841,7 +3815,7 @@ export async function GET(request: NextRequest) {
               normalizedLot: normalizedRequestedLot,
               property: null,
               buildingStats: {
-                transactionCount: Math.max(candidateLots.length, isMultiUnitDetected || isLikelyBuilding ? 2 : 1),
+                transactionCount: Math.max(candidateLots.length, isMultiUnitDetected ? 2 : 1),
                 avgPricePerSqm: null,
                 avgTransactionValue: null,
               },
