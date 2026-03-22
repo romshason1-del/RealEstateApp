@@ -701,6 +701,9 @@ export async function GET(request: NextRequest) {
         fr_area_liquidity: null as "low" | "medium" | "high" | null,
         fr_area_median_ppm2: null as number | null,
         fr_area_tx_count: null as number | null,
+        fr_fallback_level_used: null as string | null,
+        fr_total_rows_used: null as number | null,
+        fr_empty_prevented: null as boolean | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -807,6 +810,9 @@ export async function GET(request: NextRequest) {
           console.error(
             "[FR_RETURN] INVARIANT_VIOLATION valuation_response without winning_step — check ladder exit path"
           );
+        }
+        if (tag === "valuation_response" && frRuntimeDebug.fr_fallback_level_used == null) {
+          frRuntimeDebug.fr_fallback_level_used = frRuntimeDebug.winning_step as string | null;
         }
 
         const pr = payload.property_result as Record<string, unknown> | undefined;
@@ -4343,22 +4349,19 @@ export async function GET(request: NextRequest) {
           flowAsApartment && (buildingProfile.apartment_count > 0 || buildingProfile.transaction_count > 0);
         if (!forHouses && !forApartments) return null;
         const medianPpm = buildingProfile.median_price_per_m2;
+        if (medianPpm == null || medianPpm <= 0) return null;
         const surfaceForEst = validInputSurfaceM2 ?? buildingProfile.surface_median ?? medianSurfaceM2ForFallback;
         const estimated = surfaceForEst != null && surfaceForEst > 0 ? Math.round(surfaceForEst * medianPpm) : null;
-        if (estimated == null || estimated <= 0) {
-          frRuntimeDebug.fr_building_value_reliable = false;
-          frRuntimeDebug.fr_selected_reason = "building_profile_no_surface_no_value";
-          console.log("[FR_BUILDING_PROFILE] skipped=no_reliable_value (missing surface)");
-          return null;
-        }
         const fallbackSource = "Similar properties in this building";
         console.log("[FR_BUILDING_PROFILE] used_in=fallback");
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
         frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
-        frRuntimeDebug.fr_building_value_reliable = true;
-        frRuntimeDebug.fr_selected_layer_quality = "reliable";
-        frRuntimeDebug.fr_selected_reason = "building_profile_has_estimate";
+        frRuntimeDebug.fr_building_value_reliable = estimated != null && estimated > 0;
+        frRuntimeDebug.fr_selected_layer_quality = estimated != null && estimated > 0 ? "reliable" : "low";
+        frRuntimeDebug.fr_selected_reason = estimated != null ? "building_profile_has_estimate" : "building_profile_price_only_no_surface";
+        frRuntimeDebug.fr_fallback_level_used = "building_profile";
+        frRuntimeDebug.fr_total_rows_used = buildingProfile.transaction_count;
         return frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -4370,13 +4373,13 @@ export async function GET(request: NextRequest) {
               value_level: "building-level",
               last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
               street_average: medianPpm,
-              street_average_message: fallbackSource,
+              street_average_message: estimated == null ? `${fallbackSource} — pricing available, surface needed for total estimate` : fallbackSource,
               livability_rating: "FAIR",
             },
             fr: emptyFranceResponse({
               success: true,
               resultType: "building_level",
-              confidence: "medium",
+              confidence: (estimated != null && estimated > 0 ? "medium" : "low") as "medium" | "low",
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
@@ -4505,7 +4508,7 @@ export async function GET(request: NextRequest) {
             if (pool.length < 3) pool = withPpm.filter((x) => x.dist <= 5);
             if (pool.length < 3) pool = withPpm;
             const recentPool = pool.filter((x) => frSaleDateWithinFiveYears(x.date));
-            const recencyPreferred = recentPool.length >= 2 ? recentPool : pool;
+            const recencyPreferred = recentPool.length >= 1 ? recentPool : pool;
             const ppmPool = recencyPreferred.map((x) => x.ppm);
             const trimmedPpm =
               ppmPool.length >= 5
@@ -4557,7 +4560,7 @@ export async function GET(request: NextRequest) {
         }).filter((x): x is { price: number; date: unknown } => x != null);
         if (withPriceAndDate.length === 0) return null;
         const recentRows = withPriceAndDate.filter((x) => frSaleDateWithinFiveYears(x.date));
-        const recencyPreferred = recentRows.length >= 2 ? recentRows : withPriceAndDate;
+        const recencyPreferred = recentRows.length >= 1 ? recentRows : withPriceAndDate;
         const forMedian =
           recencyPreferred.length >= 5
             ? frTrimFractionExtremes(recencyPreferred.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
@@ -4630,6 +4633,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_selected_reason = buildingHadNoReliableValue ? "street_preferred_over_weak_building" : "street_fallback";
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
+          frRuntimeDebug.fr_fallback_level_used = "street_fallback";
+          frRuntimeDebug.fr_total_rows_used = streetFallbackRowsCount;
           console.log(
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_numeric (EXACT+BUILDING+STREET ran)"
           );
@@ -4688,6 +4693,8 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_selected_layer_quality = streetConfidence;
         frRuntimeDebug.fr_selected_reason = "street_price_only_no_surface";
         frRuntimeDebug.chosen_surface_value = null;
+        frRuntimeDebug.fr_fallback_level_used = "street_fallback";
+        frRuntimeDebug.fr_total_rows_used = streetFallbackRowsCount;
         console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
         return frReturn(
           {
@@ -4822,7 +4829,7 @@ export async function GET(request: NextRequest) {
           return v != null && v > 0 ? { price: v, date: getCommuneDate(r) } : null;
         }).filter((x): x is { price: number; date: unknown } => x != null);
         const communeRecent = communeWithPrice.filter((x) => frSaleDateWithinFiveYears(x.date));
-        const communeRecencyPreferred = communeRecent.length >= 2 ? communeRecent : communeWithPrice;
+        const communeRecencyPreferred = communeRecent.length >= 1 ? communeRecent : communeWithPrice;
         const communeForMedian =
           communeRecencyPreferred.length >= 5
             ? frTrimFractionExtremes(communeRecencyPreferred.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
@@ -4849,6 +4856,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_selected_reason = "commune_fallback";
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
           frRuntimeDebug.winning_median_price_per_m2 = medianAvgPricePerM2Euro;
+          frRuntimeDebug.fr_fallback_level_used = "commune_fallback";
+          frRuntimeDebug.fr_total_rows_used = communeFilteredCount;
           console.log(
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
           );
@@ -4965,6 +4974,36 @@ export async function GET(request: NextRequest) {
             })
             .filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean } => x.ppm != null && x.ppm > 0);
 
+          if (withPpm.length < 3) {
+            const [anyRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; street?: unknown; house_number?: unknown; last_sale_date?: unknown; city?: unknown }>]>({
+              query: `
+                SELECT price_per_m2, street, house_number, last_sale_date, city
+                FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+                WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+                  AND ${frBqPostcodeMatchSql}
+                  AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+                LIMIT 200
+              `,
+              params: { country: country || "", postcode: postcodeNormForSource, city: cityNormForSource || cityNorm || "" },
+            }, "nearby_fallback_no_type");
+            const extraRows = (anyRows ?? []).map((r) => {
+              const ppm = frPropertyLatestFactsMoneyToEuros(r.price_per_m2);
+              const streetRaw = String(r.street ?? "").trim().toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+              const streetNormRow = streetRaw.replace(/^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i, "").trim();
+              const streetMatch = streetNormForSource && (streetNormRow.includes(streetNormForSource) || streetNormForSource.includes(streetNormRow) || streetNormRow === streetNormForSource);
+              const cityMatch = cityNorm && (r.city != null && String(r.city).toLowerCase().includes(cityNorm.toLowerCase()));
+              const hnNum = extractHouseNumberNumeric(String(r.house_number ?? ""));
+              const houseDist = houseNumberNumericTarget != null && hnNum != null ? Math.abs(hnNum - houseNumberNumericTarget) : 999;
+              const dateStr = r.last_sale_date != null ? String(r.last_sale_date).trim() || null : null;
+              const isRecent = frSaleDateWithinFiveYears(r.last_sale_date);
+              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent };
+            }).filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean } => x.ppm != null && x.ppm > 0);
+            if (extraRows.length > withPpm.length) {
+              withPpm.length = 0;
+              withPpm.push(...extraRows);
+              console.log("[FR_NEARBY] fallback_no_type_rows=" + String(extraRows.length));
+            }
+          }
           if (withPpm.length < 1) {
             console.log("[FR_NEARBY] nearby_rows_found=0");
             return null;
@@ -4979,7 +5018,7 @@ export async function GET(request: NextRequest) {
           });
 
           const recentNearby = withPpm.filter((x) => x.isRecent);
-          const recencyPreferred = recentNearby.length >= 5 ? recentNearby : withPpm;
+          const recencyPreferred = recentNearby.length >= 3 ? recentNearby : withPpm;
           const poolSize = Math.min(recencyPreferred.length, 80);
           const pool = recencyPreferred.slice(0, poolSize);
           const ppmValues = pool.map((x) => x.ppm);
@@ -5015,6 +5054,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
           frRuntimeDebug.fr_selected_layer_quality = conf;
           frRuntimeDebug.fr_selected_reason = "nearby_fallback";
+          frRuntimeDebug.fr_fallback_level_used = "nearby_fallback";
+          frRuntimeDebug.fr_total_rows_used = pool.length;
 
           return frReturn(
             {
@@ -5070,6 +5111,90 @@ export async function GET(request: NextRequest) {
 
       const nearbyWin = await tryNearbyFallback();
       if (nearbyWin) return nearbyWin;
+
+      const tryCommuneEmergencyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
+        const cityForQuery = cityNormForSource || cityNorm;
+        if (!cityForQuery?.trim()) return null;
+        try {
+          const postcodeClause = (postcodeNormForSource ?? "").trim()
+            ? `AND ${frBqPostcodeMatchSql}`
+            : "";
+          const q = `
+            SELECT price_per_m2
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = 'fr'
+              AND (LOWER(TRIM(city)) = LOWER(TRIM(@city)) OR LOWER(TRIM(city)) LIKE CONCAT(LOWER(TRIM(@city)), ' %'))
+              ${postcodeClause}
+            LIMIT 500
+          `;
+          const [rows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>({
+            query: q,
+            params: { city: cityForQuery, postcode: postcodeNormForSource || "" },
+          }, "commune_emergency_fallback");
+          const ppmEuros = (rows ?? [])
+            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
+            .filter((v): v is number => v != null && v > 0);
+          if (ppmEuros.length < 1) return null;
+          const medianPpm = medianNumber(ppmEuros) ?? ppmEuros[0];
+          if (medianPpm == null || medianPpm <= 0) return null;
+          const estimated = surfaceForEstimation != null && surfaceForEstimation > 0 ? Math.round(surfaceForEstimation * medianPpm) : null;
+          const label = "Based on commune-level pricing (limited data)";
+          frRuntimeDebug.winning_step = "commune_emergency";
+          frRuntimeDebug.winning_source_label = label;
+          frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.fr_selected_layer_quality = "low";
+          frRuntimeDebug.fr_selected_reason = "commune_emergency_safety_net";
+          frRuntimeDebug.fr_fallback_level_used = "commune_emergency";
+          frRuntimeDebug.fr_total_rows_used = ppmEuros.length;
+          frRuntimeDebug.fr_empty_prevented = true;
+          frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
+          console.log("[FR_EMERGENCY] commune_emergency rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpm));
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              fr_detect: frDetectToUse,
+              property_result: {
+                exact_value: estimated,
+                exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
+                value_level: "commune-level",
+                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                street_average: medianPpm,
+                street_average_message: label,
+                livability_rating: "FAIR",
+              },
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "nearby_comparable",
+                confidence: "low",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: {
+                  transactionDate: null,
+                  transactionValue: estimated,
+                  pricePerSqm: medianPpm,
+                  surfaceArea: surfaceForEstimation ?? null,
+                  rooms: null,
+                  propertyType: propertyType,
+                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                  postalCode: postcodeNorm || null,
+                  commune: cityNorm || null,
+                },
+                buildingStats: null,
+                comparables: [],
+                matchExplanation: label,
+              }),
+            },
+            "valuation_response"
+          );
+        } catch (e) {
+          console.log("[FR_EMERGENCY] commune_emergency_error", (e as Error)?.message);
+          return null;
+        }
+      };
+
+      const emergencyWin = await tryCommuneEmergencyFallback();
+      if (emergencyWin) return emergencyWin;
 
       const noDataReasonParts: string[] = [];
       if (exactApartmentRowsCount <= 0) noDataReasonParts.push("no_exact_lot_rows");
@@ -5133,6 +5258,7 @@ export async function GET(request: NextRequest) {
         (bRowsNoData > 0 || buildingProfile != null) &&
         frRuntimeDebug.fr_building_value_reliable !== true;
 
+      frRuntimeDebug.fr_empty_prevented = false;
       if (terminalNoDataTag === "fallback_match") {
         frRuntimeDebug.winning_step = null;
         frRuntimeDebug.winning_source_label = null;

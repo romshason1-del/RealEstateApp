@@ -1424,6 +1424,9 @@ export function FranceApartmentSheet({
                       <div>fr_area_liquidity: {toDebugStr(rd?.fr_area_liquidity)}</div>
                       <div>fr_area_median_ppm2: {toDebugStr(rd?.fr_area_median_ppm2)}</div>
                       <div>fr_area_tx_count: {toDebugStr(rd?.fr_area_tx_count)}</div>
+                      <div>fr_fallback_level_used: {toDebugStr(rd?.fr_fallback_level_used)}</div>
+                      <div>fr_total_rows_used: {toDebugStr(rd?.fr_total_rows_used)}</div>
+                      <div>fr_empty_prevented: {toDebugStr(rd?.fr_empty_prevented)}</div>
                       {toDebugStr(rd?.no_data_reason) !== "—" ? (
                         <div>no_data_reason: {toDebugStr(rd?.no_data_reason)}</div>
                       ) : null}
