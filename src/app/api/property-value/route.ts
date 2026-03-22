@@ -629,7 +629,7 @@ export async function GET(request: NextRequest) {
         fr_lot_used_in_ranking: null as boolean | null,
         fr_post_lot_candidate_count: null as number | null,
         fr_post_lot_winning_reason: null as string | null,
-        fr_lot_match_type: null as "exact" | "building" | "none" | null,
+        fr_lot_match_type: null as "exact" | "building" | "approximate" | "none" | null,
         fr_lot_candidate_summary: null as string | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
@@ -653,9 +653,11 @@ export async function GET(request: NextRequest) {
         winning_median_price_per_m2: null,
         /** Set when `property_latest_facts` money converter runs (1000 = thousandths of €). */
         property_latest_facts_money_divisor: null,
-        exact_level: null as "EXACT_UNIT" | "EXACT_ADDRESS" | "NONE" | null,
+        exact_level: null as "EXACT_UNIT" | "EXACT_ADDRESS" | "APPROXIMATE" | "NONE" | null,
         exact_unit_row_count: null as number | null,
         exact_address_row_count: null as number | null,
+        exact_approximate_row_count: null as number | null,
+        exact_lot_used_in_query: null as boolean | null,
         building_similar_unit_candidates_count: null as number | null,
         building_similar_unit_after_filters_count: null as number | null,
         post_lot_relaxed_candidates_count: null as number | null,
@@ -707,45 +709,57 @@ export async function GET(request: NextRequest) {
           : null;
         const exactUnitCnt = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
         const exactAddrCnt = (frRuntimeDebug.exact_address_row_count as number) ?? 0;
+        const exactApproxCnt = (frRuntimeDebug.exact_approximate_row_count as number) ?? 0;
         const buildingAfterFilters = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
         const postLotRelaxedCount = (frRuntimeDebug.post_lot_relaxed_candidates_count as number) ?? 0;
+        const exactLotInQuery = (frRuntimeDebug.exact_lot_used_in_query as boolean) ?? false;
+        const exactLevel = (frRuntimeDebug.exact_level as string) ?? "";
+        const winningStepStr = String(frRuntimeDebug.winning_step ?? "");
         frRuntimeDebug.fr_lot_used_in_ranking =
           submittedLotPresent &&
           (exactUnitCnt > 0 ||
-            (exactAddrCnt > 0 && (frRuntimeDebug.exact_level as string) === "EXACT_ADDRESS") ||
+            (exactAddrCnt > 0 && exactLevel === "EXACT_ADDRESS") ||
+            (exactApproxCnt > 0 && exactLevel === "APPROXIMATE") ||
+            exactLotInQuery ||
             buildingCandidatesCount > 0 ||
             buildingRowsCount > 0 ||
-            (postLotRelaxedCount > 0 && (frRuntimeDebug.winning_step as string) === "post_lot_relaxed"));
+            (postLotRelaxedCount > 0 && winningStepStr === "post_lot_relaxed"));
         frRuntimeDebug.fr_post_lot_candidate_count =
           exactUnitCnt > 0
             ? exactUnitCnt
-            : exactAddrCnt > 0
-              ? exactAddrCnt
-              : (frRuntimeDebug.winning_step as string) === "post_lot_relaxed" && (buildingAfterFilters > 0 || postLotRelaxedCount > 0)
-                ? buildingAfterFilters > 0 ? buildingAfterFilters : postLotRelaxedCount
-                : buildingAfterFilters > 0
-                  ? buildingAfterFilters
-                  : buildingCandidatesCount > 0
-                    ? buildingCandidatesCount
-                    : buildingRowsCount > 0
-                      ? buildingRowsCount
-                      : null;
+            : exactApproxCnt > 0 && exactLevel === "APPROXIMATE"
+              ? exactApproxCnt
+              : exactAddrCnt > 0
+                ? exactAddrCnt
+                : winningStepStr === "post_lot_relaxed" && (buildingAfterFilters > 0 || postLotRelaxedCount > 0)
+                  ? buildingAfterFilters > 0 ? buildingAfterFilters : postLotRelaxedCount
+                  : buildingAfterFilters > 0
+                    ? buildingAfterFilters
+                    : buildingCandidatesCount > 0
+                      ? buildingCandidatesCount
+                      : buildingRowsCount > 0
+                        ? buildingRowsCount
+                        : (exactUnitCnt + exactApproxCnt + exactAddrCnt) > 0
+                          ? exactUnitCnt + exactApproxCnt + exactAddrCnt
+                          : null;
         frRuntimeDebug.fr_post_lot_winning_reason =
           (frRuntimeDebug.winning_step as string) ?? (frRuntimeDebug.exact_match_reason as string) ?? null;
-        const ws = String(frRuntimeDebug.winning_step ?? "");
         frRuntimeDebug.fr_lot_match_type =
           !submittedLotPresent
             ? null
-            : ws === "exact_unit"
+            : winningStepStr === "exact_unit"
               ? "exact"
-              : ws === "exact_address" || ws === "building_similar_unit" || ws === "building_level" || ws === "building_fallback" || ws === "post_lot_relaxed"
-                ? "building"
-                : "none";
+              : winningStepStr === "exact_approximate"
+                ? "approximate"
+                : winningStepStr === "exact_address" || winningStepStr === "building_similar_unit" || winningStepStr === "building_level" || winningStepStr === "building_fallback" || winningStepStr === "post_lot_relaxed"
+                  ? "building"
+                  : "none";
         const candParts: string[] = [];
         if (exactUnitCnt > 0) candParts.push(`exact_unit:${exactUnitCnt}`);
+        if (exactApproxCnt > 0) candParts.push(`approximate:${exactApproxCnt}`);
         if (exactAddrCnt > 0) candParts.push(`exact_addr:${exactAddrCnt}`);
         if (buildingCandidatesCount > 0) candParts.push(`building:${buildingCandidatesCount}`);
-        if (postLotRelaxedCount > 0 && ws === "post_lot_relaxed") candParts.push(`post_lot_relaxed:${postLotRelaxedCount}`);
+        if (postLotRelaxedCount > 0 && winningStepStr === "post_lot_relaxed") candParts.push(`post_lot_relaxed:${postLotRelaxedCount}`);
         frRuntimeDebug.fr_lot_candidate_summary =
           submittedLotPresent && candParts.length > 0 ? candParts.join(",") : null;
 
@@ -1923,8 +1937,42 @@ export async function GET(request: NextRequest) {
         "numero_de_lot",
         "ref_lot",
       ]);
+      const dvfLotColumnNames = [
+        "unit_number",
+        "lot_1er",
+        "lot1er",
+        "lot_2eme",
+        "lot2eme",
+        "lot_3eme",
+        "lot3eme",
+        "lot_4eme",
+        "lot4eme",
+        "lot_5eme",
+        "lot5eme",
+        "1er lot",
+        "2eme lot",
+        "3eme lot",
+        "4eme lot",
+        "5eme lot",
+        "identifiant_local",
+        "local_id",
+      ];
+      const lotMatchColumns = dvfLotColumnNames.filter((name) =>
+        exactTableInspection.columns.some((c) => c.toLowerCase() === name.toLowerCase())
+      );
+      const buildLotMatchSql = (): string | null => {
+        if (!lotMatchColumns.length || !normalizedRequestedLot?.trim()) return null;
+        const parts = lotMatchColumns.map((col) => {
+          const esc = "`" + String(col).replace(/`/g, "") + "`";
+          return `(TRIM(CAST(${esc} AS STRING)) = @lot_normalized OR (LENGTH(TRIM(CAST(${esc} AS STRING))) > 0 AND REGEXP_REPLACE(TRIM(CAST(${esc} AS STRING)), r'^0+', '') = @lot_stripped))`;
+        });
+        return parts.length > 0 ? `(${parts.join(" OR ")})` : null;
+      };
+      const frBqLotMatchSql = buildLotMatchSql();
       frRuntimeDebug.exact_lot_column_used = exactPrimaryLotColumn;
+      frRuntimeDebug.exact_lot_match_columns = lotMatchColumns.length > 0 ? lotMatchColumns : null;
       console.log("[FR_EXACT] lot_column_used=" + String(exactPrimaryLotColumn ?? "none"));
+      console.log("[FR_EXACT] lot_match_columns=" + JSON.stringify(lotMatchColumns));
       console.log("[FR_EXACT] lot_like_schema_columns=" + JSON.stringify(lotLikeColsFromSchema));
 
       const frBqStreetBase = `REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(street AS STRING)), NFD)), r'\\p{M}', ''), r'[^A-Z0-9 ]+', ' ')`;
@@ -1951,7 +1999,7 @@ export async function GET(request: NextRequest) {
       };
       const houseNumberNumericTarget = houseNumberNorm ? extractHouseNumberNumeric(houseNumberNorm) : null;
 
-      const exactQuery = `
+      const exactQueryBase = `
         SELECT
           *
         FROM \`streetiq-bigquery.streetiq_gold.${exactTable}\`
@@ -1960,8 +2008,11 @@ export async function GET(request: NextRequest) {
           AND ${frBqCityMatchSql}
           AND ${frBqStreetMatchSql}
           AND ${frBqHouseNumberMatchSql}
-        LIMIT 50
       `;
+      const exactQueryWithLot = frBqLotMatchSql
+        ? `${exactQueryBase}\n          AND ${frBqLotMatchSql}\n        LIMIT 50`
+        : null;
+      const exactQuery = exactQueryWithLot ?? `${exactQueryBase}\n        LIMIT 50`;
       const shouldPromptLotFirst = shouldPromptLot;
       console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
       console.log("[FR_LOT_API] submittedLotPresent", submittedLotPresent);
@@ -1984,7 +2035,9 @@ export async function GET(request: NextRequest) {
       console.log("[FR_FLOW] ladder_step_started=EXACT");
       console.log("[FR_STEP] exact_lookup_start");
       console.log("[FR_GOLD] before_exact_query");
-      const exactParams = {
+      const lotNorm = (normalizedRequestedLot ?? "").trim().toUpperCase();
+      const lotStripped = lotNorm.replace(/^0+/, "") || lotNorm;
+      const exactParamsBase = {
         country: country || "",
         city: cityNormForSource || cityNorm || "",
         city_main: cityNormForSource || cityNorm || "",
@@ -1993,7 +2046,10 @@ export async function GET(request: NextRequest) {
         street_normalized: streetNormForExactMatch || streetNormForSource || "",
         house_number: houseNumberNormForSource || "",
         house_number_norm: houseNumberNormForMatch || "",
+        lot_normalized: lotNorm || "",
+        lot_stripped: lotStripped || "",
       };
+      const exactParams = { ...exactParamsBase };
       frRuntimeDebug.fr_source_lookup_postcode = postcodeNormForSource || null;
       frRuntimeDebug.fr_source_lookup_city = cityNormForSource || null;
       frRuntimeDebug.fr_source_lookup_street_raw = streetNorm || null;
@@ -2002,14 +2058,34 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_source_lookup_street = streetNormForSource || null;
       frRuntimeDebug.fr_source_lookup_house_number = houseNumberNormForSource || null;
       console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
-      const [exactRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-        {
-          query: exactQuery,
-          params: exactParams,
-        },
-        "exact_query"
-      );
-      const exactRowsCount = (exactRows as any[])?.length ?? 0;
+      let exactRows: Array<Record<string, unknown>> = [];
+      let exactLotUsedInQuery = false;
+      if (exactQueryWithLot && lotNorm && frBqLotMatchSql) {
+        const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          { query: exactQueryWithLot, params: exactParams },
+          "exact_query_lot_filtered"
+        );
+        exactRows = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
+        if (exactRows.length > 0) {
+          exactLotUsedInQuery = true;
+          console.log("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
+        } else {
+          const [addressOnlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: `${exactQueryBase}\n        LIMIT 50`, params: exactParams },
+            "exact_query_address_only"
+          );
+          exactRows = (addressOnlyRows ?? []) as Array<Record<string, unknown>>;
+          console.log("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
+        }
+      } else {
+        const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          { query: exactQuery, params: exactParams },
+          "exact_query"
+        );
+        exactRows = (rows ?? []) as Array<Record<string, unknown>>;
+      }
+      frRuntimeDebug.exact_lot_used_in_query = exactLotUsedInQuery;
+      const exactRowsCount = exactRows.length;
       frRuntimeDebug.fr_source_lookup_exact_count = exactRowsCount;
       if (exactRowsCount > 0) {
         frRuntimeDebug.fr_source_lookup_failed_reason = null;
@@ -2102,6 +2178,25 @@ export async function GET(request: NextRequest) {
       const isAddressOnlyAggregateRow = (r: Record<string, unknown>): boolean =>
         primaryUnitNumberRaw(r) == null && extractLotTokensFromRow(r).length === 0;
 
+      /** Row has lot tokens but does not exactly match submitted lot. */
+      const isApproximateLotRow = (r: Record<string, unknown>): boolean => {
+        if (unitTokenMatchesSubmittedLot(r)) return false;
+        if (isAddressOnlyAggregateRow(r)) return false;
+        return extractLotTokensFromRow(r).length > 0;
+      };
+
+      const lotDistanceForRow = (r: Record<string, unknown>): number => {
+        if (!exactLotToken) return 999;
+        const tokens = extractLotTokensFromRow(r);
+        if (tokens.some((t) => t === exactLotToken)) return 0;
+        if (tokens.length > 0) {
+          const rowNum = parseInt(String(tokens[0]).replace(/\D/g, "") || "0", 10);
+          const reqNum = parseInt(String(exactLotToken).replace(/\D/g, "") || "0", 10);
+          if (Number.isFinite(rowNum) && Number.isFinite(reqNum)) return Math.abs(rowNum - reqNum);
+        }
+        return 999;
+      };
+
       const sortExactCandidates = (rows: Array<Record<string, unknown>>): Record<string, unknown> | undefined => {
         if (rows.length === 0) return undefined;
         const sorted = [...rows].sort((a, b) => {
@@ -2113,6 +2208,20 @@ export async function GET(request: NextRequest) {
           return db.localeCompare(da);
         });
         return sorted[0];
+      };
+
+      const sortApproximateByLotDistance = (rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+        return [...rows].sort((a, b) => {
+          const da = lotDistanceForRow(a);
+          const db = lotDistanceForRow(b);
+          if (da !== db) return da - db;
+          const pa = parseMaybeDecimal((a as any).price_per_m2) ?? 0;
+          const pb = parseMaybeDecimal((b as any).price_per_m2) ?? 0;
+          if (pb !== pa) return pb - pa;
+          const dateA = String((a as any).last_sale_date ?? "");
+          const dateB = String((b as any).last_sale_date ?? "");
+          return dateB.localeCompare(dateA);
+        });
       };
 
       const isHouseLikePropertyType = (r: Record<string, unknown>): boolean => {
@@ -2237,27 +2346,34 @@ export async function GET(request: NextRequest) {
         console.log("[FR_HOUSE] reject_reason=no_exact_rows_for_address");
       }
 
-      let exactTier: "EXACT_UNIT" | "EXACT_ADDRESS" | "NONE" = "NONE";
+      let exactTier: "EXACT_UNIT" | "EXACT_ADDRESS" | "APPROXIMATE" | "NONE" = "NONE";
       let exactMatchingRows: Array<Record<string, unknown>> = [];
       let usableUnitRows: Array<Record<string, unknown>> = [];
       let usableAddressRows: Array<Record<string, unknown>> = [];
+      let usableApproximateRows: Array<Record<string, unknown>> = [];
 
       if (!exactLotToken) {
         exactMatchingRows = [];
         frRuntimeDebug.exact_unit_row_count = 0;
         frRuntimeDebug.exact_address_row_count = 0;
+        frRuntimeDebug.exact_approximate_row_count = 0;
       } else {
         const unitCandidates = (exactRows as Array<Record<string, unknown>>).filter((r) =>
           unitTokenMatchesSubmittedLot(r)
         );
+        const approximateCandidates = (exactRows as Array<Record<string, unknown>>).filter((r) =>
+          isApproximateLotRow(r)
+        );
         const addressCandidates = (exactRows as Array<Record<string, unknown>>).filter((r) =>
           isAddressOnlyAggregateRow(r)
         );
-        exactMatchingRows = [...unitCandidates, ...addressCandidates];
+        exactMatchingRows = [...unitCandidates, ...approximateCandidates, ...addressCandidates];
         usableUnitRows = unitCandidates.filter(rowUsableForExact);
+        usableApproximateRows = sortApproximateByLotDistance(approximateCandidates).filter(rowUsableForExact);
         usableAddressRows = addressCandidates.filter(rowUsableForExact);
         frRuntimeDebug.exact_unit_row_count = unitCandidates.length;
         frRuntimeDebug.exact_address_row_count = addressCandidates.length;
+        frRuntimeDebug.exact_approximate_row_count = approximateCandidates.length;
       }
 
       const exactApartmentRowsCount = exactMatchingRows.length;
@@ -2307,6 +2423,10 @@ export async function GET(request: NextRequest) {
         exactBest = sortExactCandidates(usableUnitRows);
         exactTier = "EXACT_UNIT";
         exactUnitMatch = true;
+      } else if (usableApproximateRows.length > 0) {
+        exactBest = usableApproximateRows[0];
+        exactTier = "APPROXIMATE";
+        exactUnitMatch = false;
       } else if (exactLotToken && usableAddressRows.length > 0) {
         exactBest = sortExactCandidates(usableAddressRows);
         exactTier = "EXACT_ADDRESS";
@@ -2320,7 +2440,13 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.exact_level = exactTier;
 
       const usableExactRows =
-        exactTier === "EXACT_UNIT" ? usableUnitRows : exactTier === "EXACT_ADDRESS" ? usableAddressRows : [];
+        exactTier === "EXACT_UNIT"
+          ? usableUnitRows
+          : exactTier === "EXACT_ADDRESS"
+            ? usableAddressRows
+            : exactTier === "APPROXIMATE"
+              ? usableApproximateRows
+              : [];
 
       console.log("[FR_EXACT] submitted_lot=" + String(exactLotToken ?? ""));
       console.log("[FR_EXACT] unit_match=" + String(exactUnitMatch));
@@ -2400,7 +2526,7 @@ export async function GET(request: NextRequest) {
             lotColEscaped && exactLotToken
               ? `, CAST(COALESCE(${lotColEscaped}, '') AS STRING) AS lot_col`
               : "";
-          const similarUnitQuery = `
+          const similarUnitQueryBase = `
           SELECT
             surface_m2,
             price_per_m2,
@@ -2415,8 +2541,13 @@ export async function GET(request: NextRequest) {
             AND ${frBqStreetMatchSql}
             AND ${frBqHouseNumberMatchSql}
             AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-          LIMIT 300
-        `;
+          `;
+          const similarUnitQueryWithLot =
+            frBqLotMatchSql && exactLotToken
+              ? `${similarUnitQueryBase}\n            AND ${frBqLotMatchSql}\n          LIMIT 300`
+              : null;
+          const similarUnitQuery =
+            similarUnitQueryWithLot ?? `${similarUnitQueryBase}\n          LIMIT 300`;
           const similarParams = {
             country: country || "",
             city: cityNormForSource || cityNorm || "",
@@ -2425,11 +2556,32 @@ export async function GET(request: NextRequest) {
             street_normalized: streetNormForSource || "",
             house_number: houseNumberNormForSource || "",
             house_number_norm: houseNumberNormForMatch || "",
+            lot_normalized: lotNorm || "",
+            lot_stripped: lotStripped || "",
           };
-          let [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            { query: similarUnitQuery, params: similarParams },
-            "building_similar_unit_query"
-          );
+          let similarRowsRaw: Array<Record<string, unknown>> | undefined;
+          if (similarUnitQueryWithLot && exactLotToken) {
+            const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: similarUnitQueryWithLot, params: similarParams },
+              "building_similar_unit_lot_filtered"
+            );
+            const lotFiltered = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
+            if (lotFiltered.length >= 2) {
+              similarRowsRaw = lotFiltered;
+              console.log("[FR_BUILDING] lot_filtered_candidates=" + lotFiltered.length);
+            } else {
+              console.log("[FR_BUILDING] lot_filtered_rows=" + lotFiltered.length + ", falling_back_to_address_only");
+              [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+                { query: `${similarUnitQueryBase}\n          LIMIT 300`, params: similarParams },
+                "building_similar_unit_query"
+              );
+            }
+          } else {
+            [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: similarUnitQuery, params: similarParams },
+              "building_similar_unit_query"
+            );
+          }
           let similarRows = similarRowsRaw ?? [];
           let rawCount = similarRows.length;
 
@@ -2720,7 +2872,7 @@ export async function GET(request: NextRequest) {
             houseNumberNumericTarget != null
               ? `(COALESCE(SAFE_CAST(REGEXP_EXTRACT(TRIM(CAST(house_number AS STRING)), r'^(\\d+)') AS INT64), 999999) BETWEEN @house_number_numeric_target - 15 AND @house_number_numeric_target + 15`
               : "TRUE";
-          const postLotRelaxedQuery = `
+          const postLotRelaxedBase = `
           SELECT
             surface_m2,
             price_per_m2,
@@ -2735,8 +2887,11 @@ export async function GET(request: NextRequest) {
             AND ${frBqStreetRelaxedSql}
             AND ${frBqHouseNumberRelaxedSql}
             AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-          LIMIT 300
-        `;
+          `;
+          const postLotRelaxedWithLot =
+            frBqLotMatchSql && lotNorm
+              ? `${postLotRelaxedBase}\n            AND ${frBqLotMatchSql}\n          LIMIT 300`
+              : null;
           const postLotParams = {
             country: country || "",
             city: cityNormForSource || cityNorm || "",
@@ -2747,12 +2902,31 @@ export async function GET(request: NextRequest) {
             street_normalized: streetNormForSource || "",
             street_core: streetCore,
             house_number_numeric_target: houseNumberNumericTarget ?? 0,
+            lot_normalized: lotNorm || "",
+            lot_stripped: lotStripped || "",
           };
-          const [relaxedRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            { query: postLotRelaxedQuery, params: postLotParams },
-            "post_lot_relaxed_query"
-          );
-          const similarRows = relaxedRows ?? [];
+          let relaxedRows: Array<Record<string, unknown>> | undefined;
+          if (postLotRelaxedWithLot) {
+            const [lotFiltered] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: postLotRelaxedWithLot, params: postLotParams },
+              "post_lot_relaxed_lot_filtered"
+            );
+            const lotFilteredArr = (lotFiltered ?? []) as Array<Record<string, unknown>>;
+            if (lotFilteredArr.length >= 2) {
+              relaxedRows = lotFilteredArr;
+              console.log("[FR_POST_LOT_RELAXED] lot_filtered_candidates=" + lotFilteredArr.length);
+            } else {
+              console.log("[FR_POST_LOT_RELAXED] lot_filtered_rows=" + lotFilteredArr.length + ", using_relaxed_only");
+            }
+          }
+          if (relaxedRows == null) {
+            const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: `${postLotRelaxedBase}\n          LIMIT 300`, params: postLotParams },
+              "post_lot_relaxed_query"
+            );
+            relaxedRows = (rows ?? []) as Array<Record<string, unknown>>;
+          }
+          const similarRows = relaxedRows;
           const rawCount = similarRows.length;
           frRuntimeDebug.post_lot_relaxed_candidates_count = rawCount;
           console.log("[FR_POST_LOT_RELAXED] candidates_count=" + String(rawCount));
@@ -2973,14 +3147,18 @@ export async function GET(request: NextRequest) {
         if (hasEstimated) {
           console.log("[FR_PRICE] api_estimated_value_exact_surface_x_ppm=" + String(estimated));
           const isExactUnitTier = exactTier === "EXACT_UNIT";
-          const winningStep = isExactUnitTier ? "exact_unit" : "exact_address";
-          const winningSourceLabel = isExactUnitTier
-            ? detectClass === "apartment"
-              ? "Exact apartment"
-              : "Exact property"
-            : "Exact address match";
-          const frResultType = isExactUnitTier ? "exact_apartment" : "exact_address";
-          const frConfidence = isExactUnitTier ? "medium_high" : "high";
+          const isApproximateTier = exactTier === "APPROXIMATE";
+          const winningStep =
+            isExactUnitTier ? "exact_unit" : isApproximateTier ? "exact_approximate" : "exact_address";
+          const winningSourceLabel =
+            isExactUnitTier
+              ? detectClass === "apartment" ? "Exact apartment" : "Exact property"
+              : isApproximateTier
+                ? "Approximate lot match (same building)"
+                : "Exact address match";
+          const frResultType =
+            isExactUnitTier ? "exact_apartment" : isApproximateTier ? "exact_address" : "exact_address";
+          const frConfidence = isExactUnitTier ? "medium_high" : isApproximateTier ? "medium_high" : "high";
           frRuntimeDebug.exact_reject_reason = "";
           console.log("[FR_EXACT] exact_reject_reason=");
           console.log("[FR_DEBUG] winning_valuation_step", {
@@ -3034,7 +3212,9 @@ export async function GET(request: NextRequest) {
                 ? detectClass === "apartment"
                   ? "Exact apartment match"
                   : "Exact property match"
-                : "Exact address match (building-level record; unit not matched in data)",
+                : isApproximateTier
+                  ? "Approximate lot match (same building, lot used for ranking)"
+                  : "Exact address match (building-level record; unit not matched in data)",
             }),
           }, "valuation_response");
         }
