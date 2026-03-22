@@ -293,12 +293,14 @@ export function FranceApartmentSheet({
             ? "house"
             : "unclear";
 
-  // Single source of truth: API detect_class (fr_runtime_debug) overrides local heuristics.
+  // Single source of truth: API detect_class (fr_runtime_debug) overrides local heuristics. House wins over backend lot prompt.
   const detectClassFromApi = (parsed as any)?.fr_runtime_debug?.detect_class ?? (data as any)?.fr_runtime_debug?.detect_class;
   const frDetectFinalClass: "apartment" | "house" | "unclear" =
-    detectClassFromApi === "apartment" || detectClassFromApi === "house" || detectClassFromApi === "unclear"
-      ? detectClassFromApi
-      : effectiveDetectClass;
+    detectClassFromApi === "house" || (frDetect === "house" && !backendMultiUnitFlag && availableLots.length === 0)
+      ? "house"
+      : detectClassFromApi === "apartment" || detectClassFromApi === "unclear"
+        ? detectClassFromApi
+        : effectiveDetectClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
 
   // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. No local derivation.
@@ -1322,7 +1324,12 @@ export function FranceApartmentSheet({
                 ) : null}
               </div>
 
-              {/* 2) Price per m² (boxed) + Last transaction (inline row) */}
+              {/* 2) Last transaction – inline row (directly below Estimated value) */}
+              <div className="text-[13px] font-medium leading-tight text-zinc-300/95">
+                Last transaction: {lastTransactionSummaryLine}
+              </div>
+
+              {/* 3) Price per m² (boxed) */}
               {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
                 <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                   <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
@@ -1333,11 +1340,8 @@ export function FranceApartmentSheet({
                   </div>
                 </div>
               ) : null}
-              <div className="text-[13px] font-medium leading-tight text-zinc-300/95">
-                Last transaction: {lastTransactionSummaryLine}
-              </div>
 
-              {/* 3) Explanation */}
+              {/* 4) Explanation */}
               {!isLoadingNow && (basedOnExplainer || (frDetect === "unclear" && isNoResult)) ? (
                 <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                   <div className="text-xs font-medium leading-tight text-zinc-400/90">
@@ -1348,7 +1352,7 @@ export function FranceApartmentSheet({
                 </div>
               ) : null}
 
-              {/* 4) Livability */}
+              {/* 5) Livability */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                 <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
                   Livability

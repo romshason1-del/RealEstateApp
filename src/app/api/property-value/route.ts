@@ -750,19 +750,20 @@ export async function GET(request: NextRequest) {
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
-        // Single source of truth for lot prompt: recompute before every return so UI and debug always agree.
+        // Single source of truth for lot prompt: house classification ALWAYS suppresses; recompute before every return.
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
         const payloadAsksForLot =
           payload.multiple_units === true || payload.prompt_for_apartment === true;
         const shouldPromptLotCanonical =
-          detectClass !== "house" &&
-          !submittedLotPresent &&
-          (payloadAsksForLot ||
-            flowAsApartment ||
-            isLikelyBuilding ||
-            buildingRowsCount > 0 ||
-            buildingCandidatesCount > 0);
+          detectClass === "house"
+            ? false
+            : !submittedLotPresent &&
+              (payloadAsksForLot ||
+                flowAsApartment ||
+                isLikelyBuilding ||
+                buildingRowsCount > 0 ||
+                buildingCandidatesCount > 0);
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
