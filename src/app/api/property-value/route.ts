@@ -639,6 +639,8 @@ export async function GET(request: NextRequest) {
         fr_post_lot_winning_reason: null as string | null,
         fr_lot_match_type: null as "exact" | "building" | "approximate" | "none" | null,
         fr_lot_candidate_summary: null as string | null,
+        fr_lot_distance_score: null as number | null,
+        fr_lot_surface_similarity: null as number | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
         exact_rows_count: null,
@@ -2277,14 +2279,34 @@ export async function GET(request: NextRequest) {
         return sorted[0];
       };
 
-      const sortApproximateByLotDistance = (rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+      const sortApproximateByLotDistance = (
+        rows: Array<Record<string, unknown>>,
+        targetSurfaceM2: number | null = null
+      ): Array<Record<string, unknown>> => {
+        if (rows.length === 0) return [];
+        const targetSurf = targetSurfaceM2 ?? medianNumber(
+          rows.map((r) => parseMaybeDecimal((r as any).surface_m2)).filter((v): v is number => v != null && v > 0)
+        ) ?? 0;
+        const ppms = rows.map((r) => frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2)).filter((v): v is number => v != null && v > 0);
+        const medianPpm = medianNumber(ppms) ?? 0;
         return [...rows].sort((a, b) => {
           const da = lotDistanceForRow(a);
           const db = lotDistanceForRow(b);
           if (da !== db) return da - db;
-          const pa = parseMaybeDecimal((a as any).price_per_m2) ?? 0;
-          const pb = parseMaybeDecimal((b as any).price_per_m2) ?? 0;
-          if (pb !== pa) return pb - pa;
+          const surfA = parseMaybeDecimal((a as any).surface_m2) ?? 0;
+          const surfB = parseMaybeDecimal((b as any).surface_m2) ?? 0;
+          if (targetSurf > 0) {
+            const diffA = Math.abs(surfA - targetSurf);
+            const diffB = Math.abs(surfB - targetSurf);
+            if (diffA !== diffB) return diffA - diffB;
+          }
+          const ppmA = frPropertyLatestFactsMoneyToEuros((a as any).price_per_m2) ?? 0;
+          const ppmB = frPropertyLatestFactsMoneyToEuros((b as any).price_per_m2) ?? 0;
+          if (medianPpm > 0) {
+            const mDiffA = Math.abs(ppmA - medianPpm);
+            const mDiffB = Math.abs(ppmB - medianPpm);
+            if (mDiffA !== mDiffB) return mDiffA - mDiffB;
+          }
           const dateA = String((a as any).last_sale_date ?? "");
           const dateB = String((b as any).last_sale_date ?? "");
           return dateB.localeCompare(dateA);
@@ -2436,7 +2458,7 @@ export async function GET(request: NextRequest) {
         );
         exactMatchingRows = [...unitCandidates, ...approximateCandidates, ...addressCandidates];
         usableUnitRows = unitCandidates.filter(rowUsableForExact);
-        usableApproximateRows = sortApproximateByLotDistance(approximateCandidates).filter(rowUsableForExact);
+        usableApproximateRows = sortApproximateByLotDistance(approximateCandidates, validInputSurfaceM2 ?? null).filter(rowUsableForExact);
         usableAddressRows = addressCandidates.filter(rowUsableForExact);
         frRuntimeDebug.exact_unit_row_count = unitCandidates.length;
         frRuntimeDebug.exact_address_row_count = addressCandidates.length;
@@ -2827,15 +2849,15 @@ export async function GET(request: NextRequest) {
               const db = Math.abs(b.surf - targetSurface);
               if (da !== db) return da - db;
             }
-            if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
-            const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
-            const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
-            if (tb !== ta) return tb - ta;
             if (medianPpmEuro > 0) {
               const ma = Math.abs(a.ppmEuro - medianPpmEuro);
               const mb = Math.abs(b.ppmEuro - medianPpmEuro);
               if (ma !== mb) return ma - mb;
             }
+            const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
+            const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
+            if (tb !== ta) return tb - ta;
+            if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
             if (a.ppmEuro !== b.ppmEuro) return a.ppmEuro - b.ppmEuro;
             return a.surf - b.surf;
           });
@@ -2845,6 +2867,14 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.building_similar_unit_reject_reason = "no_best_after_sort";
             console.log("[FR_BUILDING] reject_reason=no_best_after_sort");
             return null;
+          }
+
+          if (exactLotToken) {
+            frRuntimeDebug.fr_lot_distance_score = best.lotDistance;
+            frRuntimeDebug.fr_lot_surface_similarity =
+              targetSurface != null && targetSurface > 0 && best.surf > 0
+                ? 1 - Math.min(1, Math.abs(best.surf - targetSurface) / targetSurface)
+                : null;
           }
 
           const estSurf = validInputSurfaceM2 ?? p.medianSurfaceM2ForFallback ?? best.surf;
@@ -3194,18 +3224,25 @@ export async function GET(request: NextRequest) {
               const db = Math.abs(b.surf - targetSurface);
               if (da !== db) return da - db;
             }
-            if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
-            if (b.dateTs !== a.dateTs) return b.dateTs - a.dateTs;
             if (cohortMedian > 0) {
               const ma = Math.abs(a.ppmEuro - cohortMedian);
               const mb = Math.abs(b.ppmEuro - cohortMedian);
               if (ma !== mb) return ma - mb;
             }
+            if (b.dateTs !== a.dateTs) return b.dateTs - a.dateTs;
+            if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
             if (a.ppmEuro !== b.ppmEuro) return a.ppmEuro - b.ppmEuro;
             return a.surf - b.surf;
           });
           const best = sorted[0];
           if (!best) return null;
+          if (exactLotToken) {
+            frRuntimeDebug.fr_lot_distance_score = best.lotDistance;
+            frRuntimeDebug.fr_lot_surface_similarity =
+              targetSurface != null && targetSurface > 0 && best.surf > 0
+                ? 1 - Math.min(1, Math.abs(best.surf - targetSurface) / targetSurface)
+                : null;
+          }
           const estSurf = validInputSurfaceM2 ?? (best.surf > 0 ? best.surf : null) ?? medSurfCohort;
           const ppmForEstimate = cohortMedian > 0 ? cohortMedian : best.ppmEuro;
           const estimated =
@@ -3343,6 +3380,16 @@ export async function GET(request: NextRequest) {
             isExactUnitTier ? "exact_apartment" : isApproximateTier ? "exact_address" : "exact_address";
           const frConfidence = isExactUnitTier ? "medium_high" : isApproximateTier ? "medium_high" : "high";
           frRuntimeDebug.exact_reject_reason = "";
+          if (isApproximateTier && exactBest) {
+            frRuntimeDebug.fr_lot_distance_score = lotDistanceForRow(exactBest);
+            const bestSurf = parseMaybeDecimal((exactBest as any).surface_m2);
+            const cohortSurfs = (usableExactRows ?? []).map((r) => parseMaybeDecimal((r as any).surface_m2)).filter((v): v is number => v != null && v > 0);
+            const targetSurfForSim = validInputSurfaceM2 ?? (cohortSurfs.length > 0 ? medianNumber(cohortSurfs) : null) ?? bestSurf ?? 0;
+            frRuntimeDebug.fr_lot_surface_similarity =
+              targetSurfForSim > 0 && bestSurf != null && bestSurf > 0
+                ? 1 - Math.min(1, Math.abs(bestSurf - targetSurfForSim) / targetSurfForSim)
+                : null;
+          }
           console.log("[FR_EXACT] exact_reject_reason=");
           console.log("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: winningStep,
