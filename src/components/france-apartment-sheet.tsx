@@ -971,10 +971,6 @@ export function FranceApartmentSheet({
         referenceSaleDateLabelFromRaw((pr as any)?.last_transaction?.date as unknown) ??
         referenceSaleDateLabelFromRaw(fvForDate?.last_sale_date as unknown);
 
-    if (!isLoadingNow && fr?.resultType === "building_similar_unit") {
-      console.log("[FR_UI_REF_SALE]", referenceSaleValue, typeof referenceSaleValue);
-    }
-
     const title = isLoadingNow
       ? "Searching DVF…"
       : badge?.label ??
@@ -1200,27 +1196,6 @@ export function FranceApartmentSheet({
         coercePositiveNumber(fv?.last_sale_price as unknown)
       : null;
 
-    // RUNTIME PROOF: log exact data shape for Last transaction row (dev only; run app, check console)
-    if (isDev && !isLoadingNow && fr != null && typeof window !== "undefined") {
-      const fvForTx = (parsed as any)?.fr_valuation_display;
-      const debugKey = `fr_last_tx:${String(fr?.resultType ?? "")}:${addressKey}`;
-      if (lastLoggedFranceKeyRef.current !== debugKey) {
-        lastLoggedFranceKeyRef.current = debugKey;
-        // eslint-disable-next-line no-console
-        console.log("[FR_LAST_TX_DEBUG] RUNTIME_DATA_SHAPE", {
-          fr_resultType: fr?.resultType,
-          fr_property_transactionValue: fr?.property?.transactionValue,
-          fr_property_transactionDate: fr?.property?.transactionDate,
-          pr_last_transaction: (pr as any)?.last_transaction,
-          fr_valuation_display_last_sale_price: fvForTx?.last_sale_price,
-          fr_valuation_display_last_sale_date: fvForTx?.last_sale_date,
-          parsed_keys: parsed ? Object.keys(parsed) : [],
-          computed_lastTxAmountPositive: lastTxAmountPositive,
-          computed_referenceSaleValue: referenceSaleValue,
-        });
-      }
-    }
-
     const dateText = isLoadingNow ? "—" : referenceSaleValue ?? "—";
 
     const lastTransactionSummaryLine = (() => {
@@ -1381,33 +1356,13 @@ export function FranceApartmentSheet({
 
               {/* 2) Last transaction – bordered row (same container style as Price per m², Livability) */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                    Last transaction
-                  </div>
-                  <span className="text-[9px] font-mono text-amber-400/80" title="Temporary patch marker – remove after validation">FR_LAST_TX_PATCH_V2</span>
+                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+                  Last transaction
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
                 </div>
               </div>
-
-              {/* TEMP: on-screen raw transaction sources – remove after field path confirmed */}
-              {(() => {
-                const toDebug = (v: unknown): string => (v === undefined ? "undefined" : v === null ? "null" : String(v));
-                return (
-                  <div className="rounded-[10px] border border-amber-500/30 bg-amber-950/40 px-2.5 py-2 font-mono text-[10px] leading-tight text-amber-200/90">
-                    <div className="font-semibold text-amber-400">FR_TX_DEBUG</div>
-                    <div>fr.property.transactionValue = {toDebug(fr?.property?.transactionValue)}</div>
-                    <div>fr.property.transactionDate = {toDebug(fr?.property?.transactionDate)}</div>
-                    <div>property_result.last_transaction.amount = {toDebug((pr as any)?.last_transaction?.amount)}</div>
-                    <div>property_result.last_transaction.date = {toDebug((pr as any)?.last_transaction?.date)}</div>
-                    <div>fr_valuation_display.last_sale_price = {toDebug(fv?.last_sale_price)}</div>
-                    <div>fr_valuation_display.last_sale_date = {toDebug(fv?.last_sale_date)}</div>
-                    <div>lastTransactionSummaryLine = {toDebug(lastTransactionSummaryLine)}</div>
-                  </div>
-                );
-              })()}
 
               {/* 3) Price per m² (boxed) */}
               {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
