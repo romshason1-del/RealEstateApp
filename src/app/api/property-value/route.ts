@@ -649,6 +649,9 @@ export async function GET(request: NextRequest) {
         building_usable_rows_count: null,
         street_rows_count: null,
         street_usable_rows_count: null,
+        fr_street_row_count: null as number | null,
+        fr_street_median_price_m2: null as number | null,
+        fr_street_filtered_count: null as number | null,
         commune_rows_count: null,
         commune_usable_rows_count: null,
         winning_step: null,
@@ -4065,7 +4068,7 @@ export async function GET(request: NextRequest) {
       if (streetFallbackRowsCount === 0 && streetNorm && postcodeNorm && cityNorm) {
         try {
           const factsStreetQuery = `
-            SELECT price_per_m2, house_number
+            SELECT price_per_m2, house_number, last_sale_date
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -4073,7 +4076,7 @@ export async function GET(request: NextRequest) {
               AND ${frBqStreetMatchSql}
             LIMIT 200
           `;
-          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; house_number?: unknown }>]>(
+          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; house_number?: unknown; last_sale_date?: string | null }>]>(
             {
               query: factsStreetQuery,
               params: {
@@ -4093,8 +4096,8 @@ export async function GET(request: NextRequest) {
               houseNumberNumericTarget != null && hn != null
                 ? Math.abs((extractHouseNumberNumeric(String(hn)) ?? 999999) - houseNumberNumericTarget)
                 : 0;
-            return { ppm, dist };
-          }).filter((x): x is { ppm: number; dist: number } => x.ppm != null && x.ppm > 0);
+            return { ppm, dist, date: r.last_sale_date };
+          }).filter((x): x is { ppm: number; dist: number; date: string | null | undefined } => x.ppm != null && x.ppm > 0);
           if (withPpm.length >= 1) {
             withPpm.sort((a, b) => a.dist - b.dist);
             const closestDist = withPpm[0]?.dist ?? 0;
@@ -4103,17 +4106,19 @@ export async function GET(request: NextRequest) {
             if (pool.length < 3) pool = withPpm.filter((x) => x.dist <= 2);
             if (pool.length < 3) pool = withPpm.filter((x) => x.dist <= 5);
             if (pool.length < 3) pool = withPpm;
-            const ppmPool = pool.map((x) => x.ppm);
+            const recentPool = pool.filter((x) => frSaleDateWithinFiveYears(x.date));
+            const recencyPreferred = recentPool.length >= 2 ? recentPool : pool;
+            const ppmPool = recencyPreferred.map((x) => x.ppm);
             const trimmedPpm =
               ppmPool.length >= 5
                 ? frTrimFractionExtremes(ppmPool.map((p) => ({ p })), (x) => x.p, 0.1).map((x) => x.p)
                 : ppmPool;
             const medianPpmEuro = medianNumber(trimmedPpm) ?? ppmPool[0] ?? 0;
             streetRows = [{ avg_price_per_m2: medianPpmEuro * 100 }];
-            streetFallbackRowsCount = 1;
+            streetFallbackRowsCount = pool.length;
             streetUsableAvgRows = streetRows;
             streetUsableAvgRowsCount = 1;
-            console.log("[FR_FLOW] street_from_facts_fallback rows=" + String(withPpm.length) + " pool=" + String(pool.length) + " median_ppm=" + String(medianPpmEuro));
+            console.log("[FR_FLOW] street_from_facts_fallback rows=" + String(withPpm.length) + " pool=" + String(pool.length) + " recent=" + String(recentPool.length) + " median_ppm=" + String(medianPpmEuro));
             streetClosestHouseDistance = closestDist;
           }
         } catch (e) {
@@ -4138,13 +4143,39 @@ export async function GET(request: NextRequest) {
 
       const tryStreetFallback = () => {
         if (streetUsableAvgRowsCount <= 0) return null;
-        // No outlier filtering for street when rows < 5 – allow small samples
-        const avgPriceValues = streetUsableAvgRows
-          .map((r) => parseMaybeDecimal(r.avg_price_per_m2))
-          .filter((v): v is number => v != null && v > 0);
-        const medianAvgPricePerM2 = medianNumber(avgPriceValues);
+        frRuntimeDebug.fr_street_row_count = streetFallbackRowsCount;
+        type StreetRow = { avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null };
+        const getSaleDate = (r: StreetRow): unknown =>
+          streetSaleDateColumn === "latest_sale_date"
+            ? r.latest_sale_date
+            : streetSaleDateColumn === "newest_sale_date"
+              ? r.newest_sale_date
+              : r.sale_date;
+        const withPriceAndDate = streetUsableAvgRows.map((r) => {
+          const v = parseMaybeDecimal(r.avg_price_per_m2);
+          return v != null && v > 0 ? { price: v, date: getSaleDate(r) } : null;
+        }).filter((x): x is { price: number; date: unknown } => x != null);
+        if (withPriceAndDate.length === 0) return null;
+        const recentRows = withPriceAndDate.filter((x) => frSaleDateWithinFiveYears(x.date));
+        const recencyPreferred = recentRows.length >= 2 ? recentRows : withPriceAndDate;
+        const forMedian =
+          recencyPreferred.length >= 5
+            ? frTrimFractionExtremes(recencyPreferred.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
+            : recencyPreferred.map((x) => x.price);
+        frRuntimeDebug.fr_street_filtered_count = forMedian.length;
+        const medianAvgPricePerM2 = medianNumber(forMedian);
         if (medianAvgPricePerM2 == null || !Number.isFinite(medianAvgPricePerM2) || medianAvgPricePerM2 <= 0) return null;
         const medianAvgPricePerM2Euro = medianAvgPricePerM2 / 100;
+        frRuntimeDebug.fr_street_median_price_m2 = medianAvgPricePerM2Euro;
+        const newestRow = streetUsableAvgRows
+          .filter((r) => frSaleDateWithinFiveYears(getSaleDate(r)))
+          .sort((a, b) => {
+            const da = getSaleDate(a);
+            const db = getSaleDate(b);
+            const ta = da ? new Date(String(da)).getTime() : 0;
+            const tb = db ? new Date(String(db)).getTime() : 0;
+            return tb - ta;
+          })[0] ?? streetUsableAvgRows[0];
         const estimated =
           surfaceForEstimation != null ? Math.round(surfaceForEstimation * medianAvgPricePerM2Euro) : null;
         return {
@@ -4152,10 +4183,10 @@ export async function GET(request: NextRequest) {
           estimated,
           newestSaleDate:
             streetSaleDateColumn === "latest_sale_date"
-              ? (streetUsableAvgRows[0]?.latest_sale_date ?? null)
+              ? (newestRow?.latest_sale_date ?? null)
               : streetSaleDateColumn === "newest_sale_date"
-                ? (streetUsableAvgRows[0]?.newest_sale_date ?? null)
-                : (streetUsableAvgRows[0]?.sale_date ?? null),
+                ? (newestRow?.newest_sale_date ?? null)
+                : (newestRow?.sale_date ?? null),
         };
       };
 
