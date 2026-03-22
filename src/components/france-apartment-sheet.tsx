@@ -293,17 +293,28 @@ export function FranceApartmentSheet({
             ? "house"
             : "unclear";
 
+  // Address-based house pattern: Chemin/Route/Impasse/etc with no apartment evidence => always house flow.
+  const addressForPattern = (addressForApi || address || "").trim();
+  const addressMatchesHouseStreetPattern = /\b(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(addressForPattern);
+  const forceHouseFromAddress =
+    addressMatchesHouseStreetPattern &&
+    availableLots.length === 0 &&
+    !hasAppartementType &&
+    !backendMultiUnitFlag;
+
   // Single source of truth: API detect_class (fr_runtime_debug) overrides local heuristics. House wins over backend lot prompt.
   const detectClassFromApi = (parsed as any)?.fr_runtime_debug?.detect_class ?? (data as any)?.fr_runtime_debug?.detect_class;
   const frDetectFinalClass: "apartment" | "house" | "unclear" =
-    detectClassFromApi === "house" || (frDetect === "house" && !backendMultiUnitFlag && availableLots.length === 0)
+    detectClassFromApi === "house" ||
+    forceHouseFromAddress ||
+    (frDetect === "house" && !backendMultiUnitFlag && availableLots.length === 0)
       ? "house"
       : detectClassFromApi === "apartment" || detectClassFromApi === "unclear"
         ? detectClassFromApi
         : effectiveDetectClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
 
-  // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. No local derivation.
+  // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. House classification ALWAYS suppresses.
   const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
   const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
   const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
@@ -1324,9 +1335,14 @@ export function FranceApartmentSheet({
                 ) : null}
               </div>
 
-              {/* 2) Last transaction – inline row (directly below Estimated value) */}
-              <div className="text-[13px] font-medium leading-tight text-zinc-300/95">
-                Last transaction: {lastTransactionSummaryLine}
+              {/* 2) Last transaction – bordered row (same container style as Price per m², Livability) */}
+              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
+                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+                  Last transaction
+                </div>
+                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
+                  {lastTransactionSummaryLine}
+                </div>
               </div>
 
               {/* 3) Price per m² (boxed) */}
