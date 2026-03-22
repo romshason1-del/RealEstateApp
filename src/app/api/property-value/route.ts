@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { BigQuery } from "@google-cloud/bigquery";
 import { createClient } from "@supabase/supabase-js";
 import getPropertyValueInsights from "@/lib/property-value-insights";
-import { getFrancePropertyResult, mapLivabilityToRating, normalizeLot } from "@/lib/bigquery-france-service";
+import { getFrancePropertyResult, mapLivabilityToRating, normalizeLot, queryFranceRichSourceSameAddress } from "@/lib/bigquery-france-service";
 import { isBigQueryConfigured } from "@/lib/bigquery-client";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
@@ -591,6 +591,10 @@ export async function GET(request: NextRequest) {
         fr_source_lookup_street_count: null as number | null,
         fr_source_lookup_commune_count: null as number | null,
         fr_source_lookup_failed_reason: null as string | null,
+        fr_rich_source_exact_count: null as number | null,
+        fr_rich_source_building_count: null as number | null,
+        fr_used_rich_source: false,
+        fr_exact_source_layer: null as "facts" | "rich_source" | "none" | null,
         fr_cache_hit: false,
         fr_cache_bypass_reason: null,
         fr_failed_stage: !frParserStarted && frHadRawInput ? "parse_entry" : null,
@@ -2037,6 +2041,49 @@ export async function GET(request: NextRequest) {
       console.log("[FR_GOLD] before_exact_query");
       const lotNorm = (normalizedRequestedLot ?? "").trim().toUpperCase();
       const lotStripped = lotNorm.replace(/^0+/, "") || lotNorm;
+
+      // Richer source lookup BEFORE property_latest_facts when enabled (e.g. raw DVF has more same-address rows).
+      const franceRichSourceEnabled = process.env.FRANCE_RICH_SOURCE_ENABLED === "true" || process.env.FRANCE_RICH_SOURCE_ENABLED === "1";
+      let richSourceRows: Array<Record<string, unknown>> = [];
+      if (franceRichSourceEnabled && postcodeNormForSource && houseNumberNormForSource) {
+        try {
+          // DVF expects full street (e.g. "RUE DE RIVOLI"); use streetNorm, not core-only streetNormForExactMatch.
+          const streetForRich = (streetNorm || streetNormForSource || streetNormForExactMatch || "")
+            .trim()
+            .toUpperCase()
+            .normalize("NFD")
+            .replace(/\p{M}/gu, "")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (streetForRich) {
+            const raw = await queryFranceRichSourceSameAddress({
+              postcodeNorm: postcodeNormForSource,
+              streetNorm: streetForRich,
+              houseNumberNorm: houseNumberNormForSource,
+              cityNorm: cityNormForSource || cityNorm || undefined,
+              lotNorm: lotNorm || null,
+            });
+            richSourceRows = raw as Array<Record<string, unknown>>;
+            frRuntimeDebug.fr_used_rich_source = true;
+            frRuntimeDebug.fr_rich_source_building_count = richSourceRows.length;
+            const exactCount = lotNorm
+              ? richSourceRows.filter((r) => {
+                  const un = (r as any).unit_number;
+                  const u = un != null ? String(un).trim().replace(/^0+/, "") || String(un) : "";
+                  return u && u.toUpperCase() === lotStripped;
+                }).length
+              : richSourceRows.length;
+            frRuntimeDebug.fr_rich_source_exact_count = exactCount;
+            console.log("[FR_RICH_SOURCE] rows=" + richSourceRows.length + " exact_count=" + exactCount);
+          }
+        } catch (err) {
+          console.error("[FR_RICH_SOURCE] lookup failed", err);
+          frRuntimeDebug.fr_used_rich_source = true;
+          frRuntimeDebug.fr_rich_source_exact_count = 0;
+          frRuntimeDebug.fr_rich_source_building_count = 0;
+        }
+      }
+
       const exactParamsBase = {
         country: country || "",
         city: cityNormForSource || cityNorm || "",
@@ -2060,33 +2107,44 @@ export async function GET(request: NextRequest) {
       console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
       let exactRows: Array<Record<string, unknown>> = [];
       let exactLotUsedInQuery = false;
-      if (exactQueryWithLot && lotNorm && frBqLotMatchSql) {
-        const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-          { query: exactQueryWithLot, params: exactParams },
-          "exact_query_lot_filtered"
-        );
-        exactRows = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
-        if (exactRows.length > 0) {
-          exactLotUsedInQuery = true;
-          console.log("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
-        } else {
-          const [addressOnlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            { query: `${exactQueryBase}\n        LIMIT 50`, params: exactParams },
-            "exact_query_address_only"
-          );
-          exactRows = (addressOnlyRows ?? []) as Array<Record<string, unknown>>;
-          console.log("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
-        }
+      if (richSourceRows.length > 0) {
+        exactRows = richSourceRows;
+        frRuntimeDebug.fr_exact_source_layer = "rich_source";
+        frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
+        console.log("[FR_EXACT] using_rich_source rows=" + exactRows.length);
       } else {
-        const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-          { query: exactQuery, params: exactParams },
-          "exact_query"
-        );
-        exactRows = (rows ?? []) as Array<Record<string, unknown>>;
+        if (franceRichSourceEnabled) {
+          frRuntimeDebug.fr_exact_source_layer = "none";
+        }
+        if (exactQueryWithLot && lotNorm && frBqLotMatchSql) {
+          const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: exactQueryWithLot, params: exactParams },
+            "exact_query_lot_filtered"
+          );
+          exactRows = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
+          if (exactRows.length > 0) {
+            exactLotUsedInQuery = true;
+            console.log("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
+          } else {
+            const [addressOnlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: `${exactQueryBase}\n        LIMIT 50`, params: exactParams },
+              "exact_query_address_only"
+            );
+            exactRows = (addressOnlyRows ?? []) as Array<Record<string, unknown>>;
+            console.log("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
+          }
+        } else {
+          const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: exactQuery, params: exactParams },
+            "exact_query"
+          );
+          exactRows = (rows ?? []) as Array<Record<string, unknown>>;
+        }
+        frRuntimeDebug.exact_lot_used_in_query = exactLotUsedInQuery;
+        frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
+        frRuntimeDebug.fr_exact_source_layer = exactRows.length > 0 ? "facts" : "none";
       }
-      frRuntimeDebug.exact_lot_used_in_query = exactLotUsedInQuery;
       const exactRowsCount = exactRows.length;
-      frRuntimeDebug.fr_source_lookup_exact_count = exactRowsCount;
       if (exactRowsCount > 0) {
         frRuntimeDebug.fr_source_lookup_failed_reason = null;
       } else if (postcodeNormForSource || cityNormForSource || streetNormForSource) {
@@ -2508,6 +2566,8 @@ export async function GET(request: NextRequest) {
         chosenSurfaceValueForRanking: number | null;
         /** Building profile for low-candidate fallback and ranking. */
         buildingProfile?: BuildingProfile | null;
+        /** When from rich source, use these same-address rows instead of querying property_latest_facts. */
+        preloadedSameAddressRows?: Array<Record<string, unknown>> | null;
       }): Promise<ReturnType<typeof frReturn> | null> => {
         try {
           if (!houseNumberNorm || !postcodeNorm) {
@@ -2518,6 +2578,12 @@ export async function GET(request: NextRequest) {
           }
           console.log("[FR_FLOW] ladder_step_started=BUILDING_SIMILAR_UNIT");
           console.log("[FR_STEP] building_similar_unit_lookup_start");
+          const preloaded = (p.preloadedSameAddressRows ?? []).filter(
+            (r) => (String((r as any).property_type ?? "") || "").toLowerCase().trim() === "appartement"
+          );
+          if (preloaded.length >= 2) {
+            console.log("[FR_BUILDING] using_preloaded_rich_source rows=" + preloaded.length);
+          }
           const lotColEscaped =
             exactPrimaryLotColumn
               ? "`" + String(exactPrimaryLotColumn).replace(/`/g, "") + "`"
@@ -2560,7 +2626,12 @@ export async function GET(request: NextRequest) {
             lot_stripped: lotStripped || "",
           };
           let similarRowsRaw: Array<Record<string, unknown>> | undefined;
-          if (similarUnitQueryWithLot && exactLotToken) {
+          if (preloaded.length >= 2) {
+            similarRowsRaw = preloaded.map((r) => ({
+              ...r,
+              lot_col: (r as any).unit_number ?? (r as any).lot_1er ?? null,
+            }));
+          } else if (similarUnitQueryWithLot && exactLotToken) {
             const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
               { query: similarUnitQueryWithLot, params: similarParams },
               "building_similar_unit_lot_filtered"
@@ -2843,7 +2914,9 @@ export async function GET(request: NextRequest) {
       };
 
       /** Post-lot relaxed lookup: when exact returned 0 rows but lot was submitted, try relaxed address matching. */
-      const tryFrancePostLotRelaxedLookup = async (): Promise<ReturnType<typeof frReturn> | null> => {
+      const tryFrancePostLotRelaxedLookup = async (
+        preloadedSameAddressRows?: Array<Record<string, unknown>> | null
+      ): Promise<ReturnType<typeof frReturn> | null> => {
         try {
           const streetForRelaxed = streetNormForSource || streetNorm || "";
           if (!exactLotToken || !postcodeNorm) {
@@ -2851,6 +2924,12 @@ export async function GET(request: NextRequest) {
             return null;
           }
           console.log("[FR_FLOW] ladder_step_started=POST_LOT_RELAXED");
+          const preloaded = (preloadedSameAddressRows ?? []).filter(
+            (r) => (String((r as any).property_type ?? "") || "").toLowerCase().trim() === "appartement"
+          );
+          if (preloaded.length >= 2) {
+            console.log("[FR_POST_LOT_RELAXED] using_preloaded_rich_source rows=" + preloaded.length);
+          }
           const lotColEscaped =
             exactPrimaryLotColumn
               ? "`" + String(exactPrimaryLotColumn).replace(/`/g, "") + "`"
@@ -2907,7 +2986,12 @@ export async function GET(request: NextRequest) {
             lot_stripped: lotStripped || "",
           };
           let relaxedRows: Array<Record<string, unknown>> | undefined;
-          if (postLotRelaxedWithLot) {
+          if (preloaded.length >= 1) {
+            relaxedRows = preloaded.map((r) => ({
+              ...r,
+              lot_col: (r as any).unit_number ?? (r as any).lot_1er ?? null,
+            }));
+          } else if (postLotRelaxedWithLot) {
             const [lotFiltered] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
               { query: postLotRelaxedWithLot, params: postLotParams },
               "post_lot_relaxed_lot_filtered"
@@ -3161,6 +3245,7 @@ export async function GET(request: NextRequest) {
           const buildingSimilarWin = await tryFranceBuildingSimilarUnit({
             medianSurfaceM2ForFallback: null,
             chosenSurfaceValueForRanking,
+            preloadedSameAddressRows: frRuntimeDebug.fr_exact_source_layer === "rich_source" ? exactRows : undefined,
           });
           if (buildingSimilarWin) return buildingSimilarWin;
         }
@@ -3337,6 +3422,7 @@ export async function GET(request: NextRequest) {
           medianSurfaceM2ForFallback: null,
           chosenSurfaceValueForRanking: validInputSurfaceM2,
           buildingProfile,
+          preloadedSameAddressRows: frRuntimeDebug.fr_exact_source_layer === "rich_source" ? exactRows : undefined,
         });
         if (buildingSimilarNoneWin) return buildingSimilarNoneWin;
       }
@@ -3347,7 +3433,9 @@ export async function GET(request: NextRequest) {
         shouldRunLotAware &&
         rawExactHouseNumberRowCount === 0
       ) {
-        const postLotRelaxedWin = await tryFrancePostLotRelaxedLookup();
+        const postLotRelaxedWin = await tryFrancePostLotRelaxedLookup(
+          frRuntimeDebug.fr_exact_source_layer === "rich_source" ? exactRows : undefined
+        );
         if (postLotRelaxedWin) return postLotRelaxedWin;
       }
 
@@ -3507,6 +3595,7 @@ export async function GET(request: NextRequest) {
           medianSurfaceM2ForFallback,
           chosenSurfaceValueForRanking,
           buildingProfile,
+          preloadedSameAddressRows: frRuntimeDebug.fr_exact_source_layer === "rich_source" ? exactRows : undefined,
         });
         if (buildingSimilarLate) return buildingSimilarLate;
       }
@@ -3734,7 +3823,9 @@ export async function GET(request: NextRequest) {
 
       // MANDATORY lot-aware gate: before street/nearby, when lot submitted, try lot-aware same-address (or relaxed) one more time.
       if (shouldRunLotAware && rawExactHouseNumberRowCount > 0 && exactTier === "NONE") {
-        const lotAwareRetry = await tryFrancePostLotRelaxedLookup();
+        const lotAwareRetry = await tryFrancePostLotRelaxedLookup(
+          frRuntimeDebug.fr_exact_source_layer === "rich_source" ? exactRows : undefined
+        );
         if (lotAwareRetry) return lotAwareRetry;
       }
 
@@ -4305,7 +4396,9 @@ export async function GET(request: NextRequest) {
 
       // Final lot-aware gate: before nearby, when lot submitted, one last attempt.
       if (shouldRunLotAware) {
-        const lotAwareFinal = await tryFrancePostLotRelaxedLookup();
+        const lotAwareFinal = await tryFrancePostLotRelaxedLookup(
+          frRuntimeDebug.fr_exact_source_layer === "rich_source" ? exactRows : undefined
+        );
         if (lotAwareFinal) return lotAwareFinal;
       }
 

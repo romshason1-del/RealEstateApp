@@ -60,6 +60,18 @@ export type FranceTransactionRow = {
   lot_1er: string | null;
 };
 
+/** Facts-compatible row for France ladder integration (property_latest_facts schema). */
+export type FranceRichSourceRow = {
+  surface_m2: number | null;
+  price_per_m2: number | null;
+  last_sale_price: number | null;
+  last_sale_date: string | null;
+  unit_number: string | null;
+  house_number: string | null;
+  property_type: string | null;
+  [key: string]: unknown;
+};
+
 export type FrancePropertyResult = {
   currentValue: number | null;
   lastTransaction: { date: string | null; value: number } | null;
@@ -723,6 +735,52 @@ async function queryLastTransactionByStage(
     console.log("[BigQuery] Stage 1 lot query result:", { rows: (rows as FranceTransactionRow[]).length, lots: [...new Set(lots)].slice(0, 20) });
   }
   return (rows as FranceTransactionRow[]) || [];
+}
+
+/**
+ * Query richer DVF-derived source for same-address rows (postcode + street + house_number).
+ * Used by France ladder when property_latest_facts has no same-address rows (e.g. 10 Rue de Rivoli, 75004).
+ * Returns rows in property_latest_facts-compatible shape (thousandths-of-euro convention).
+ */
+export async function queryFranceRichSourceSameAddress(params: {
+  postcodeNorm: string;
+  streetNorm: string;
+  houseNumberNorm: string;
+  cityNorm?: string;
+  lotNorm?: string | null;
+}): Promise<FranceRichSourceRow[]> {
+  const { postcodeNorm, streetNorm, houseNumberNorm, cityNorm, lotNorm } = params;
+  if (!postcodeNorm?.trim() || !streetNorm?.trim() || !houseNumberNorm?.trim()) {
+    return [];
+  }
+  try {
+    const rows = await queryLastTransactionByStage(
+      2,
+      postcodeNorm,
+      cityNorm ?? null,
+      houseNumberNorm,
+      streetNorm,
+      lotNorm ?? null,
+      streetNorm
+    );
+    return rows.map((r): FranceRichSourceRow => {
+      const valEur = valueFonciereToEuros(parseFrenchNumber(r.valeur_fonciere));
+      const surf = parseFrenchNumber(r.surface_reelle_bati);
+      const ppm = surf != null && surf > 0 && valEur > 0 ? valEur / surf : null;
+      return {
+        surface_m2: surf != null && Number.isFinite(surf) ? surf : null,
+        price_per_m2: ppm != null && Number.isFinite(ppm) ? Math.round(ppm * 1000) : null,
+        last_sale_price: valEur > 0 ? Math.round(valEur * 1000) : null,
+        last_sale_date: parseFrenchDate(r.date_mutation),
+        unit_number: normalizeLot(r.lot_1er) || null,
+        house_number: r.no_voie ? String(r.no_voie).trim() : null,
+        property_type: r.type_local ? String(r.type_local).trim() : null,
+      };
+    });
+  } catch (err) {
+    logBigQueryError("queryFranceRichSourceSameAddress", err);
+    return [];
+  }
 }
 
 /**
