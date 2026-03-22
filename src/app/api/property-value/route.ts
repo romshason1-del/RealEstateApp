@@ -715,6 +715,7 @@ export async function GET(request: NextRequest) {
         fr_building_profile_candidate_count: null as number | null,
         fr_terminal_no_data_reason: null as string | null,
         fr_final_winner_layer: null as string | null,
+        fr_fallback_blocked_no_result: null as boolean | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -4573,6 +4574,40 @@ export async function GET(request: NextRequest) {
           console.log("[FR_FLOW] street_from_facts_fallback_error", (e as Error)?.message);
         }
       }
+      if (streetFallbackRowsCount === 0 && streetUsableAvgRowsCount === 0 && postcodeNorm && cityNorm) {
+        try {
+          const factsStreetPostcodeCityQuery = `
+            SELECT price_per_m2, last_sale_date
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = 'fr'
+              AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+              AND LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
+            LIMIT 200
+          `;
+          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null }>]>({
+            query: factsStreetPostcodeCityQuery,
+            params: {
+              city: cityNormForSource || cityNorm || "",
+              postcode: postcodeNormForSource || postcodeNorm || "",
+            },
+          }, "street_from_facts_postcode_city");
+          const ppmEuros = (factsRows ?? [])
+            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
+            .filter((v): v is number => v != null && v > 0);
+          if (ppmEuros.length >= 1) {
+            const medianPpmEuro = medianNumber(ppmEuros) ?? ppmEuros[0];
+            streetRows = [{ avg_price_per_m2: medianPpmEuro * 100 }];
+            streetFallbackRowsCount = ppmEuros.length;
+            streetUsableAvgRows = streetRows;
+            streetUsableAvgRowsCount = 1;
+            streetFactsFilteredCount = ppmEuros.length;
+            streetFactsRecentCount = ppmEuros.length;
+            console.log("[FR_FLOW] street_from_facts_postcode_city rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpmEuro));
+          }
+        } catch (e) {
+          console.log("[FR_FLOW] street_from_facts_postcode_city_error", (e as Error)?.message);
+        }
+      }
 
       const surfaceForEstimation = validInputSurfaceM2 ?? medianSurfaceM2ForFallback;
 
@@ -4606,11 +4641,10 @@ export async function GET(request: NextRequest) {
         }).filter((x): x is { price: number; date: unknown } => x != null);
         if (withPriceAndDate.length === 0) return null;
         const recentRows = withPriceAndDate.filter((x) => frSaleDateWithinFiveYears(x.date));
-        const recencyPreferred = recentRows.length >= 1 ? recentRows : withPriceAndDate;
         const forMedian =
-          recencyPreferred.length >= 5
-            ? frTrimFractionExtremes(recencyPreferred.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
-            : recencyPreferred.map((x) => x.price);
+          withPriceAndDate.length >= 5
+            ? frTrimFractionExtremes(withPriceAndDate.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
+            : withPriceAndDate.map((x) => x.price);
         const effectiveFiltered = streetFactsFilteredCount != null && streetUsableAvgRowsCount === 1 ? streetFactsFilteredCount : forMedian.length;
         const effectiveRecent = streetFactsRecentCount != null && streetUsableAvgRowsCount === 1 ? streetFactsRecentCount : recentRows.length;
         frRuntimeDebug.fr_street_filtered_count = effectiveFiltered;
@@ -4850,6 +4884,34 @@ export async function GET(request: NextRequest) {
           console.log("[FR_FLOW] commune_from_facts_fallback_error", (e as Error)?.message);
         }
       }
+      if (communeFallbackRowsCount === 0 && postcodeNorm) {
+        try {
+          const factsCommunePostcodeOnlyQuery = `
+            SELECT price_per_m2
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = 'fr'
+              AND LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
+            LIMIT 500
+          `;
+          const [factsPostcodeRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>({
+            query: factsCommunePostcodeOnlyQuery,
+            params: { postcode: postcodeNormForSource || postcodeNorm },
+          }, "commune_from_facts_postcode_only");
+          const communePpmEuros = (factsPostcodeRows ?? [])
+            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
+            .filter((v): v is number => v != null && v > 0);
+          if (communePpmEuros.length >= 1) {
+            const medianCommunePpm = medianNumber(communePpmEuros) ?? 0;
+            communeRows = [{ avg_price_per_m2: medianCommunePpm * 100 }];
+            communeFallbackRowsCount = communePpmEuros.length;
+            communeUsableAvgRows = communeRows;
+            communeUsableAvgRowsCount = 1;
+            console.log("[FR_FLOW] commune_from_facts_postcode_only rows=" + String(communePpmEuros.length) + " median_ppm=" + String(medianCommunePpm));
+          }
+        } catch (e) {
+          console.log("[FR_FLOW] commune_from_facts_postcode_only_error", (e as Error)?.message);
+        }
+      }
 
       console.log("[FR_DEBUG] commune_fallback_matching", {
         submittedLot: aptNumber?.trim() || null,
@@ -4878,11 +4940,10 @@ export async function GET(request: NextRequest) {
           return v != null && v > 0 ? { price: v, date: getCommuneDate(r) } : null;
         }).filter((x): x is { price: number; date: unknown } => x != null);
         const communeRecent = communeWithPrice.filter((x) => frSaleDateWithinFiveYears(x.date));
-        const communeRecencyPreferred = communeRecent.length >= 1 ? communeRecent : communeWithPrice;
         const communeForMedian =
-          communeRecencyPreferred.length >= 5
-            ? frTrimFractionExtremes(communeRecencyPreferred.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
-            : communeRecencyPreferred.map((x) => x.price);
+          communeWithPrice.length >= 5
+            ? frTrimFractionExtremes(communeWithPrice.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
+            : communeWithPrice.map((x) => x.price);
         const medianAvgPricePerM2 = medianNumber(communeForMedian);
         if (medianAvgPricePerM2 != null && Number.isFinite(medianAvgPricePerM2) && medianAvgPricePerM2 > 0) {
           const medianAvgPricePerM2Euro = medianAvgPricePerM2 / 100;
@@ -5216,6 +5277,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_fallback_level_used = "commune_emergency";
           frRuntimeDebug.fr_total_rows_used = ppmEuros.length;
           frRuntimeDebug.fr_empty_prevented = true;
+          frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
           frRuntimeDebug.fr_commune_emergency_candidate_count = ppmEuros.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_emergency";
@@ -5303,6 +5365,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_commune_candidate_count = ppmEuros.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_fallback";
           frRuntimeDebug.fr_empty_prevented = true;
+          frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
           console.log("[FR_SAFETY] commune_safety_net rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpm));
           return frReturn(
@@ -5352,6 +5415,90 @@ export async function GET(request: NextRequest) {
       const safetyNetWin = await tryCommuneSafetyNet();
       if (safetyNetWin) return safetyNetWin;
 
+      // Hard fix: postcode-only fallback – BigQuery has data by postcode (Cannes 06400, Biarritz 64200).
+      const tryPostcodeOnlyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
+        const postcodeForQuery = (postcodeNormForSource ?? postcodeNorm ?? "").trim();
+        if (!postcodeForQuery || postcodeForQuery.length < 4) return null;
+        try {
+          const q = `
+            SELECT price_per_m2
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = 'fr'
+              AND LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(@postcode), 5, '0')
+            LIMIT 500
+          `;
+          const [rows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown }>]>({
+            query: q,
+            params: { postcode: postcodeForQuery },
+          }, "postcode_only_fallback");
+          const ppmEuros = (rows ?? [])
+            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
+            .filter((v): v is number => v != null && v > 0);
+          if (ppmEuros.length < 1) return null;
+          const medianPpm = medianNumber(ppmEuros) ?? ppmEuros[0];
+          if (medianPpm == null || medianPpm <= 0) return null;
+          const estimated = surfaceForEstimation != null && surfaceForEstimation > 0 ? Math.round(surfaceForEstimation * medianPpm) : null;
+          const label = "Based on postcode-level pricing (limited data)";
+          frRuntimeDebug.winning_step = "commune_fallback";
+          frRuntimeDebug.winning_source_label = label;
+          frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.fr_selected_layer_quality = "low";
+          frRuntimeDebug.fr_selected_reason = "postcode_only_fallback";
+          frRuntimeDebug.fr_fallback_level_used = "commune_fallback";
+          frRuntimeDebug.fr_total_rows_used = ppmEuros.length;
+          frRuntimeDebug.fr_commune_candidate_count = ppmEuros.length;
+          frRuntimeDebug.fr_final_winner_layer = "commune_fallback";
+          frRuntimeDebug.fr_empty_prevented = true;
+          frRuntimeDebug.fr_fallback_blocked_no_result = true;
+          frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
+          console.log("[FR_HARD] postcode_only_fallback rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpm) + " postcode=" + postcodeForQuery);
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              fr_detect: frDetectToUse,
+              property_result: {
+                exact_value: estimated,
+                exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
+                value_level: "commune-level",
+                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                street_average: medianPpm,
+                street_average_message: label,
+                livability_rating: "FAIR",
+              },
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "nearby_comparable",
+                confidence: "low",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: {
+                  transactionDate: null,
+                  transactionValue: estimated,
+                  pricePerSqm: medianPpm,
+                  surfaceArea: surfaceForEstimation ?? null,
+                  rooms: null,
+                  propertyType: propertyType,
+                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                  postalCode: postcodeNorm || null,
+                  commune: cityNorm || null,
+                },
+                buildingStats: null,
+                comparables: [],
+                matchExplanation: label,
+              }),
+            },
+            "valuation_response"
+          );
+        } catch (e) {
+          console.log("[FR_HARD] postcode_only_fallback_error", (e as Error)?.message);
+          return null;
+        }
+      };
+
+      const postcodeWin = await tryPostcodeOnlyFallback();
+      if (postcodeWin) return postcodeWin;
+
       const noDataReasonParts: string[] = [];
       if (exactApartmentRowsCount <= 0) noDataReasonParts.push("no_exact_lot_rows");
       if (exactApartmentRowsCount > 0 && exactUsableRowsCount <= 0) noDataReasonParts.push("exact_lot_rows_not_usable");
@@ -5375,6 +5522,7 @@ export async function GET(request: NextRequest) {
       if (frRuntimeDebug.fr_commune_emergency_candidate_count == null) frRuntimeDebug.fr_commune_emergency_candidate_count = 0;
       frRuntimeDebug.fr_terminal_no_data_reason = noReliableReason;
       frRuntimeDebug.fr_final_winner_layer = null;
+      frRuntimeDebug.fr_fallback_blocked_no_result = false;
 
       console.log("[FR_COVERAGE] address=" + addrStr);
       console.log("[FR_COVERAGE] detect_class=" + String(frDetectToUse));
