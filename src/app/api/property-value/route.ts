@@ -3091,6 +3091,8 @@ export async function GET(request: NextRequest) {
         surface_median: number | null;
         apartment_count: number;
         house_count: number;
+        /** Enriched from property_latest_facts when building_profile wins; used for last_transaction row. */
+        last_transaction?: { amount: number; date: string | null } | null;
       };
 
       const tryFranceBuildingSimilarUnit = async (p: {
@@ -3980,7 +3982,7 @@ export async function GET(request: NextRequest) {
           .toLowerCase();
         try {
           const profileQuery = `
-            SELECT price_per_m2, surface_m2, property_type
+            SELECT price_per_m2, surface_m2, property_type, last_sale_price, last_sale_date
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -3990,7 +3992,7 @@ export async function GET(request: NextRequest) {
             LIMIT 200
           `;
           const [profileRows] = await queryWithTimeout<
-            [Array<{ price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown }>]
+            [Array<{ price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown; last_sale_price?: unknown; last_sale_date?: string | null }>]
           >(
             {
               query: profileQuery,
@@ -4006,9 +4008,10 @@ export async function GET(request: NextRequest) {
             },
             "building_profile_query"
           );
-          const rows = (profileRows ?? []) as Array<{ price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown }>;
+          type ProfileRow = { price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown; last_sale_price?: unknown; last_sale_date?: string | null };
+          const rows = (profileRows ?? []) as Array<ProfileRow>;
           const withPpm = rows
-            .map((r: { price_per_m2?: unknown; surface_m2?: unknown; property_type?: unknown }) => ({
+            .map((r: ProfileRow) => ({
               ppm: frPropertyLatestFactsMoneyToEuros(r.price_per_m2) as number | null,
               surf: parseMaybeDecimal(r.surface_m2) as number | null,
               pt: String(r.property_type ?? "").trim().toLowerCase(),
@@ -4018,6 +4021,20 @@ export async function GET(request: NextRequest) {
           const houseCount = withPpm.filter((x) =>
             x.pt.includes("maison") || x.pt.includes("villa") || x.pt.includes("pavillon") || x.pt === "local" || x.pt === ""
           ).length;
+          const withValidTx = rows
+            .map((r: ProfileRow) => {
+              const amount = frPropertyLatestFactsMoneyToEuros(r.last_sale_price);
+              const dateRaw = r.last_sale_date;
+              const dateStr = dateRaw === null || dateRaw === undefined || String(dateRaw).trim() === "" ? null : String(dateRaw).trim();
+              return { amount: amount ?? null, date: dateStr };
+            })
+            .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
+          withValidTx.sort((a, b) => {
+            if (!a.date) return 1;
+            if (!b.date) return -1;
+            return b.date.localeCompare(a.date);
+          });
+          const bestTx = withValidTx.length > 0 ? { amount: withValidTx[0]!.amount, date: withValidTx[0]!.date } : null;
           if (withPpm.length >= 1) {
             const ppmValues = withPpm.map((x) => x.ppm);
             const surfValues = withPpm.map((x) => x.surf).filter((v): v is number => v != null && v > 0);
@@ -4033,6 +4050,7 @@ export async function GET(request: NextRequest) {
               surface_median: surfValues.length > 0 ? medianNumber(surfValues) : null,
               apartment_count: apartmentCount,
               house_count: houseCount,
+              last_transaction: bestTx,
             };
             console.log("[FR_BUILDING_PROFILE] building_id=" + buildingId);
             console.log("[FR_BUILDING_PROFILE] median_price_per_m2=" + String(buildingProfile.median_price_per_m2));
@@ -4480,6 +4498,11 @@ export async function GET(request: NextRequest) {
         const surfaceForEst = validInputSurfaceM2 ?? buildingProfile.surface_median ?? medianSurfaceM2ForFallback;
         const estimated = surfaceForEst != null && surfaceForEst > 0 ? Math.round(surfaceForEst * medianPpm) : null;
         const fallbackSource = "Similar properties in this building";
+        const lastTx = buildingProfile.last_transaction;
+        const hasRealTx = lastTx != null && lastTx.amount != null && lastTx.amount > 0;
+        const lastTransactionPayload = hasRealTx
+          ? { amount: lastTx!.amount, date: lastTx!.date, message: null as string | null }
+          : { amount: 0, date: null, message: "No exact recent transaction available" };
         console.log("[FR_BUILDING_PROFILE] used_in=fallback");
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
@@ -4500,7 +4523,7 @@ export async function GET(request: NextRequest) {
               exact_value: estimated,
               exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
               value_level: "building-level",
-              last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+              last_transaction: lastTransactionPayload,
               street_average: medianPpm,
               street_average_message: estimated == null ? `${fallbackSource} — pricing available, surface needed for total estimate` : fallbackSource,
               livability_rating: "FAIR",
@@ -4512,8 +4535,8 @@ export async function GET(request: NextRequest) {
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
-                transactionDate: null,
-                transactionValue: estimated,
+                transactionDate: hasRealTx ? lastTx!.date : null,
+                transactionValue: hasRealTx ? lastTx!.amount : estimated,
                 pricePerSqm: medianPpm,
                 surfaceArea: surfaceForEst ?? null,
                 rooms: null,
