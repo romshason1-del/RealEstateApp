@@ -168,7 +168,7 @@ function normalizePostcodeForFranceSource(postcode: string): string {
   return s.length >= 5 ? s.slice(0, 5) : s.padStart(5, "0");
 }
 
-/** Normalize French commune/city for source lookup. PARIS 4E ARRONDISSEMENT -> PARIS, etc. */
+/** Normalize French commune/city for exact lookup. Removes arrondissement, keeps base city. */
 function normalizeCityForFranceSource(city: string): string {
   const c = (city ?? "")
     .trim()
@@ -177,9 +177,29 @@ function normalizeCityForFranceSource(city: string): string {
     .replace(/\p{M}/gu, "")
     .replace(/[^A-Z0-9 ]/g, " ");
   if (!c.trim()) return "";
-  const m = c.match(/^(PARIS|MARSEILLE|LYON|LYONS)\s*(?:\d{1,2}(?:ER|E|ÈME)?\s*(?:ARRONDISSEMENT)?)?$/i);
-  if (m) return m[1].toUpperCase();
-  return c.replace(/\s+/g, " ").trim();
+  const withoutArrondissement = c.replace(/\s*\d{1,2}(?:ER|E|EME)?(?:\s*ARRONDISSEMENT)?\s*$/i, "").trim();
+  const base = withoutArrondissement.replace(/\s+/g, " ").trim();
+  if (/^LYONS$/i.test(base)) return "LYON";
+  return base;
+}
+
+/** Normalize street for exact DVF matching: uppercase, accents removed, prefixes and stopwords stripped. */
+function normalizeStreetForExactMatch(street: string): string {
+  const s = (street ?? "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^A-Z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!s) return "";
+  const withoutPrefix = s.replace(
+    /^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i,
+    ""
+  ).trim();
+  const withoutStopwords = withoutPrefix.replace(/\b(DU|DE|DES|LA|LE)\b/gi, " ").replace(/\s+/g, " ").trim();
+  return withoutStopwords;
 }
 
 /** Check if two city strings match (handles arrondissements). */
@@ -575,6 +595,8 @@ export async function GET(request: NextRequest) {
         fr_house_evidence_score: null as number | null,
         fr_apartment_evidence_score: null as number | null,
         fr_detect_classification_reason: null as string | null,
+        fr_is_likely_building: null as boolean | null,
+        fr_building_detection_reason: null as string | null,
         fr_should_prompt_lot: null as boolean | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
@@ -1372,6 +1394,7 @@ export async function GET(request: NextRequest) {
         streetParsedForSource.core && streetParsedForSource.core.length >= 2
           ? streetParsedForSource.core
           : streetNormalizedDet || "";
+      const streetNormForExactMatch = normalizeStreetForExactMatch(streetNorm || streetNormalizedDet || "") || streetNormForSource;
       const houseNumberNormForSource = houseNumberNorm || "";
       console.log("[FR_SOURCE] normalized_city=" + (cityNormForSource || "(empty)"));
       console.log("[FR_SOURCE] street_core=" + (streetNormForSource || "(empty)"));
@@ -1379,11 +1402,15 @@ export async function GET(request: NextRequest) {
       console.log("[FR_SOURCE] normalized_postcode=" + (postcodeNormForSource || "(empty)"));
       console.log("[FR_SOURCE] lookup_keys=postcode|street|house|city");
 
+      const frBqCityNormalizedExpr = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(city AS STRING)), NFD)), r'\\p{M}', ''), r'\\s*\\d{1,2}(?:ER|E|EME)?(?:\\s*ARRONDISSEMENT)?\\s*$', ''))`;
       const frBqCityMatchSql = cityNormForSource
-        ? `(LOWER(TRIM(city)) = LOWER(@city_main) OR LOWER(TRIM(city)) LIKE CONCAT(LOWER(@city_main), ' %'))`
+        ? `(${frBqCityNormalizedExpr} = UPPER(@city_main) OR ${frBqCityNormalizedExpr} LIKE CONCAT(UPPER(@city_main), ' %'))`
         : "TRUE";
       const frBqPostcodeMatchSql = `LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')`;
-      const frBqStreetMatchSqlEarly = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%')`;
+      const frBqStreetBaseEarly = `REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(street AS STRING)), NFD)), r'\\p{M}', ''), r'[^A-Z0-9 ]+', ' ')`;
+      const frBqStreetNoPrefixEarly = `REGEXP_REPLACE(${frBqStreetBaseEarly}, r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')`;
+      const frBqStreetNormalizedEarly = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(${frBqStreetNoPrefixEarly}, r'\\s+DU\\s+', ' '), r'\\s+DE\\s+', ' '), r'\\s+DES\\s+', ' '), r'\\s+LA\\s+', ' '), r'\\s+LE\\s+', ' '), r'^DU\\s+', ''), r'^DE\\s+', ''), r'^DES\\s+', ''), r'^LA\\s+', ''), r'^LE\\s+', ''), r'\\s+', ' '))`;
+      const frBqStreetMatchSqlEarly = `(${frBqStreetNormalizedEarly} = TRIM(@street_normalized) OR ${frBqStreetNormalizedEarly} LIKE CONCAT('%', TRIM(@street_normalized), '%') OR TRIM(@street_normalized) LIKE CONCAT('%', ${frBqStreetNormalizedEarly}, '%'))`;
       const normHn = (hn: string) => {
         let s = (hn ?? "").toString().trim().toUpperCase();
         s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
@@ -1419,7 +1446,7 @@ export async function GET(request: NextRequest) {
                 city: cityNorm || "",
                 city_main: cityNormForSource || cityNorm || "",
                 postcode: postcodeNormForSource || "",
-                street_normalized: streetNormForSource || "",
+                street_normalized: streetNormForExactMatch || streetNormForSource || "",
                 house_number: houseNumberNormForSource || "",
                 house_number_norm: houseNumberNormForEarly || "",
               },
@@ -1601,7 +1628,46 @@ export async function GET(request: NextRequest) {
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
 
-      const shouldPromptLot = detectClass === "apartment" && !submittedLotPresent && allowMultiUnitFromQueries;
+      // Heuristic building detection (non-DVF): treat urban addressed properties as building when not house.
+      const fullRawAddr = (frRuntimeDebug.fr_full_raw_address as string) || "";
+      const hasUrbanDept = largeCityDepts.has(pcDept);
+      const urbanStreetPrefixes = /^(rue|avenue|av\.?|bd|boulevard|place|impasse|allee|square|sente|cours|promenade)\s+/i;
+      const streetForHeuristic = (streetNorm || streetNormForSource || "").trim();
+      const hasUrbanStreetType = urbanStreetPrefixes.test(streetForHeuristic);
+      const hasLieuDit = /\blieu[- ]?dit\b/i.test(fullRawAddr);
+      const isCheminOnlyRural = /^chemin\s+/i.test(streetForHeuristic) && !hasUrbanDept;
+      const urbanContext =
+        Boolean(postcodeNorm && cityNorm) &&
+        (hasUrbanDept || hasUrbanStreetType) &&
+        !hasLieuDit &&
+        !isCheminOnlyRural;
+      const isLikelyBuilding =
+        Boolean(houseNumberNorm && streetNorm && cityNorm) &&
+        detectClass !== "house" &&
+        urbanContext;
+      let frBuildingDetectionReason: string;
+      if (!isLikelyBuilding) {
+        frBuildingDetectionReason = !houseNumberNorm
+          ? "no_house_number"
+          : !streetNorm
+            ? "no_street"
+            : !cityNorm
+              ? "no_city"
+              : detectClass === "house"
+                ? "classified_as_house"
+                : !urbanContext
+                  ? "not_urban_context"
+                  : "none";
+      } else {
+        frBuildingDetectionReason = hasUrbanDept
+          ? "urban_dept_and_address"
+          : hasUrbanStreetType
+            ? "urban_street_type_and_address"
+            : "urban_address";
+      }
+      const flowAsApartment = detectClass === "apartment" || isLikelyBuilding;
+      const shouldPromptLot =
+        flowAsApartment && !submittedLotPresent && (allowMultiUnitFromQueries || isLikelyBuilding);
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
@@ -1629,6 +1695,8 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_detect_classification_reason =
         detectOverrideReason ??
         (detectClass === "apartment" ? "medium_apartment_signals" : detectClass === "house" ? "house_signals" : "unclear_no_signals");
+      frRuntimeDebug.fr_is_likely_building = isLikelyBuilding;
+      frRuntimeDebug.fr_building_detection_reason = frBuildingDetectionReason;
       frRuntimeDebug.fr_detect_multi_unit_source = multiUnitSource;
       frRuntimeDebug.fr_detect_ban_strength_used = banStreetThresholdPassed;
       frRuntimeDebug.fr_should_prompt_lot = shouldPromptLot;
@@ -1765,9 +1833,11 @@ export async function GET(request: NextRequest) {
       console.log("[FR_EXACT] lot_column_used=" + String(exactPrimaryLotColumn ?? "none"));
       console.log("[FR_EXACT] lot_like_schema_columns=" + JSON.stringify(lotLikeColsFromSchema));
 
-      // Align with `normalizeStreetForDetection`: strip voie prefixes on the table side so
-      // BAN "RUE …" matches facts "…" and vice versa.
-      const frBqStreetMatchSql = `(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')) LIKE CONCAT('%', TRIM(@street_normalized), '%') OR REGEXP_REPLACE(UPPER(TRIM(street)), r'[^A-Z0-9 ]+', ' ') LIKE CONCAT('%', TRIM(@street_normalized), '%'))`;
+      const frBqStreetBase = `REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(street AS STRING)), NFD)), r'\\p{M}', ''), r'[^A-Z0-9 ]+', ' ')`;
+      const frBqStreetNoPrefix = `REGEXP_REPLACE(${frBqStreetBase}, r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')`;
+      const frBqStreetNoStopwords = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(${frBqStreetNoPrefix}, r'\\s+DU\\s+', ' '), r'\\s+DE\\s+', ' '), r'\\s+DES\\s+', ' '), r'\\s+LA\\s+', ' '), r'\\s+LE\\s+', ' '), r'^DU\\s+', ''), r'^DE\\s+', ''), r'^DES\\s+', ''), r'^LA\\s+', ''), r'^LE\\s+', ''), r'\\s+', ' '))`;
+      const frBqStreetNormalizedExpr = frBqStreetNoStopwords;
+      const frBqStreetMatchSql = `(${frBqStreetNormalizedExpr} = TRIM(@street_normalized) OR ${frBqStreetNormalizedExpr} LIKE CONCAT('%', TRIM(@street_normalized), '%') OR TRIM(@street_normalized) LIKE CONCAT('%', ${frBqStreetNormalizedExpr}, '%'))`;
 
       // Robust house_number: exact match or normalized (digits+letters, no spaces/punctuation).
       const normalizeHouseNumberForFacts = (hn: string): string => {
@@ -1826,7 +1896,7 @@ export async function GET(request: NextRequest) {
         city_main: cityNormForSource || cityNorm || "",
         postcode: postcodeNormForSource || "",
         street: streetNorm || "",
-        street_normalized: streetNormForSource || "",
+        street_normalized: streetNormForExactMatch || streetNormForSource || "",
         house_number: houseNumberNormForSource || "",
         house_number_norm: houseNumberNormForMatch || "",
       };
@@ -2493,7 +2563,7 @@ export async function GET(request: NextRequest) {
       };
 
       const buildingSimilarBase =
-        detectClass === "apartment" && Boolean(exactLotToken) && Boolean(houseNumberNorm) && Boolean(postcodeNorm);
+        flowAsApartment && Boolean(exactLotToken) && Boolean(houseNumberNorm) && Boolean(postcodeNorm);
 
       /** Same-building address aggregate (no unit_number): prefer Appartement cohort over exact_address when it wins. */
       const buildingSimilarAfterExactAddressNoUnit =
@@ -2984,7 +3054,8 @@ export async function GET(request: NextRequest) {
       }
 
       // Use the gold-table driven apartment-vs-house decision for the valuation ladder.
-      const frDetectToUse: "apartment" | "house" | "unclear" = detectClass;
+      // When isLikelyBuilding, flow as apartment but keep detectClass for fr_detect display.
+      const frDetectToUse: "apartment" | "house" | "unclear" = flowAsApartment && detectClass === "unclear" ? "apartment" : detectClass;
 
       // Runtime schema inspection (no guessing): detect real sale-date column per fallback table.
       const detectSaleDateColumn = (columns: string[]): "latest_sale_date" | "newest_sale_date" | null => {
@@ -3035,8 +3106,7 @@ export async function GET(request: NextRequest) {
         if (!buildingProfile || buildingProfile.transaction_count < 1) return null;
         const forHouses = detectClass === "house" && buildingProfile.house_count > 0;
         const forApartments =
-          (detectClass === "apartment" || (detectClass === "unclear" && buildingProfile.apartment_count > 0)) &&
-          (buildingProfile.apartment_count > 0 || buildingProfile.transaction_count > 0);
+          flowAsApartment && (buildingProfile.apartment_count > 0 || buildingProfile.transaction_count > 0);
         if (!forHouses && !forApartments) return null;
         const medianPpm = buildingProfile.median_price_per_m2;
         const surfaceForEst = validInputSurfaceM2 ?? buildingProfile.surface_median ?? medianSurfaceM2ForFallback;
@@ -3096,13 +3166,15 @@ export async function GET(request: NextRequest) {
       console.log("[FR_FLOW] ladder_step_started=STREET");
       console.log("[FR_STEP] street_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
+      const effectivePropertyType =
+        flowAsApartment && !propertyType ? "Appartement" : (propertyType || "");
       const streetParams = {
         country: country || "",
         city: cityNormForSource || cityNorm || "",
         postcode: postcodeNormForSource || "",
         street: streetNorm || "",
         street_normalized: streetNormForSource || "",
-        property_type: propertyType || "",
+        property_type: effectivePropertyType,
       };
       console.log("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
       let [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }> ]>(
@@ -3112,7 +3184,7 @@ export async function GET(request: NextRequest) {
         },
         "fallback_street_query"
       );
-      if ((fallbackStreetRows ?? []).length === 0 && propertyType) {
+      if ((fallbackStreetRows ?? []).length === 0 && effectivePropertyType) {
         const streetParamsNoType = { ...streetParams, property_type: "" };
         console.log("[FR_PARAMS]", { query: "fallback_street_query_retry_no_property_type", ...streetParamsNoType });
         const [retryRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }> ]>(
@@ -3513,8 +3585,8 @@ export async function GET(request: NextRequest) {
       const tryNearbyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
         if (!postcodeNorm || !cityNorm) return null;
         const isHouse = detectClass === "house";
-        const isApartment = detectClass === "apartment";
-        const tryBoth = detectClass === "unclear";
+        const isApartment = flowAsApartment;
+        const tryBoth = detectClass === "unclear" && !flowAsApartment;
 
         const houseLikeFilter = `(
           LOWER(TRIM(CAST(property_type AS STRING))) LIKE '%maison%'
@@ -3735,8 +3807,8 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
       frRuntimeDebug.no_data_reason = noDataReasonParts.join(" | ") || "unknown";
 
-      // Req 3: If apartment + no lot and we'd return no_data, prompt for lot instead.
-      if (detectClass === "apartment" && !submittedLotPresent) {
+      // Req 3: If apartment (or likely building) + no lot and we'd return no_data, prompt for lot instead.
+      if (flowAsApartment && !submittedLotPresent) {
         console.log("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
         return frReturn(
           {
@@ -3754,7 +3826,7 @@ export async function GET(request: NextRequest) {
               street_average_message: "No reliable data found",
               livability_rating: "FAIR",
             },
-            fr_detect: detectClass,
+            fr_detect: frDetectToUse,
             fr: emptyFranceResponse({
               success: true,
               resultType: "building_level",
@@ -3763,7 +3835,7 @@ export async function GET(request: NextRequest) {
               normalizedLot: normalizedRequestedLot,
               property: null,
               buildingStats: {
-                transactionCount: Math.max(candidateLots.length, isMultiUnitDetected ? 2 : 1),
+                transactionCount: Math.max(candidateLots.length, isMultiUnitDetected || isLikelyBuilding ? 2 : 1),
                 avgPricePerSqm: null,
                 avgTransactionValue: null,
               },
