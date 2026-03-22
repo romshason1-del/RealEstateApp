@@ -4312,7 +4312,7 @@ export async function GET(request: NextRequest) {
         exactRowsCount === 0
       ) {
         const sameStreetHouseQuery = `
-          SELECT price_per_m2, last_sale_date, house_number
+          SELECT price_per_m2, last_sale_date, last_sale_price, house_number
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -4326,7 +4326,7 @@ export async function GET(request: NextRequest) {
           LIMIT 100
         `;
           try {
-          const [sameStreetRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null; house_number?: unknown }>]>(
+          const [sameStreetRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null; last_sale_price?: unknown; house_number?: unknown }>]>(
             {
               query: sameStreetHouseQuery,
               params: {
@@ -4346,8 +4346,10 @@ export async function GET(request: NextRequest) {
               houseNumberNumericTarget != null && hn != null
                 ? Math.abs((extractHouseNumberNumeric(String(hn)) ?? 999999) - houseNumberNumericTarget)
                 : 0;
-            return { ppm, dist };
-          }).filter((x): x is { ppm: number; dist: number } => x.ppm != null && x.ppm > 0);
+            const amount = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
+            const date = r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null;
+            return { ppm, dist, amount, date };
+          }).filter((x): x is { ppm: number; dist: number; amount: number | null; date: string | null } => x.ppm != null && x.ppm > 0);
           if (withPpmAndDist.length >= 1) {
             withPpmAndDist.sort((a, b) => a.dist - b.dist);
             let pool = withPpmAndDist.filter((x) => x.dist <= 0);
@@ -4355,6 +4357,14 @@ export async function GET(request: NextRequest) {
             if (pool.length < 2) pool = withPpmAndDist.filter((x) => x.dist <= 2);
             if (pool.length < 2) pool = withPpmAndDist.filter((x) => x.dist <= 5);
             if (pool.length < 2) pool = withPpmAndDist;
+            const bestSameStreet = [...pool].filter((x) => (x.amount ?? 0) > 0).sort((a, b) => {
+              const ta = a.date ? new Date(a.date).getTime() : 0;
+              const tb = b.date ? new Date(b.date).getTime() : 0;
+              return tb - ta;
+            })[0] ?? pool.find((x) => (x.amount ?? 0) > 0);
+            const sameStreetHouseLastTx = bestSameStreet && (bestSameStreet.amount ?? 0) > 0
+              ? { amount: bestSameStreet.amount!, date: bestSameStreet.date }
+              : pool[0]?.date ? { amount: 0, date: pool[0].date } : null;
             const ppmValues = pool.map((x) => x.ppm);
             const trimmedPpm = ppmValues.length >= 5 ? frTrimFractionExtremes(ppmValues.map((p) => ({ p })), (x) => x.p, 0.1).map((x) => x.p) : ppmValues;
             const medianPpm = medianNumber(trimmedPpm);
@@ -4377,7 +4387,9 @@ export async function GET(request: NextRequest) {
                     exact_value: estimated,
                     exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                     value_level: "street-level",
-                    last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                    last_transaction: sameStreetHouseLastTx
+                      ? { amount: sameStreetHouseLastTx.amount, date: sameStreetHouseLastTx.date, message: sameStreetHouseLastTx.amount > 0 ? undefined : "Representative sale date from street" }
+                      : { amount: 0, date: null, message: "No exact recent transaction available" },
                     street_average: medianPpm,
                     street_average_message: fallbackSourceSameStreetHouse,
                     livability_rating: "FAIR",
@@ -4389,8 +4401,8 @@ export async function GET(request: NextRequest) {
                     requestedLot: null,
                     normalizedLot: null,
                     property: {
-                      transactionDate: null,
-                      transactionValue: estimated,
+                      transactionDate: sameStreetHouseLastTx?.date ?? null,
+                      transactionValue: (sameStreetHouseLastTx?.amount ?? 0) > 0 ? sameStreetHouseLastTx!.amount : estimated,
                       pricePerSqm: medianPpm,
                       surfaceArea: surfaceForEst ?? null,
                       rooms: null,
@@ -4537,6 +4549,8 @@ export async function GET(request: NextRequest) {
       console.log("[FR_FLOW] ladder_step_started=STREET");
       console.log("[FR_STEP] street_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
+      /** When street fallback uses property_latest_facts, best row's sale (amount+date) for last_transaction. */
+      let streetFactsBestSale: { amount: number; date: string | null } | null = null;
       const effectivePropertyType =
         flowAsApartment && !propertyType ? "Appartement" : (propertyType || "");
       const streetParams = {
@@ -4586,7 +4600,7 @@ export async function GET(request: NextRequest) {
       if (streetFallbackRowsCount === 0 && streetNorm && postcodeNorm && cityNorm) {
         try {
           const factsStreetQuery = `
-            SELECT price_per_m2, house_number, last_sale_date
+            SELECT price_per_m2, house_number, last_sale_date, last_sale_price
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -4594,7 +4608,7 @@ export async function GET(request: NextRequest) {
               AND ${frBqStreetMatchSql}
             LIMIT 200
           `;
-          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; house_number?: unknown; last_sale_date?: string | null }>]>(
+          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; house_number?: unknown; last_sale_date?: string | null; last_sale_price?: unknown }>]>(
             {
               query: factsStreetQuery,
               params: {
@@ -4614,8 +4628,9 @@ export async function GET(request: NextRequest) {
               houseNumberNumericTarget != null && hn != null
                 ? Math.abs((extractHouseNumberNumeric(String(hn)) ?? 999999) - houseNumberNumericTarget)
                 : 0;
-            return { ppm, dist, date: r.last_sale_date };
-          }).filter((x): x is { ppm: number; dist: number; date: string | null | undefined } => x.ppm != null && x.ppm > 0);
+            const amount = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
+            return { ppm, dist, date: r.last_sale_date, amount };
+          }).filter((x): x is { ppm: number; dist: number; date: string | null | undefined; amount: number | null } => x.ppm != null && x.ppm > 0);
           if (withPpm.length >= 1) {
             withPpm.sort((a, b) => a.dist - b.dist);
             const closestDist = withPpm[0]?.dist ?? 0;
@@ -4626,6 +4641,14 @@ export async function GET(request: NextRequest) {
             if (pool.length < 3) pool = withPpm;
             const recentPool = pool.filter((x) => frSaleDateWithinFiveYears(x.date));
             const recencyPreferred = recentPool.length >= 1 ? recentPool : pool;
+            const bestForTx = [...recencyPreferred].filter((x) => (x.amount ?? 0) > 0).sort((a, b) => {
+              const ta = a.date ? new Date(String(a.date)).getTime() : 0;
+              const tb = b.date ? new Date(String(b.date)).getTime() : 0;
+              return tb - ta;
+            })[0] ?? recencyPreferred.filter((x) => (x.amount ?? 0) > 0)[0];
+            if (bestForTx && (bestForTx.amount ?? 0) > 0) {
+              streetFactsBestSale = { amount: bestForTx.amount!, date: bestForTx.date != null && String(bestForTx.date).trim() ? String(bestForTx.date) : null };
+            }
             const ppmPool = recencyPreferred.map((x) => x.ppm);
             const trimmedPpm =
               ppmPool.length >= 5
@@ -4790,6 +4813,9 @@ export async function GET(request: NextRequest) {
           console.log(
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_numeric (EXACT+BUILDING+STREET ran)"
           );
+          const lastTxFromStreet = streetFactsBestSale ?? (streetEstimate.newestSaleDate != null && String(streetEstimate.newestSaleDate).trim()
+            ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim() }
+            : null);
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -4798,11 +4824,9 @@ export async function GET(request: NextRequest) {
               exact_value: streetEstimate.estimated,
               exact_value_message: null,
               value_level: "street-level",
-              last_transaction: {
-                amount: 0,
-                date: null,
-                message: "No exact recent transaction available",
-              },
+              last_transaction: lastTxFromStreet
+                ? { amount: lastTxFromStreet.amount, date: lastTxFromStreet.date, message: lastTxFromStreet.amount > 0 ? undefined : "Representative sale date from street data" }
+                : { amount: 0, date: null, message: "No exact recent transaction available" },
               // Median €/m² for UI when headline uses price/m² (same numeric scale as exact_value uses total €).
               street_average: streetEstimate.avgPricePerM2,
               street_average_message: fallbackSourceStreet,
@@ -4817,9 +4841,8 @@ export async function GET(request: NextRequest) {
               normalizedLot: normalizedRequestedLot,
               property: {
                 // Estimated market value must not be treated as an exact recent transaction.
-                transactionDate: null,
-                transactionValue: streetEstimate.estimated,
-                pricePerSqm: streetEstimate.avgPricePerM2,
+                transactionDate: lastTxFromStreet?.date ?? null,
+                transactionValue: (lastTxFromStreet?.amount ?? 0) > 0 ? lastTxFromStreet!.amount : streetEstimate.estimated,
                 surfaceArea: surfaceForEstimation ?? null,
                 rooms: null,
                 propertyType: propertyType,
@@ -4849,6 +4872,9 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_total_rows_used = streetFallbackRowsCount;
         frRuntimeDebug.fr_final_winner_layer = "street_fallback";
         console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
+        const lastTxFromStreetPriceOnly = streetFactsBestSale ?? (streetEstimate.newestSaleDate != null && String(streetEstimate.newestSaleDate).trim()
+          ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim() }
+          : null);
         return frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -4858,11 +4884,9 @@ export async function GET(request: NextRequest) {
               exact_value: null,
               exact_value_message: null,
               value_level: "street-level",
-              last_transaction: {
-                amount: 0,
-                date: null,
-                message: "No exact recent transaction available",
-              },
+              last_transaction: lastTxFromStreetPriceOnly
+                ? { amount: lastTxFromStreetPriceOnly.amount, date: lastTxFromStreetPriceOnly.date, message: lastTxFromStreetPriceOnly.amount > 0 ? undefined : "Representative sale date from street data" }
+                : { amount: 0, date: null, message: "No exact recent transaction available" },
               street_average: streetEstimate.avgPricePerM2,
               street_average_message: streetOnlyMessage,
               livability_rating: "FAIR",
@@ -4874,8 +4898,8 @@ export async function GET(request: NextRequest) {
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
-                transactionDate: null,
-                transactionValue: null,
+                transactionDate: lastTxFromStreetPriceOnly?.date ?? null,
+                transactionValue: (lastTxFromStreetPriceOnly?.amount ?? 0) > 0 ? lastTxFromStreetPriceOnly!.amount : null,
                 pricePerSqm: streetEstimate.avgPricePerM2,
                 surfaceArea: null,
                 rooms: null,
@@ -5008,13 +5032,18 @@ export async function GET(request: NextRequest) {
               : r.sale_date;
         const communeWithPrice = communeUsableAvgRows.map((r) => {
           const v = parseMaybeDecimal(r.avg_price_per_m2);
-          return v != null && v > 0 ? { price: v, date: getCommuneDate(r) } : null;
-        }).filter((x): x is { price: number; date: unknown } => x != null);
+          const dateRaw = getCommuneDate(r);
+          const dateStr = dateRaw != null && String(dateRaw).trim() ? String(dateRaw).trim() : null;
+          return v != null && v > 0 ? { price: v, date: dateStr } : null;
+        }).filter((x): x is { price: number; date: string | null } => x != null);
         const communeRecent = communeWithPrice.filter((x) => frSaleDateWithinFiveYears(x.date));
         const communeForMedian =
           communeWithPrice.length >= 5
             ? frTrimFractionExtremes(communeWithPrice.map((x) => ({ x })), (t) => t.x.price, 0.1).map((t) => t.x.price)
             : communeWithPrice.map((x) => x.price);
+        const communeNewestDate = communeWithPrice
+          .filter((x) => x.date)
+          .sort((a, b) => (b.date ? new Date(b.date).getTime() : 0) - (a.date ? new Date(a.date).getTime() : 0))[0]?.date ?? null;
         const medianAvgPricePerM2 = medianNumber(communeForMedian);
         if (medianAvgPricePerM2 != null && Number.isFinite(medianAvgPricePerM2) && medianAvgPricePerM2 > 0) {
           const medianAvgPricePerM2Euro = medianAvgPricePerM2 / 100;
@@ -5043,6 +5072,7 @@ export async function GET(request: NextRequest) {
           console.log(
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
           );
+          const communeLastTx = communeNewestDate ? { amount: 0, date: communeNewestDate } : null;
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -5051,11 +5081,9 @@ export async function GET(request: NextRequest) {
               exact_value: estimated,
               exact_value_message: null,
               value_level: "street-level",
-              last_transaction: {
-                amount: 0,
-                date: null,
-                message: "No exact recent transaction available",
-              },
+              last_transaction: communeLastTx
+                ? { amount: communeLastTx.amount, date: communeLastTx.date, message: "Representative sale date from commune data" }
+                : { amount: 0, date: null, message: "No exact recent transaction available" },
               street_average: medianAvgPricePerM2Euro,
             street_average_message:
               surfaceForEstimation == null
@@ -5070,7 +5098,7 @@ export async function GET(request: NextRequest) {
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
-                transactionDate: null,
+                transactionDate: communeLastTx?.date ?? null,
                 transactionValue: estimated,
                 pricePerSqm: medianAvgPricePerM2Euro,
                 surfaceArea: surfaceForEstimation ?? null,
@@ -5110,7 +5138,7 @@ export async function GET(request: NextRequest) {
         const runNearbyQuery = async (filter: string) => {
           const cityClause = (cityNormForSource || cityNorm) && (cityNormForSource || cityNorm).trim().length >= 2 ? ` AND LOWER(TRIM(city)) = LOWER(TRIM(@city))` : "";
           const q = `
-            SELECT price_per_m2, surface_m2, street, house_number, last_sale_date, city, property_type
+            SELECT price_per_m2, surface_m2, street, house_number, last_sale_date, last_sale_price, city, property_type
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND ${frBqPostcodeMatchSql}${cityClause}
@@ -5138,6 +5166,7 @@ export async function GET(request: NextRequest) {
             street?: unknown;
             house_number?: unknown;
             last_sale_date?: unknown;
+            last_sale_price?: unknown;
             city?: unknown;
           }>;
           const withPpm = rows
@@ -5152,14 +5181,15 @@ export async function GET(request: NextRequest) {
               const houseDist = houseNumberNumericTarget != null && hnNum != null ? Math.abs(hnNum - houseNumberNumericTarget) : 999;
               const dateStr = r.last_sale_date != null ? String(r.last_sale_date).trim() || null : null;
               const isRecent = frSaleDateWithinFiveYears(dateStr);
-              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent };
+              const amount = frPropertyLatestFactsMoneyToEuros(r.last_sale_price);
+              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent, amount };
             })
-            .filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean } => x.ppm != null && x.ppm > 0);
+            .filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean; amount: number | null } => x.ppm != null && x.ppm > 0);
 
           if (withPpm.length < 3) {
-            const [anyRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; street?: unknown; house_number?: unknown; last_sale_date?: unknown; city?: unknown }>]>({
+            const [anyRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; street?: unknown; house_number?: unknown; last_sale_date?: unknown; last_sale_price?: unknown; city?: unknown }>]>({
               query: `
-                SELECT price_per_m2, street, house_number, last_sale_date, city
+                SELECT price_per_m2, street, house_number, last_sale_date, last_sale_price, city
                 FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
                 WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
                   AND ${frBqPostcodeMatchSql}
@@ -5178,8 +5208,9 @@ export async function GET(request: NextRequest) {
               const houseDist = houseNumberNumericTarget != null && hnNum != null ? Math.abs(hnNum - houseNumberNumericTarget) : 999;
               const dateStr = r.last_sale_date != null ? String(r.last_sale_date).trim() || null : null;
               const isRecent = frSaleDateWithinFiveYears(r.last_sale_date);
-              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent };
-            }).filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean } => x.ppm != null && x.ppm > 0);
+              const amount = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
+              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent, amount };
+            }).filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean; amount: number | null } => x.ppm != null && x.ppm > 0);
             if (extraRows.length > withPpm.length) {
               withPpm.length = 0;
               withPpm.push(...extraRows);
@@ -5225,6 +5256,15 @@ export async function GET(request: NextRequest) {
           const propType = (tryBoth ? usedHouseFilter : isHouse) ? "Maison" : "Appartement";
           const conf: "low" | "medium" = pool.length >= 15 ? "medium" : "low";
 
+          const nearbyBestRow = pool.find((x) => (x.amount ?? 0) > 0) ?? pool[0];
+          const nearbyLastTx = nearbyBestRow
+            ? ((nearbyBestRow.amount ?? 0) > 0
+                ? { amount: nearbyBestRow.amount!, date: nearbyBestRow.dateStr }
+                : nearbyBestRow.dateStr
+                  ? { amount: 0, date: nearbyBestRow.dateStr }
+                  : null)
+            : null;
+
           console.log("[FR_NEARBY] detect_class=" + String(detectClass));
           console.log("[FR_NEARBY] nearby_rows_found=" + String(withPpm.length));
           console.log("[FR_NEARBY] nearby_rows_used=" + String(pool.length));
@@ -5251,7 +5291,9 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "street-level",
-                last_transaction: { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: nearbyLastTx
+                  ? { amount: nearbyLastTx.amount, date: nearbyLastTx.date, message: nearbyLastTx.amount > 0 ? undefined : "Representative sale date from nearby" }
+                  : { amount: 0, date: null, message: "No exact recent transaction available" },
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5263,8 +5305,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: null,
-                  transactionValue: estimated,
+                  transactionDate: nearbyLastTx?.date ?? null,
+                  transactionValue: (nearbyLastTx?.amount ?? 0) > 0 ? nearbyLastTx!.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEst ?? null,
                   rooms: null,
