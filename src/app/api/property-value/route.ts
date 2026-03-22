@@ -4671,32 +4671,46 @@ export async function GET(request: NextRequest) {
       if (streetFallbackRowsCount === 0 && streetUsableAvgRowsCount === 0 && postcodeNorm && cityNorm) {
         try {
           const factsStreetPostcodeCityQuery = `
-            SELECT price_per_m2, last_sale_date
+            SELECT price_per_m2, last_sale_date, last_sale_price
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
               AND LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
             LIMIT 200
           `;
-          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null }>]>({
+          const [factsRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; last_sale_date?: string | null; last_sale_price?: unknown }>]>({
             query: factsStreetPostcodeCityQuery,
             params: {
               city: cityNormForSource || cityNorm || "",
               postcode: postcodeNormForSource || postcodeNorm || "",
             },
           }, "street_from_facts_postcode_city");
-          const ppmEuros = (factsRows ?? [])
-            .map((r) => frPropertyLatestFactsMoneyToEuros(r.price_per_m2))
-            .filter((v): v is number => v != null && v > 0);
-          if (ppmEuros.length >= 1) {
+          const withPpmPostcodeCity = (factsRows ?? [])
+            .map((r) => ({
+              ppm: frPropertyLatestFactsMoneyToEuros(r.price_per_m2),
+              amount: frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price),
+              date: r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null,
+            }))
+            .filter((x): x is { ppm: number; amount: number | null; date: string | null } => x.ppm != null && x.ppm > 0);
+          if (withPpmPostcodeCity.length >= 1) {
+            const ppmEuros = withPpmPostcodeCity.map((x) => x.ppm);
             const medianPpmEuro = medianNumber(ppmEuros) ?? ppmEuros[0];
             streetRows = [{ avg_price_per_m2: medianPpmEuro * 100 }];
-            streetFallbackRowsCount = ppmEuros.length;
+            streetFallbackRowsCount = withPpmPostcodeCity.length;
             streetUsableAvgRows = streetRows;
             streetUsableAvgRowsCount = 1;
-            streetFactsFilteredCount = ppmEuros.length;
-            streetFactsRecentCount = ppmEuros.length;
-            console.log("[FR_FLOW] street_from_facts_postcode_city rows=" + String(ppmEuros.length) + " median_ppm=" + String(medianPpmEuro));
+            streetFactsFilteredCount = withPpmPostcodeCity.length;
+            streetFactsRecentCount = withPpmPostcodeCity.length;
+            const bestPostcodeCity = withPpmPostcodeCity.filter((x) => (x.amount ?? 0) > 0).sort((a, b) =>
+              (b.date ? new Date(b.date).getTime() : 0) - (a.date ? new Date(a.date).getTime() : 0)
+            )[0] ?? withPpmPostcodeCity.find((x) => (x.amount ?? 0) > 0) ?? withPpmPostcodeCity.find((x) => x.date);
+            if (bestPostcodeCity && ((bestPostcodeCity.amount ?? 0) > 0 || bestPostcodeCity.date)) {
+              streetFactsBestSale = {
+                amount: (bestPostcodeCity.amount ?? 0) > 0 ? bestPostcodeCity.amount! : 0,
+                date: bestPostcodeCity.date,
+              };
+            }
+            console.log("[FR_FLOW] street_from_facts_postcode_city rows=" + String(withPpmPostcodeCity.length) + " median_ppm=" + String(medianPpmEuro));
           }
         } catch (e) {
           console.log("[FR_FLOW] street_from_facts_postcode_city_error", (e as Error)?.message);
