@@ -630,6 +630,8 @@ export async function GET(request: NextRequest) {
         fr_is_rural_pattern: null as boolean | null,
         fr_building_detection_reason: null as string | null,
         fr_detection_reason: null as string | null,
+        fr_detect_confidence: null as "high" | "medium" | "low" | null,
+        fr_detect_reason: null as string | null,
         fr_should_prompt_lot: null as boolean | null,
         fr_lot_prompt_visible: null as boolean | null,
         fr_lot_submitted: null as boolean | null,
@@ -1499,6 +1501,15 @@ export async function GET(request: NextRequest) {
         return null;
       };
 
+      const getNumber = (obj: Record<string, unknown>, keys: string[]): number | null => {
+        for (const k of keys) {
+          const v = obj?.[k];
+          if (v == null) continue;
+          const n = typeof v === "number" ? v : parseInt(String(v), 10);
+          if (Number.isFinite(n)) return n;
+        }
+        return null;
+      };
       const getStringArray = (obj: Record<string, unknown>, keys: string[]): string[] => {
         for (const k of keys) {
           const v = obj?.[k];
@@ -1554,6 +1565,7 @@ export async function GET(request: NextRequest) {
       let apartmentEvidenceFromFacts = false;
       let houseEvidenceFromFacts = false;
       let candidateLotsFromFacts: string[] = [];
+      let streetTransactionDensity: number | null = null;
       const hasAddressForDiscovery = (cityNorm || postcodeNorm) && streetNorm;
       if (hasAddressForDiscovery) {
         try {
@@ -1567,8 +1579,16 @@ export async function GET(request: NextRequest) {
               AND ${frBqHouseMatchEarly}
             LIMIT 100
           `;
-          const [earlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            {
+          const streetDensityQuery = `
+            SELECT COUNT(*) AS cnt
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = 'fr'
+              AND ${frBqPostcodeMatchSql}
+              AND ${frBqCityMatchSql}
+              AND ${frBqStreetMatchSqlEarly}
+          `;
+          const [earlyResult, densityResult] = await Promise.all([
+            queryWithTimeout<[Array<Record<string, unknown>>]>({
               query: earlyQuery,
               params: {
                 city: cityNorm || "",
@@ -1578,10 +1598,22 @@ export async function GET(request: NextRequest) {
                 house_number: houseNumberNormForSource || "",
                 house_number_norm: houseNumberNormForEarly || "",
               },
-            },
-            "early_candidate_discovery"
-          );
-          earlyCandidateRows = (earlyRows ?? []) as Array<Record<string, unknown>>;
+            }, "early_candidate_discovery"),
+            queryWithTimeout<[Array<{ cnt?: number }>]>({
+              query: streetDensityQuery,
+              params: {
+                city: cityNorm || "",
+                city_main: cityNormForSource || cityNorm || "",
+                postcode: postcodeNormForSource || "",
+                street_normalized: streetNormForExactMatch || streetNormForSource || "",
+              },
+            }, "street_density_discovery"),
+          ]);
+          const earlyRows = (earlyResult as [unknown])?.[0];
+          earlyCandidateRows = (Array.isArray(earlyRows) ? earlyRows : []) as Array<Record<string, unknown>>;
+          const densityRows = (densityResult as [unknown[]])?.[0];
+          const densityRow = Array.isArray(densityRows) ? densityRows[0] : null;
+          streetTransactionDensity = densityRow && typeof (densityRow as any).cnt === "number" ? (densityRow as any).cnt : null;
           const lots = new Set<string>();
           let appartCount = 0;
           let maisonCount = 0;
@@ -1697,10 +1729,27 @@ export async function GET(request: NextRequest) {
       const hasUrbanApartmentSignals = isLargeUrbanCity && hasBanAddressMatch;
       const allowMultiUnitFromQueries = banStreetThresholdPassed || hasUrbanApartmentSignals;
 
+      const sameAddressTxCount = earlyCandidateRows.length;
+      const veryLowStreetDensity = streetTransactionDensity != null && streetTransactionDensity < 20;
+      const maisonDominant = maisonCount >= 1 && (appartCount === 0 || maisonCount > appartCount);
+      const appartementDominant = appartCount >= 1 && (maisonCount === 0 || appartCount >= maisonCount);
+      const buildingCount = getNumber(detectRow, ["row_count", "unit_count", "building_count"]) ?? 1;
+      const singleBuilding = buildingCount <= 1;
+      const highTxSameAddress = sameAddressTxCount >= 5;
+      const lowTxSameAddress = sameAddressTxCount <= 2;
+
       const strongHouseSignals = houseEvidenceFromFacts;
       const strongApartmentSignals = allowMultiUnitFromQueries && apartmentEvidenceFromFacts;
       const mediumHouseSignals = isHouseLikeDetected || houseFromType;
       const mediumApartmentSignals = allowMultiUnitFromQueries && (isMultiUnitDetected || apartmentFromType);
+
+      const houseFromLowDensityAndMaison =
+        (veryLowStreetDensity || lowTxSameAddress) &&
+        maisonDominant &&
+        (singleBuilding || isHouseLikeDetected);
+      const apartmentFromHighTxCount = highTxSameAddress;
+      const apartmentFromDvfAndMultiUnit =
+        (lots.size >= 2 || appartementDominant) || isMultiUnitDetected;
 
       let multiUnitSource: "ban" | "source" | "building_intel" | "none" = "none";
 
@@ -1749,38 +1798,74 @@ export async function GET(request: NextRequest) {
         apartmentEvidenceFromFacts ||
         isMultiUnitDetected;
 
-      // Hybrid classification. Priority: 1) strong apartment, 2) strong house, 3) likely building heuristic, 4) unclear.
+      // Improved classification: 1) transaction-count fallback (5+ → apt, 1-2 → house), 2) strong signals, 3) density + type, 4) heuristic.
       let detectClass: "apartment" | "house" | "unclear";
       const detectUsedLot = false;
       let detectOverrideReason: string | null = null;
       let frDetectionReason: string;
+      let frDetectConfidence: "high" | "medium" | "low" = "low";
+      let frDetectReason: string;
 
-      if (hasPositiveApartmentEvidence && !strongHouseSignals) {
+      if (apartmentFromHighTxCount && !houseFromLowDensityAndMaison) {
+        detectClass = "apartment";
+        frDetectionReason = "multiple_transactions_same_address";
+        frDetectReason = `5+ transactions at same house_number (${sameAddressTxCount}) indicates multi-unit building`;
+        frDetectConfidence = sameAddressTxCount >= 5 ? "high" : "medium";
+      } else if (houseFromLowDensityAndMaison && !apartmentFromHighTxCount) {
+        detectClass = "house";
+        detectOverrideReason = null;
+        frDetectionReason = "low_density_maison_dominant_single_building";
+        const parts: string[] = [];
+        if (veryLowStreetDensity) parts.push("very low street transaction density");
+        if (lowTxSameAddress) parts.push(`${sameAddressTxCount} transactions at address`);
+        if (maisonDominant) parts.push("property_type maison dominant");
+        if (singleBuilding) parts.push("building_count=1");
+        frDetectReason = parts.length > 0 ? parts.join(", ") : "house signals";
+        frDetectConfidence = (veryLowStreetDensity || lowTxSameAddress) && maisonDominant && singleBuilding ? "high" : "medium";
+      } else if (hasPositiveApartmentEvidence && !strongHouseSignals) {
         detectClass = "apartment";
         frDetectionReason = apartmentEvidenceFromFacts
           ? "multi_unit_from_dvf_facts"
           : "multi_unit_from_building_intel";
+        frDetectReason = apartmentEvidenceFromFacts
+          ? "DVF shows multiple lots/appartements at address"
+          : "building_intelligence indicates multi-unit";
+        frDetectConfidence = apartmentEvidenceFromFacts || isMultiUnitDetected ? "high" : "medium";
       } else if (strongHouseSignals) {
         detectClass = "house";
         detectOverrideReason = strongApartmentSignals ? "conflict_house_wins_over_apartment" : "facts_maison_dominates";
         frDetectionReason = "strong_house_signals";
+        frDetectReason = "DVF property_type maison dominant at address";
+        frDetectConfidence = "high";
       } else if (mediumHouseSignals && !hasPositiveApartmentEvidence) {
         detectClass = "house";
         detectOverrideReason = "intelligence_house_signals";
         frDetectionReason = "intelligence_house_signals";
+        frDetectReason = "building_intelligence indicates house-like";
+        frDetectConfidence = "medium";
+      } else if (lowTxSameAddress && !hasPositiveApartmentEvidence && (maisonDominant || isHouseLikeDetected)) {
+        detectClass = "house";
+        frDetectionReason = "fallback_low_tx_house";
+        frDetectReason = `1-2 transactions at address with house-like signals`;
+        frDetectConfidence = "low";
       } else if (isLikelyBuilding) {
         detectClass = "apartment";
         frDetectionReason = "likely_building_heuristic";
+        frDetectReason = "urban address, no house signals, default to building";
+        frDetectConfidence = "low";
       } else {
         detectClass = "unclear";
         detectOverrideReason = "no_positive_evidence";
         frDetectionReason = "unclear_no_positive_evidence";
+        frDetectReason = "insufficient evidence to classify";
+        frDetectConfidence = "low";
       }
 
       if (!allowMultiUnitFromQueries && (apartmentEvidenceFromFacts || isMultiUnitDetected)) {
         detectClass = "unclear";
         detectOverrideReason = "ban_weak_match_ignored_multi_unit_evidence";
         frDetectionReason = "ban_weak_unclear";
+        frDetectReason = "BAN match weak, multi-unit evidence ignored";
       }
 
       if (detectClass === "apartment" && allowMultiUnitFromQueries) {
@@ -1807,6 +1892,8 @@ export async function GET(request: NextRequest) {
         apartmentFromType ? "type_appartement" : null,
         houseFromType ? "type_maison" : null,
         submittedLotPresent ? "submitted_lot" : null,
+        sameAddressTxCount > 0 ? `tx_at_address=${sameAddressTxCount}` : null,
+        streetTransactionDensity != null ? `street_density=${streetTransactionDensity}` : null,
       ].filter(Boolean).join("|") || "none";
 
       frRuntimeDebug.detect_class = detectClass;
@@ -1817,6 +1904,8 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_apartment_evidence_score =
         apartmentEvidenceFromFacts || isMultiUnitDetected ? 1 : allowMultiUnitFromQueries && apartmentFromType ? 0.5 : 0;
       frRuntimeDebug.fr_detect_classification_reason = frDetectionReason;
+      frRuntimeDebug.fr_detect_confidence = frDetectConfidence;
+      frRuntimeDebug.fr_detect_reason = frDetectReason;
       frRuntimeDebug.fr_is_likely_building = isLikelyBuilding;
       frRuntimeDebug.fr_is_rural_pattern = isRuralPattern;
       frRuntimeDebug.fr_building_detection_reason = frBuildingDetectionReason;
