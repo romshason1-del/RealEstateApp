@@ -4971,15 +4971,16 @@ export async function GET(request: NextRequest) {
       const terminalNoDataTag: "fallback_match" | "no_data" =
         banMatchedForTerminal && noValuationWinnerTerminal ? "fallback_match" : "no_data";
 
+      const bRowsNoData = (frRuntimeDebug.building_rows_count as number) ?? 0;
+      const hasBuildingEvidenceNoValue =
+        (bRowsNoData > 0 || buildingProfile != null) &&
+        frRuntimeDebug.fr_building_value_reliable !== true;
+
       if (terminalNoDataTag === "fallback_match") {
         frRuntimeDebug.winning_step = null;
         frRuntimeDebug.winning_source_label = null;
       } else {
         frRuntimeDebug.winning_step = "no_data";
-        const bRows = (frRuntimeDebug.building_rows_count as number) ?? 0;
-        const hasBuildingEvidenceNoValue =
-          (bRows > 0 || buildingProfile != null) &&
-          frRuntimeDebug.fr_building_value_reliable !== true;
         frRuntimeDebug.winning_source_label = hasBuildingEvidenceNoValue
           ? "Building identified, but insufficient reliable valuation data"
           : "No reliable data found";
