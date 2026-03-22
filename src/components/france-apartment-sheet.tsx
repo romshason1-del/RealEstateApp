@@ -908,6 +908,7 @@ export function FranceApartmentSheet({
     /**
      * Text between "•" and "reference sale" on the France result card. Only primitives: unwrap
      * value / text / label / date (never `String(object)` → "[object Object]").
+     * Handles: Date instance, ISO string, timestamp, BigQuery { value }, { date }, { iso }, { year, month, day }.
      */
     function referenceSaleDateLabelFromRaw(raw: unknown): string | null {
       const formatEnGb = (d: Date): string | null => {
@@ -921,15 +922,18 @@ export function FranceApartmentSheet({
         if (v === null || v === undefined) return null;
         if (typeof v === "string") {
           const t = v.trim();
+          if (t === "[object Object]") return null;
           return t.length ? t : null;
         }
         if (typeof v === "number" && Number.isFinite(v)) return String(v);
+        if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
         if (typeof v !== "object" || Array.isArray(v)) return null;
         const o = v as Record<string, unknown>;
         if ("value" in o && o.value !== undefined) return step(o.value, depth + 1);
         if ("text" in o && o.text !== undefined) return step(o.text, depth + 1);
         if ("label" in o && o.label !== undefined) return step(o.label, depth + 1);
         if ("date" in o && o.date !== undefined) return step(o.date, depth + 1);
+        if ("iso" in o && o.iso !== undefined) return step(o.iso, depth + 1);
         if ("year" in o && "month" in o && "day" in o) {
           const y = step(o.year, depth + 1);
           const mo = step(o.month, depth + 1);

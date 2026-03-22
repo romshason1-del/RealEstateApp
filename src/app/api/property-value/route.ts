@@ -59,6 +59,35 @@ function frPropertyLatestFactsMoneyToEuros(raw: unknown): number | null {
   return n == null ? null : n / 1000;
 }
 
+/** Extract ISO-style date string from raw (BigQuery { value }, Date, string, etc.). */
+function frExtractDateStringFromRaw(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "string") {
+    const t = String(raw).trim();
+    return t.length > 0 && t !== "[object Object]" ? t : null;
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    if (raw > 1e12) return new Date(raw).toISOString().slice(0, 10);
+    if (raw > 1e9) return new Date(raw * 1000).toISOString().slice(0, 10);
+    return null;
+  }
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw.toISOString().slice(0, 10);
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    if ("value" in o && o.value != null) return frExtractDateStringFromRaw(o.value);
+    if ("date" in o && o.date != null) return frExtractDateStringFromRaw(o.date);
+    if ("iso" in o && o.iso != null) return frExtractDateStringFromRaw(o.iso);
+    if ("year" in o && "month" in o && "day" in o) {
+      const y = Number(o.year);
+      const m = Number(o.month);
+      const d = Number(o.day);
+      if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d))
+        return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+  return null;
+}
+
 /** Sale date within last 5 years (France building-similar cohort). */
 function frSaleDateWithinFiveYears(raw: unknown): boolean {
   if (raw === null || raw === undefined) return false;
@@ -863,8 +892,7 @@ export async function GET(request: NextRequest) {
         const lastSaleAmt = lt?.amount;
         const last_sale_price =
           typeof lastSaleAmt === "number" && Number.isFinite(lastSaleAmt) && lastSaleAmt > 0 ? lastSaleAmt : null;
-        const last_sale_date =
-          lt?.date != null && String(lt.date).trim().length > 0 ? String(lt.date) : null;
+        const last_sale_date = frExtractDateStringFromRaw(lt?.date);
 
         const ppmProp = prop?.pricePerSqm;
         const ppmBs = bs?.avgPricePerSqm;
@@ -4024,8 +4052,7 @@ export async function GET(request: NextRequest) {
           const withValidTx = rows
             .map((r: ProfileRow) => {
               const amount = frPropertyLatestFactsMoneyToEuros(r.last_sale_price);
-              const dateRaw = r.last_sale_date;
-              const dateStr = dateRaw === null || dateRaw === undefined || String(dateRaw).trim() === "" ? null : String(dateRaw).trim();
+              const dateStr = frExtractDateStringFromRaw(r.last_sale_date);
               return { amount: amount ?? null, date: dateStr };
             })
             .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
@@ -4180,7 +4207,7 @@ export async function GET(request: NextRequest) {
             const buildingLevelTxRows = usablePriceRows
               .map((r) => ({
                 amount: frPropertyLatestFactsMoneyToEuros(r.last_sale_price) ?? null,
-                date: r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null,
+                date: frExtractDateStringFromRaw(r.last_sale_date),
               }))
               .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
             buildingLevelTxRows.sort((a, b) => {
@@ -4273,7 +4300,7 @@ export async function GET(request: NextRequest) {
             const richBuildingLevelTxRows = richUsable
               .map((r) => ({
                 amount: frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price) ?? null,
-                date: (r as any).last_sale_date != null && String((r as any).last_sale_date).trim() ? String((r as any).last_sale_date) : null,
+                date: frExtractDateStringFromRaw((r as any).last_sale_date),
               }))
               .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
             richBuildingLevelTxRows.sort((a, b) => {
