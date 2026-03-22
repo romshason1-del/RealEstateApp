@@ -1354,6 +1354,27 @@ export function FranceApartmentSheet({
                   Livability
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
+                {(() => {
+                  const priceLevel = rd?.fr_area_price_level as string | null | undefined;
+                  const trend = rd?.fr_area_trend as string | null | undefined;
+                  const liquidity = rd?.fr_area_liquidity as string | null | undefined;
+                  if (!priceLevel && !trend && !liquidity) return null;
+                  const parts: string[] = [];
+                  if (priceLevel === "premium") parts.push("Quartier premium");
+                  else if (priceLevel === "moderate") parts.push("Quartier modéré");
+                  else if (priceLevel === "affordable") parts.push("Quartier abordable");
+                  if (trend === "up") parts.push("prix en hausse");
+                  else if (trend === "down") parts.push("prix en baisse");
+                  else if (trend === "stable") parts.push("prix stable");
+                  if (liquidity === "high") parts.push("marché actif");
+                  else if (liquidity === "low") parts.push("peu de transactions");
+                  if (parts.length === 0) return null;
+                  return (
+                    <div className="mt-1.5 text-[11px] font-medium leading-tight text-zinc-400/90">
+                      {parts.join(" • ")}
+                    </div>
+                  );
+                })()}
               </div>
 
               {isDev ? (
@@ -1395,6 +1416,11 @@ export function FranceApartmentSheet({
                       <div>ban_street: {toDebugStr(rd?.ban_street)}</div>
                       <div>ban_house_number: {toDebugStr(rd?.ban_house_number)}</div>
                       <div>detect_class: {toDebugStr(rd?.detect_class)}</div>
+                      <div>fr_area_price_level: {toDebugStr(rd?.fr_area_price_level)}</div>
+                      <div>fr_area_trend: {toDebugStr(rd?.fr_area_trend)}</div>
+                      <div>fr_area_liquidity: {toDebugStr(rd?.fr_area_liquidity)}</div>
+                      <div>fr_area_median_ppm2: {toDebugStr(rd?.fr_area_median_ppm2)}</div>
+                      <div>fr_area_tx_count: {toDebugStr(rd?.fr_area_tx_count)}</div>
                       {toDebugStr(rd?.no_data_reason) !== "—" ? (
                         <div>no_data_reason: {toDebugStr(rd?.no_data_reason)}</div>
                       ) : null}

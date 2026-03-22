@@ -637,6 +637,7 @@ export async function GET(request: NextRequest) {
         fr_lot_distinct_count: null as number | null,
         fr_confidence_score: null as number | null,
         fr_price_variance: null as number | null,
+        fr_data_density: null as number | null,
         fr_confidence_label: null as "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" | null,
         fr_should_prompt_lot: null as boolean | null,
         fr_lot_prompt_visible: null as boolean | null,
@@ -695,6 +696,11 @@ export async function GET(request: NextRequest) {
         fr_selected_reason: null as string | null,
         fr_building_profile_class: null as string | null,
         fr_building_profile_row_count: null as number | null,
+        fr_area_price_level: null as string | null,
+        fr_area_trend: null as string | null,
+        fr_area_liquidity: null as "low" | "medium" | "high" | null,
+        fr_area_median_ppm2: null as number | null,
+        fr_area_tx_count: null as number | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -894,20 +900,34 @@ export async function GET(request: NextRequest) {
         const confVariance = (frRuntimeDebug.fr_price_variance as number) ?? null;
         const confRecency = winningStepForConf === "street_fallback" && (frRuntimeDebug.fr_street_filtered_count as number) > 0
           ? ((frRuntimeDebug.fr_street_recent_count as number) ?? 0) / Math.max(1, (frRuntimeDebug.fr_street_filtered_count as number))
-          : /^exact_/.test(winningStepForConf) ? 0.9 : 0.5;
+          : winningStepForConf === "commune_fallback"
+            ? 0.5
+            : winningStepForConf === "nearby_fallback"
+              ? 0.4
+              : /^exact_/.test(winningStepForConf)
+                ? 0.9
+                : /^building/.test(winningStepForConf)
+                  ? 0.7
+                  : 0.5;
         const confMean = price_per_m2 != null && Number.isFinite(price_per_m2) && price_per_m2 > 0 ? price_per_m2 : null;
         const confCv = confVariance != null && confMean != null && confMean > 0
           ? Math.sqrt(confVariance) / confMean
           : null;
+        const lotMatchType = frRuntimeDebug.fr_lot_match_type as "exact" | "building" | "approximate" | "none" | null;
+        const lotMatchQuality = lotMatchType === "exact" ? 1 : lotMatchType === "building" ? 0.7 : lotMatchType === "approximate" ? 0.5 : 0;
+        const idealRowCount = /^exact_/.test(winningStepForConf) ? 5 : /^building/.test(winningStepForConf) ? 4 : 20;
+        const dataDensity = Math.min(100, Math.round((confRowCount / idealRowCount) * 100));
         const { score: confScore, label: confLabel } = computeFranceConfidenceScore({
           dataLevel: winningStepForConf || "nearby_fallback",
           rowCount: Math.max(1, confRowCount),
           recencyScore: confRecency,
           priceVariance: confVariance,
           coefficientOfVariation: confCv,
+          lotMatchQuality,
         });
         frRuntimeDebug.fr_confidence_score = confScore;
         frRuntimeDebug.fr_price_variance = confVariance;
+        frRuntimeDebug.fr_data_density = dataDensity;
         frRuntimeDebug.fr_confidence_label = confLabel;
 
         let outPayload: Record<string, unknown> = { ...payload };
@@ -1641,7 +1661,38 @@ export async function GET(request: NextRequest) {
               AND ${frBqCityMatchSql}
               AND ${frBqStreetMatchSqlEarly}
           `;
-          const [earlyResult, densityResult] = await Promise.all([
+          const areaIntelligenceQuery = `
+            WITH base AS (
+              SELECT price_per_m2, last_sale_date
+              FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+              WHERE LOWER(TRIM(country)) = 'fr'
+                AND ${frBqPostcodeMatchSql}
+                AND ${frBqCityMatchSql}
+                AND ${frBqStreetMatchSqlEarly}
+                AND price_per_m2 IS NOT NULL AND price_per_m2 > 0
+            ),
+            with_years AS (
+              SELECT price_per_m2,
+                DATE_DIFF(CURRENT_DATE(), SAFE.PARSE_DATE('%Y-%m-%d', CAST(last_sale_date AS STRING)), DAY) AS days_ago
+              FROM base
+              WHERE last_sale_date IS NOT NULL
+            )
+            SELECT
+              (SELECT COUNT(*) FROM base) AS tx_count,
+              (SELECT AVG(price_per_m2) FROM base) AS avg_ppm2,
+              (SELECT APPROX_QUANTILES(price_per_m2, 100)[OFFSET(50)] FROM base) AS median_ppm2,
+              (SELECT APPROX_QUANTILES(price_per_m2, 100)[OFFSET(50)] FROM with_years WHERE days_ago <= 365) AS recent_median_ppm2,
+              (SELECT APPROX_QUANTILES(price_per_m2, 100)[OFFSET(50)] FROM with_years WHERE days_ago > 365 AND days_ago <= 1095) AS older_median_ppm2,
+              (SELECT COUNT(*) FROM with_years WHERE days_ago <= 365) AS recent_tx_count,
+              (SELECT COUNT(*) FROM with_years WHERE days_ago > 365 AND days_ago <= 1095) AS older_tx_count
+          `;
+          const areaParams = {
+            city: cityNorm || "",
+            city_main: cityNormForSource || cityNorm || "",
+            postcode: postcodeNormForSource || "",
+            street_normalized: streetNormForExactMatch || streetNormForSource || "",
+          };
+          const [earlyResult, densityResult, areaResult] = await Promise.all([
             queryWithTimeout<[Array<Record<string, unknown>>]>({
               query: earlyQuery,
               params: {
@@ -1662,12 +1713,58 @@ export async function GET(request: NextRequest) {
                 street_normalized: streetNormForExactMatch || streetNormForSource || "",
               },
             }, "street_density_discovery"),
+            queryWithTimeout<[Array<{
+              tx_count?: number;
+              avg_ppm2?: number;
+              median_ppm2?: number;
+              recent_median_ppm2?: number;
+              older_median_ppm2?: number;
+              recent_tx_count?: number;
+              older_tx_count?: number;
+            }>]>({
+              query: areaIntelligenceQuery,
+              params: areaParams,
+            }, "area_intelligence"),
           ]);
           const earlyRows = (earlyResult as [unknown])?.[0];
           earlyCandidateRows = (Array.isArray(earlyRows) ? earlyRows : []) as Array<Record<string, unknown>>;
           const densityRows = (densityResult as [unknown[]])?.[0];
           const densityRow = Array.isArray(densityRows) ? densityRows[0] : null;
           streetTransactionDensity = densityRow && typeof (densityRow as any).cnt === "number" ? (densityRow as any).cnt : null;
+
+          const areaRows = (areaResult as [unknown[]])?.[0];
+          const areaRow = Array.isArray(areaRows) ? areaRows[0] : null;
+          const areaTxCount = areaRow && typeof (areaRow as any).tx_count === "number" ? (areaRow as any).tx_count : null;
+          const areaMedianPpm2Raw = areaRow != null ? frParseNumericLoose((areaRow as any).median_ppm2) : null;
+          const areaRecentMedianRaw = areaRow != null ? frParseNumericLoose((areaRow as any).recent_median_ppm2) : null;
+          const areaOlderMedianRaw = areaRow != null ? frParseNumericLoose((areaRow as any).older_median_ppm2) : null;
+          const areaRecentTxCount = areaRow && typeof (areaRow as any).recent_tx_count === "number" ? (areaRow as any).recent_tx_count : null;
+          const areaOlderTxCount = areaRow && typeof (areaRow as any).older_tx_count === "number" ? (areaRow as any).older_tx_count : null;
+          if (areaMedianPpm2Raw != null) {
+            const medianEuros = frPropertyLatestFactsMoneyToEuros(areaMedianPpm2Raw) ?? 0;
+            frRuntimeDebug.fr_area_median_ppm2 = medianEuros;
+            frRuntimeDebug.fr_area_tx_count = areaTxCount;
+            if (medianEuros >= 6000) frRuntimeDebug.fr_area_price_level = "premium";
+            else if (medianEuros >= 3500) frRuntimeDebug.fr_area_price_level = "moderate";
+            else if (medianEuros > 0) frRuntimeDebug.fr_area_price_level = "affordable";
+            if (areaTxCount != null) {
+              if (areaTxCount < 5) frRuntimeDebug.fr_area_liquidity = "low";
+              else if (areaTxCount <= 20) frRuntimeDebug.fr_area_liquidity = "medium";
+              else frRuntimeDebug.fr_area_liquidity = "high";
+            }
+            const hasRecent = areaRecentMedianRaw != null && areaRecentTxCount != null && areaRecentTxCount >= 2;
+            const hasOlder = areaOlderMedianRaw != null && areaOlderTxCount != null && areaOlderTxCount >= 2;
+            if (hasRecent && hasOlder) {
+              const recentEuros = frPropertyLatestFactsMoneyToEuros(areaRecentMedianRaw) ?? 0;
+              const olderEuros = frPropertyLatestFactsMoneyToEuros(areaOlderMedianRaw) ?? 0;
+              if (olderEuros > 0) {
+                const pct = ((recentEuros - olderEuros) / olderEuros) * 100;
+                if (pct > 5) frRuntimeDebug.fr_area_trend = "up";
+                else if (pct < -5) frRuntimeDebug.fr_area_trend = "down";
+                else frRuntimeDebug.fr_area_trend = "stable";
+              }
+            }
+          }
           lots = new Set(
             earlyCandidateRows.flatMap((r) => {
               const row = r as any;
@@ -1839,6 +1936,8 @@ export async function GET(request: NextRequest) {
 
       const sameAddressTxCount = earlyCandidateRows.length;
       const veryLowStreetDensity = streetTransactionDensity != null && streetTransactionDensity < 20;
+      const areaLiquidityLow = frRuntimeDebug.fr_area_liquidity === "low";
+      const lowDensitySignal = veryLowStreetDensity || areaLiquidityLow;
       const maisonDominant = maisonCount >= 1 && (appartCount === 0 || maisonCount > appartCount);
       const appartementDominant = appartCount >= 1 && (maisonCount === 0 || appartCount >= maisonCount);
       const buildingCount = getNumber(detectRow, ["row_count", "unit_count", "building_count"]) ?? 1;
@@ -1852,7 +1951,7 @@ export async function GET(request: NextRequest) {
       const mediumApartmentSignals = allowMultiUnitFromQueries && (isMultiUnitDetected || apartmentFromType);
 
       const houseFromLowDensityAndMaison =
-        (veryLowStreetDensity || lowTxSameAddress) &&
+        (lowDensitySignal || lowTxSameAddress) &&
         maisonDominant &&
         (singleBuilding || isHouseLikeDetected);
       const apartmentFromHighTxCount = highTxSameAddress;
@@ -1925,11 +2024,12 @@ export async function GET(request: NextRequest) {
         frDetectionReason = "low_density_maison_dominant_single_building";
         const parts: string[] = [];
         if (veryLowStreetDensity) parts.push("very low street transaction density");
+        if (areaLiquidityLow && !veryLowStreetDensity) parts.push("low area liquidity (street)");
         if (lowTxSameAddress) parts.push(`${sameAddressTxCount} transactions at address`);
         if (maisonDominant) parts.push("property_type maison dominant");
         if (singleBuilding) parts.push("building_count=1");
         frDetectReason = parts.length > 0 ? parts.join(", ") : "house signals";
-        frDetectConfidence = (veryLowStreetDensity || lowTxSameAddress) && maisonDominant && singleBuilding ? "high" : "medium";
+        frDetectConfidence = (lowDensitySignal || lowTxSameAddress) && maisonDominant && singleBuilding ? "high" : "medium";
       } else if (hasPositiveApartmentEvidence && !strongHouseSignals) {
         detectClass = "apartment";
         frDetectionReason = apartmentEvidenceFromFacts
@@ -2102,30 +2202,37 @@ export async function GET(request: NextRequest) {
         recencyScore: number;
         priceVariance: number | null;
         coefficientOfVariation: number | null;
+        lotMatchQuality?: number;
       }): { score: number; label: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" } => {
-        const levelScores: Record<string, number> = {
-          exact_unit: 40,
-          exact_house: 38,
-          exact_address: 35,
-          exact_approximate: 33,
-          building_level: 30,
-          building_similar_unit: 28,
-          building_profile: 28,
+        const layerScores: Record<string, number> = {
+          exact_unit: 45,
+          exact_house: 43,
+          exact_address: 40,
+          exact_approximate: 38,
+          building_level: 32,
+          building_similar_unit: 30,
+          building_profile: 30,
           street_fallback: 22,
-          commune_fallback: 18,
-          nearby_fallback: 14,
+          commune_fallback: 16,
+          nearby_fallback: 12,
         };
-        let base = levelScores[p.dataLevel] ?? 15;
-        const rowBonus = Math.min(25, p.rowCount * 2.5);
-        const recencyBonus = Math.round(p.recencyScore * 10);
+        let base = layerScores[p.dataLevel] ?? 10;
+        const isFallback = /fallback/.test(p.dataLevel);
+        const rowBonus = Math.min(25, Math.log2(Math.max(1, p.rowCount) + 1) * 8);
+        const recencyBonus = Math.round(p.recencyScore * 12);
+        const lotBonus = Math.round((p.lotMatchQuality ?? 0) * 10);
         let variancePenalty = 0;
         if (p.coefficientOfVariation != null && p.coefficientOfVariation > 0) {
           const cv = p.coefficientOfVariation;
-          variancePenalty = cv < 0.1 ? 0 : cv < 0.2 ? 5 : cv < 0.35 ? 15 : cv < 0.5 ? 25 : 35;
+          variancePenalty = cv < 0.1 ? 0 : cv < 0.2 ? 6 : cv < 0.35 ? 18 : cv < 0.5 ? 28 : 40;
+          if (isFallback && cv >= 0.35) variancePenalty = Math.min(100, variancePenalty + 15);
         }
-        const score = Math.round(Math.max(0, Math.min(100, base + rowBonus + recencyBonus - variancePenalty)));
+        let score = base + rowBonus + recencyBonus + lotBonus - variancePenalty;
+        if (p.rowCount >= 10 && (p.coefficientOfVariation ?? 1) < 0.15) score += 8;
+        if (isFallback && (p.coefficientOfVariation ?? 0) >= 0.35) score -= 10;
+        score = Math.round(Math.max(0, Math.min(100, score)));
         const label: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" =
-          score >= 80 ? "VERY_HIGH" : score >= 60 ? "HIGH" : score >= 40 ? "MEDIUM" : "LOW";
+          score >= 85 ? "VERY_HIGH" : score >= 70 ? "HIGH" : score >= 50 ? "MEDIUM" : "LOW";
         return { score, label };
       };
 

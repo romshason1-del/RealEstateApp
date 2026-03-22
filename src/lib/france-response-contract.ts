@@ -72,6 +72,12 @@ export type FranceDebug = {
   usedFallback?: boolean;
   failureReason?: string | null;
   queryDurationMs?: number | null;
+  /** Neighborhood-level insights from DVF (postcode+street aggregates). */
+  fr_area_price_level?: string | null;
+  fr_area_trend?: string | null;
+  fr_area_liquidity?: "low" | "medium" | "high" | null;
+  fr_area_median_ppm2?: number | null;
+  fr_area_tx_count?: number | null;
 };
 
 export type FrancePropertyResponse = {
