@@ -1389,16 +1389,21 @@ export function FranceApartmentSheet({
               </div>
 
               {/* TEMP: on-screen raw transaction sources – remove after field path confirmed */}
-              <div className="rounded-[10px] border border-amber-500/30 bg-amber-950/40 px-2.5 py-2 font-mono text-[10px] leading-tight text-amber-200/90">
-                <div className="font-semibold text-amber-400">FR_TX_DEBUG</div>
-                <div>fr.property.transactionValue = {String(fr?.property?.transactionValue ?? "null")}</div>
-                <div>fr.property.transactionDate = {String(fr?.property?.transactionDate ?? "null")}</div>
-                <div>property_result.last_transaction.amount = {String((pr as any)?.last_transaction?.amount ?? "null")}</div>
-                <div>property_result.last_transaction.date = {String((pr as any)?.last_transaction?.date ?? "null")}</div>
-                <div>fr_valuation_display.last_sale_price = {String(fv?.last_sale_price ?? "null")}</div>
-                <div>fr_valuation_display.last_sale_date = {String(fv?.last_sale_date ?? "null")}</div>
-                <div>lastTransactionSummaryLine = {String(lastTransactionSummaryLine ?? "null")}</div>
-              </div>
+              {(() => {
+                const toDebug = (v: unknown): string => (v === undefined ? "undefined" : v === null ? "null" : String(v));
+                return (
+                  <div className="rounded-[10px] border border-amber-500/30 bg-amber-950/40 px-2.5 py-2 font-mono text-[10px] leading-tight text-amber-200/90">
+                    <div className="font-semibold text-amber-400">FR_TX_DEBUG</div>
+                    <div>fr.property.transactionValue = {toDebug(fr?.property?.transactionValue)}</div>
+                    <div>fr.property.transactionDate = {toDebug(fr?.property?.transactionDate)}</div>
+                    <div>property_result.last_transaction.amount = {toDebug((pr as any)?.last_transaction?.amount)}</div>
+                    <div>property_result.last_transaction.date = {toDebug((pr as any)?.last_transaction?.date)}</div>
+                    <div>fr_valuation_display.last_sale_price = {toDebug(fv?.last_sale_price)}</div>
+                    <div>fr_valuation_display.last_sale_date = {toDebug(fv?.last_sale_date)}</div>
+                    <div>lastTransactionSummaryLine = {toDebug(lastTransactionSummaryLine)}</div>
+                  </div>
+                );
+              })()}
 
               {/* 3) Price per m² (boxed) */}
               {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
