@@ -2845,8 +2845,9 @@ export async function GET(request: NextRequest) {
       /** Post-lot relaxed lookup: when exact returned 0 rows but lot was submitted, try relaxed address matching. */
       const tryFrancePostLotRelaxedLookup = async (): Promise<ReturnType<typeof frReturn> | null> => {
         try {
-          if (!exactLotToken || !postcodeNorm || !streetNormForSource) {
-            frRuntimeDebug.post_lot_relaxed_reject_reason = !exactLotToken ? "no_lot" : !postcodeNorm ? "no_postcode" : "no_street";
+          const streetForRelaxed = streetNormForSource || streetNorm || "";
+          if (!exactLotToken || !postcodeNorm) {
+            frRuntimeDebug.post_lot_relaxed_reject_reason = !exactLotToken ? "no_lot" : "no_postcode";
             return null;
           }
           console.log("[FR_FLOW] ladder_step_started=POST_LOT_RELAXED");
@@ -2859,7 +2860,7 @@ export async function GET(request: NextRequest) {
               ? `, CAST(COALESCE(${lotColEscaped}, '') AS STRING) AS lot_col`
               : "";
           const cityMain = (cityNormForSource || cityNorm || "").trim();
-          const streetCore = (streetNormForSource || streetNorm || "").trim();
+          const streetCore = streetForRelaxed.trim();
           const frBqCityRelaxedSql =
             cityMain.length >= 2
               ? `(${frBqCityMatchSql} OR LOWER(TRIM(CAST(city AS STRING))) LIKE CONCAT('%', LOWER(TRIM(@city_relaxed)), '%') OR LOWER(TRIM(@city_relaxed)) LIKE CONCAT('%', LOWER(TRIM(CAST(city AS STRING))), '%'))`
@@ -2867,7 +2868,7 @@ export async function GET(request: NextRequest) {
           const frBqStreetRelaxedSql =
             streetCore.length >= 2
               ? `(${frBqStreetMatchSql} OR LOWER(TRIM(CAST(street AS STRING))) LIKE CONCAT('%', LOWER(TRIM(@street_core)), '%'))`
-              : frBqStreetMatchSql;
+              : "TRUE";
           const frBqHouseNumberRelaxedSql =
             houseNumberNumericTarget != null
               ? `(COALESCE(SAFE_CAST(REGEXP_EXTRACT(TRIM(CAST(house_number AS STRING)), r'^(\\d+)') AS INT64), 999999) BETWEEN @house_number_numeric_target - 15 AND @house_number_numeric_target + 15`
@@ -2926,12 +2927,28 @@ export async function GET(request: NextRequest) {
             );
             relaxedRows = (rows ?? []) as Array<Record<string, unknown>>;
           }
+          if (relaxedRows.length < 1 && postcodeNorm) {
+            const postcodeOnlyQuery = `
+            SELECT surface_m2, price_per_m2, last_sale_price, last_sale_date, property_type, house_number${lotColSel}
+            FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+            WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+              AND ${frBqPostcodeMatchSql}
+              AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+            LIMIT 300
+            `;
+            const [pcRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: postcodeOnlyQuery, params: { country: country || "", postcode: postcodeNormForSource || "" } },
+              "post_lot_relaxed_postcode_only"
+            );
+            relaxedRows = (pcRows ?? []) as Array<Record<string, unknown>>;
+            if (relaxedRows.length > 0) console.log("[FR_POST_LOT_RELAXED] postcode_only_fallback rows=" + relaxedRows.length);
+          }
           const similarRows = relaxedRows;
           const rawCount = similarRows.length;
           frRuntimeDebug.post_lot_relaxed_candidates_count = rawCount;
           console.log("[FR_POST_LOT_RELAXED] candidates_count=" + String(rawCount));
-          if (rawCount < 2) {
-            frRuntimeDebug.post_lot_relaxed_reject_reason = rawCount === 0 ? "no_rows" : "insufficient_candidates";
+          if (rawCount < 1) {
+            frRuntimeDebug.post_lot_relaxed_reject_reason = "no_rows";
             return null;
           }
           const lotDistanceFromRow = (r: Record<string, unknown>): number => {
@@ -3321,12 +3338,10 @@ export async function GET(request: NextRequest) {
       }
 
       // Post-lot relaxed: when exact returned 0 rows but lot was submitted, try relaxed address matching.
+      const shouldRunLotAware = (flowAsApartment || isLikelyBuilding) && exactLotToken && postcodeNorm;
       if (
-        flowAsApartment &&
-        exactLotToken &&
-        rawExactHouseNumberRowCount === 0 &&
-        postcodeNorm &&
-        (streetNormForSource || streetNorm)
+        shouldRunLotAware &&
+        rawExactHouseNumberRowCount === 0
       ) {
         const postLotRelaxedWin = await tryFrancePostLotRelaxedLookup();
         if (postLotRelaxedWin) return postLotRelaxedWin;
@@ -3712,6 +3727,12 @@ export async function GET(request: NextRequest) {
 
       const buildingProfileWin = tryBuildingProfileFallback();
       if (buildingProfileWin) return buildingProfileWin;
+
+      // MANDATORY lot-aware gate: before street/nearby, when lot submitted, try lot-aware same-address (or relaxed) one more time.
+      if (shouldRunLotAware && rawExactHouseNumberRowCount > 0 && exactTier === "NONE") {
+        const lotAwareRetry = await tryFrancePostLotRelaxedLookup();
+        if (lotAwareRetry) return lotAwareRetry;
+      }
 
       console.log("[FR_FLOW] ladder_step_started=STREET");
       console.log("[FR_STEP] street_lookup_start");
@@ -4277,6 +4298,12 @@ export async function GET(request: NextRequest) {
           return null;
         }
       };
+
+      // Final lot-aware gate: before nearby, when lot submitted, one last attempt.
+      if (shouldRunLotAware) {
+        const lotAwareFinal = await tryFrancePostLotRelaxedLookup();
+        if (lotAwareFinal) return lotAwareFinal;
+      }
 
       const nearbyWin = await tryNearbyFallback();
       if (nearbyWin) return nearbyWin;
