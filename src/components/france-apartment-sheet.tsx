@@ -958,7 +958,8 @@ export function FranceApartmentSheet({
 
     const referenceSaleValue: string | null = isLoadingNow
       ? null
-      : referenceSaleDateLabelFromRaw(fr?.property?.transactionDate as unknown);
+      : referenceSaleDateLabelFromRaw(fr?.property?.transactionDate as unknown) ??
+        referenceSaleDateLabelFromRaw((pr as any)?.last_transaction?.date as unknown);
 
     if (!isLoadingNow && fr?.resultType === "building_similar_unit") {
       console.log("[FR_UI_REF_SALE]", referenceSaleValue, typeof referenceSaleValue);
@@ -1184,7 +1185,8 @@ export function FranceApartmentSheet({
               : "—";
 
     const lastTxAmountPositive = !isLoadingNow
-      ? coercePositiveNumber(fr?.property?.transactionValue as unknown)
+      ? coercePositiveNumber(fr?.property?.transactionValue as unknown) ??
+        coercePositiveNumber((pr as any)?.last_transaction?.amount as unknown)
       : null;
 
     const dateText = isLoadingNow ? "—" : referenceSaleValue ?? "—";
@@ -1192,21 +1194,31 @@ export function FranceApartmentSheet({
     const lastTransactionSummaryLine = (() => {
       if (isLoadingNow) return "—";
       const amt = lastTxAmountPositive;
-      if (
-        (fr?.resultType === "exact_apartment" || fr?.resultType === "exact_address" || fr?.resultType === "exact_house") &&
-        !isNoResult &&
-        amt != null &&
-        referenceSaleValue != null
-      ) {
-        return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
-      }
-      if (fr?.resultType === "building_similar_unit" && !isNoResult && amt != null) {
-        return referenceSaleValue != null
+      const hasUsableAmount = amt != null && amt > 0;
+      const hasUsableDate = referenceSaleValue != null && referenceSaleValue.trim().length > 0;
+      if (fr?.resultType === "building_similar_unit" && !isNoResult && hasUsableAmount) {
+        return hasUsableDate
           ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue} reference sale`
           : `${formatFranceEuroTotal(amt)} • reference sale`;
       }
-      if (!hasCurrentValuation && amt != null && referenceSaleValue != null) {
-        return `Last recorded transaction: ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
+      if (hasUsableAmount && hasUsableDate) {
+        if (
+          fr?.resultType === "exact_apartment" ||
+          fr?.resultType === "exact_address" ||
+          fr?.resultType === "exact_house"
+        ) {
+          return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
+        }
+        if (!hasCurrentValuation) {
+          return `Last recorded transaction: ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
+        }
+        return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
+      }
+      if (hasUsableAmount) {
+        return hasUsableDate ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}` : `${formatFranceEuroTotal(amt)}`;
+      }
+      if (hasUsableDate) {
+        return referenceSaleValue;
       }
       return "No exact recent transaction available";
     })();
