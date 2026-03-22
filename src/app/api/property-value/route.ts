@@ -572,6 +572,9 @@ export async function GET(request: NextRequest) {
         fr_detect_override_reason: null as string | null,
         fr_detect_multi_unit_source: null as "ban" | "source" | "building_intel" | "none" | null,
         fr_detect_ban_strength_used: null as boolean | null,
+        fr_house_evidence_score: null as number | null,
+        fr_apartment_evidence_score: null as number | null,
+        fr_detect_classification_reason: null as string | null,
         fr_should_prompt_lot: null as boolean | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
@@ -1579,11 +1582,19 @@ export async function GET(request: NextRequest) {
         detectOverrideReason = "override_strong_house_ignored_other_signals";
       }
 
-      // Force apartment detection when strong urban signals exist (large city + BAN address match).
-      // Do not override house — house logic is unchanged.
-      if (detectClass !== "house" && hasUrbanApartmentSignals) {
+      // Urban apartment override: only when strong same-address evidence exists.
+      // Do NOT force apartment based on department/postcode alone (e.g. 64 Biarritz).
+      // Require: multi-unit at exact address (facts or building intel).
+      // Preserve house: do not override when meaningful house-like evidence exists.
+      const hasStrongSameAddressApartmentEvidence = apartmentEvidenceFromFacts || isMultiUnitDetected;
+      if (
+        detectClass !== "house" &&
+        !mediumHouseSignals &&
+        hasUrbanApartmentSignals &&
+        hasStrongSameAddressApartmentEvidence
+      ) {
         detectClass = "apartment";
-        detectOverrideReason = "urban_apartment_override_city_street_number";
+        detectOverrideReason = "urban_apartment_override_strong_same_address_evidence";
       }
 
       if (detectClass === "apartment" && allowMultiUnitFromQueries) {
@@ -1612,6 +1623,12 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_detect_signals_summary = signalsSummary;
       frRuntimeDebug.fr_detect_used_lot = detectUsedLot;
       frRuntimeDebug.fr_detect_override_reason = detectOverrideReason;
+      frRuntimeDebug.fr_house_evidence_score = strongHouseSignals ? 1 : mediumHouseSignals ? 0.5 : 0;
+      frRuntimeDebug.fr_apartment_evidence_score =
+        apartmentEvidenceFromFacts || isMultiUnitDetected ? 1 : allowMultiUnitFromQueries && apartmentFromType ? 0.5 : 0;
+      frRuntimeDebug.fr_detect_classification_reason =
+        detectOverrideReason ??
+        (detectClass === "apartment" ? "medium_apartment_signals" : detectClass === "house" ? "house_signals" : "unclear_no_signals");
       frRuntimeDebug.fr_detect_multi_unit_source = multiUnitSource;
       frRuntimeDebug.fr_detect_ban_strength_used = banStreetThresholdPassed;
       frRuntimeDebug.fr_should_prompt_lot = shouldPromptLot;
