@@ -632,6 +632,12 @@ export async function GET(request: NextRequest) {
         fr_detection_reason: null as string | null,
         fr_detect_confidence: null as "high" | "medium" | "low" | null,
         fr_detect_reason: null as string | null,
+        fr_maison_count: null as number | null,
+        fr_appartement_count: null as number | null,
+        fr_lot_distinct_count: null as number | null,
+        fr_confidence_score: null as number | null,
+        fr_price_variance: null as number | null,
+        fr_confidence_label: null as "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" | null,
         fr_should_prompt_lot: null as boolean | null,
         fr_lot_prompt_visible: null as boolean | null,
         fr_lot_submitted: null as boolean | null,
@@ -860,6 +866,44 @@ export async function GET(request: NextRequest) {
         }
         frRuntimeDebug.fr_confidence_adjustment_reason =
           adjustmentReasons.length > 0 ? adjustmentReasons.join(";") : null;
+
+        const winningStepForConf = String(frRuntimeDebug.winning_step ?? "");
+        let confRowCount = 0;
+        if (/^exact_/.test(winningStepForConf)) {
+          confRowCount =
+            (winningStepForConf === "exact_house" ? (frRuntimeDebug.exact_house_row_count as number) : null) ??
+            (frRuntimeDebug.exact_unit_row_count as number) ??
+            (frRuntimeDebug.exact_address_row_count as number) ??
+            (frRuntimeDebug.exact_approximate_row_count as number) ??
+            (frRuntimeDebug.fr_same_address_count as number) ??
+            1;
+        } else if (/^building/.test(winningStepForConf)) {
+          confRowCount = (frRuntimeDebug.building_usable_rows_count as number) ?? (frRuntimeDebug.building_rows_count as number) ?? (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
+        } else if (winningStepForConf === "street_fallback") {
+          confRowCount = (frRuntimeDebug.fr_street_filtered_count as number) ?? (frRuntimeDebug.street_usable_rows_count as number) ?? 0;
+        } else if (winningStepForConf === "commune_fallback") {
+          confRowCount = (frRuntimeDebug.commune_usable_rows_count as number) ?? 0;
+        } else if (winningStepForConf === "nearby_fallback") {
+          confRowCount = (frRuntimeDebug.fr_nearby_row_count as number) ?? 0;
+        }
+        const confVariance = (frRuntimeDebug.fr_price_variance as number) ?? null;
+        const confRecency = winningStepForConf === "street_fallback" && (frRuntimeDebug.fr_street_filtered_count as number) > 0
+          ? ((frRuntimeDebug.fr_street_recent_count as number) ?? 0) / Math.max(1, (frRuntimeDebug.fr_street_filtered_count as number))
+          : /^exact_/.test(winningStepForConf) ? 0.9 : 0.5;
+        const confMean = price_per_m2 != null && Number.isFinite(price_per_m2) && price_per_m2 > 0 ? price_per_m2 : null;
+        const confCv = confVariance != null && confMean != null && confMean > 0
+          ? Math.sqrt(confVariance) / confMean
+          : null;
+        const { score: confScore, label: confLabel } = computeFranceConfidenceScore({
+          dataLevel: winningStepForConf || "nearby_fallback",
+          rowCount: Math.max(1, confRowCount),
+          recencyScore: confRecency,
+          priceVariance: confVariance,
+          coefficientOfVariation: confCv,
+        });
+        frRuntimeDebug.fr_confidence_score = confScore;
+        frRuntimeDebug.fr_price_variance = confVariance;
+        frRuntimeDebug.fr_confidence_label = confLabel;
 
         let outPayload: Record<string, unknown> = { ...payload };
         if (needsLabelSafetyOverride || needsConfidenceDowngrade) {
@@ -1566,6 +1610,9 @@ export async function GET(request: NextRequest) {
       let houseEvidenceFromFacts = false;
       let candidateLotsFromFacts: string[] = [];
       let streetTransactionDensity: number | null = null;
+      let maisonCount = 0;
+      let appartCount = 0;
+      let lots = new Set<string>();
       const hasAddressForDiscovery = (cityNorm || postcodeNorm) && streetNorm;
       if (hasAddressForDiscovery) {
         try {
@@ -1614,16 +1661,28 @@ export async function GET(request: NextRequest) {
           const densityRows = (densityResult as [unknown[]])?.[0];
           const densityRow = Array.isArray(densityRows) ? densityRows[0] : null;
           streetTransactionDensity = densityRow && typeof (densityRow as any).cnt === "number" ? (densityRow as any).cnt : null;
-          const lots = new Set<string>();
-          let appartCount = 0;
-          let maisonCount = 0;
-          for (const r of earlyCandidateRows) {
-            const pt = String((r as any).property_type ?? "").toLowerCase();
-            if (pt.includes("appartement")) appartCount++;
-            if (pt.includes("maison") || pt.includes("villa") || pt.includes("pavillon") || pt.includes("house")) maisonCount++;
-            const un = (r as any).unit_number;
-            if (un != null && String(un).trim()) lots.add(String(un).trim().replace(/^0+/, "") || String(un).trim());
-          }
+          lots = new Set(
+            earlyCandidateRows.flatMap((r) => {
+              const row = r as any;
+              const values = [
+                row?.unit_number,
+                row?.lot1, row?.lot2, row?.lot3, row?.lot4, row?.lot5,
+                row?.lot_1, row?.lot_2, row?.lot_3, row?.lot_4, row?.lot_5,
+              ];
+              return values
+                .map((v) => String(v ?? "").trim())
+                .filter(Boolean);
+            })
+          );
+          appartCount = earlyCandidateRows.filter((r) =>
+            String((r as any).property_type ?? "").toLowerCase().includes("appart")
+          ).length;
+          maisonCount = earlyCandidateRows.filter((r) =>
+            String((r as any).property_type ?? "").toLowerCase().includes("maison") ||
+            String((r as any).property_type ?? "").toLowerCase().includes("villa") ||
+            String((r as any).property_type ?? "").toLowerCase().includes("pavillon") ||
+            String((r as any).property_type ?? "").toLowerCase().includes("house")
+          ).length;
           apartmentEvidenceFromFacts = (lots.size >= 2 || appartCount >= 2) && !(maisonCount >= 1 && appartCount === 0);
           houseEvidenceFromFacts = maisonCount >= 1 && (appartCount === 0 || maisonCount > appartCount);
           candidateLotsFromFacts = Array.from(lots).filter(Boolean);
@@ -1906,6 +1965,9 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_detect_classification_reason = frDetectionReason;
       frRuntimeDebug.fr_detect_confidence = frDetectConfidence;
       frRuntimeDebug.fr_detect_reason = frDetectReason;
+      frRuntimeDebug.fr_maison_count = maisonCount;
+      frRuntimeDebug.fr_appartement_count = appartCount;
+      frRuntimeDebug.fr_lot_distinct_count = lots.size;
       frRuntimeDebug.fr_is_likely_building = isLikelyBuilding;
       frRuntimeDebug.fr_is_rural_pattern = isRuralPattern;
       frRuntimeDebug.fr_building_detection_reason = frBuildingDetectionReason;
@@ -1963,6 +2025,59 @@ export async function GET(request: NextRequest) {
         const b = sorted[mid];
         if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
         return (a + b) / 2;
+      };
+
+      const computeVariance = (values: number[]): number | null => {
+        const cleaned = values.filter((v) => Number.isFinite(v) && v > 0);
+        if (cleaned.length < 2) return null;
+        const mean = cleaned.reduce((a, b) => a + b, 0) / cleaned.length;
+        const sqDiffs = cleaned.map((v) => (v - mean) ** 2);
+        const variance = sqDiffs.reduce((a, b) => a + b, 0) / cleaned.length;
+        return Number.isFinite(variance) ? variance : null;
+      };
+
+      const coefficientOfVariation = (values: number[]): number | null => {
+        const cleaned = values.filter((v) => Number.isFinite(v) && v > 0);
+        if (cleaned.length < 2) return null;
+        const mean = cleaned.reduce((a, b) => a + b, 0) / cleaned.length;
+        if (mean <= 0) return null;
+        const variance = computeVariance(cleaned);
+        if (variance == null || variance <= 0) return 0;
+        const std = Math.sqrt(variance);
+        return std / mean;
+      };
+
+      const computeFranceConfidenceScore = (p: {
+        dataLevel: string;
+        rowCount: number;
+        recencyScore: number;
+        priceVariance: number | null;
+        coefficientOfVariation: number | null;
+      }): { score: number; label: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" } => {
+        const levelScores: Record<string, number> = {
+          exact_unit: 40,
+          exact_house: 38,
+          exact_address: 35,
+          exact_approximate: 33,
+          building_level: 30,
+          building_similar_unit: 28,
+          building_profile: 28,
+          street_fallback: 22,
+          commune_fallback: 18,
+          nearby_fallback: 14,
+        };
+        let base = levelScores[p.dataLevel] ?? 15;
+        const rowBonus = Math.min(25, p.rowCount * 2.5);
+        const recencyBonus = Math.round(p.recencyScore * 10);
+        let variancePenalty = 0;
+        if (p.coefficientOfVariation != null && p.coefficientOfVariation > 0) {
+          const cv = p.coefficientOfVariation;
+          variancePenalty = cv < 0.1 ? 0 : cv < 0.2 ? 5 : cv < 0.35 ? 15 : cv < 0.5 ? 25 : 35;
+        }
+        const score = Math.round(Math.max(0, Math.min(100, base + rowBonus + recencyBonus - variancePenalty)));
+        const label: "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW" =
+          score >= 80 ? "VERY_HIGH" : score >= 60 ? "HIGH" : score >= 40 ? "MEDIUM" : "LOW";
+        return { score, label };
       };
 
       const parseMaybeDecimal = (v: unknown): number | null => {
@@ -2470,6 +2585,10 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.chosen_surface_value = surface;
             frRuntimeDebug.winning_median_price_per_m2 =
               Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null;
+            const exactHousePpmValues = (exactHouseUsable.length > 0 ? exactHouseUsable : exactHouseRows)
+              .map((r) => frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2))
+              .filter((v): v is number => v != null && v > 0);
+            frRuntimeDebug.fr_price_variance = computeVariance(exactHousePpmValues);
             return frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -3744,11 +3863,13 @@ export async function GET(request: NextRequest) {
         console.log("[FR_STEP] building_lookup_done");
 
         if (sameBuildingUsableRowsCount >= MIN_SAME_BUILDING_USABLE_ROWS && medianSurfaceM2ForFallback != null) {
-          const pricePerM2Values = usablePriceRows.map((r) => parseMaybeDecimal(r.price_per_m2)).filter((v): v is number => v != null && v > 0);
-          const medianPricePerM2 = medianNumber(pricePerM2Values);
+          const pricePerM2ValuesRaw = usablePriceRows.map((r) => parseMaybeDecimal(r.price_per_m2)).filter((v): v is number => v != null && v > 0);
+          const pricePerM2ValuesEuro = pricePerM2ValuesRaw.map((v) => frPropertyLatestFactsMoneyToEuros(v)).filter((v): v is number => v != null && v > 0);
+          const medianPricePerM2 = medianNumber(pricePerM2ValuesRaw);
           if (medianPricePerM2 != null && medianPricePerM2 > 0) {
             frRuntimeDebug.property_latest_facts_money_divisor = 1000;
             const medianPricePerM2Euro = frPropertyLatestFactsMoneyToEuros(medianPricePerM2) ?? 0;
+            frRuntimeDebug.fr_price_variance = computeVariance(pricePerM2ValuesEuro);
             const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2Euro);
             console.log("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
@@ -3806,10 +3927,11 @@ export async function GET(request: NextRequest) {
           });
           const richSurfaces = richUsable.map((r) => parseMaybeDecimal((r as any).surface_m2)).filter((v): v is number => v != null && v > 0);
           const medianSurf = richSurfaces.length > 0 ? medianNumber(richSurfaces) : null;
-          const richPpmValues = richUsable.map((r) => parseMaybeDecimal((r as any).price_per_m2)).filter((v): v is number => v != null && v > 0);
+          const richPpmValues = richUsable.map((r) => frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2)).filter((v): v is number => v != null && v > 0);
+          frRuntimeDebug.fr_price_variance = computeVariance(richPpmValues);
           const medianPpmRich = medianNumber(richPpmValues);
           if (medianSurf != null && medianPpmRich != null && medianPpmRich > 0 && richUsable.length >= MIN_SAME_BUILDING_USABLE_ROWS) {
-            const medianPpmEuro = frPropertyLatestFactsMoneyToEuros(medianPpmRich) ?? 0;
+            const medianPpmEuro = medianPpmRich;
             const estimated = Math.round(medianSurf * medianPpmEuro);
             frRuntimeDebug.property_latest_facts_money_divisor = 1000;
             frRuntimeDebug.winning_step = "building_level";
@@ -4264,6 +4386,8 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_street_recent_count = effectiveRecent;
         const qualityScore = Math.min(1, effectiveFiltered / 20) * (effectiveRecent >= 2 ? 0.7 + 0.3 * Math.min(1, effectiveRecent / 20) : 0.5);
         frRuntimeDebug.fr_fallback_quality_score = Math.round(qualityScore * 100) / 100;
+        const forMedianEuro = forMedian.map((v) => v / 100);
+        frRuntimeDebug.fr_price_variance = computeVariance(forMedianEuro);
         const medianAvgPricePerM2 = medianNumber(forMedian);
         if (medianAvgPricePerM2 == null || !Number.isFinite(medianAvgPricePerM2) || medianAvgPricePerM2 <= 0) return null;
         const medianAvgPricePerM2Euro = medianAvgPricePerM2 / 100;
@@ -4525,6 +4649,8 @@ export async function GET(request: NextRequest) {
           const communeFilteredCount = communeForMedian.length;
           const frConfidence: "low" | "medium" = communeFilteredCount >= 15 ? "medium" : "low";
           frRuntimeDebug.fr_fallback_quality_score = Math.round(Math.min(1, communeFilteredCount / 15) * 100) / 100;
+          const communeForMedianEuro = communeForMedian.map((v) => v / 100);
+          frRuntimeDebug.fr_price_variance = computeVariance(communeForMedianEuro);
           console.log("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "commune_fallback",
             winningSourceLabel: fallbackSourceCommune,
@@ -4675,6 +4801,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_nearby_row_count = pool.length;
           const nearbyQualityScore = Math.min(1, pool.length / 15) * (recentNearby.length >= 5 ? 0.7 + 0.3 * Math.min(1, recentNearby.length / 15) : 0.5);
           frRuntimeDebug.fr_fallback_quality_score = Math.round(nearbyQualityScore * 100) / 100;
+          frRuntimeDebug.fr_price_variance = computeVariance(ppmValues);
 
           const sameStreetCount = withPpm.filter((x) => x.streetMatch).length;
           const nearbyScope =
