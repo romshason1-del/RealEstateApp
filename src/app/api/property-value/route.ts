@@ -716,6 +716,14 @@ export async function GET(request: NextRequest) {
         fr_terminal_no_data_reason: null as string | null,
         fr_final_winner_layer: null as string | null,
         fr_fallback_blocked_no_result: null as boolean | null,
+        fr_property_type_detected: null as string | null,
+        fr_house_flow_used: null as boolean | null,
+        fr_exact_candidate_count: null as number | null,
+        fr_building_candidate_count: null as number | null,
+        fr_rich_source_used: null as boolean | null,
+        fr_lot_applied: null as boolean | null,
+        fr_address_match_type: null as string | null,
+        fr_no_result_reason: null as string | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -1117,6 +1125,19 @@ export async function GET(request: NextRequest) {
               : finalHasDisplay
                 ? "fallback"
                 : "no_result";
+
+        const matchType = tag === "valuation_response"
+          ? /^exact_/.test(winning_step_str) || winning_step_str === "exact_house"
+            ? "normalized_exact"
+            : (frRuntimeDebug.fr_selected_reason as string || "").includes("postcode_only")
+              ? "postcode_only"
+              : winning_step_str === "street_fallback" || winning_step_str === "commune_fallback"
+                ? "loose"
+                : "loose"
+          : tag === "no_data"
+            ? "no_match"
+            : null;
+        if (matchType != null) frRuntimeDebug.fr_address_match_type = matchType;
 
         console.log("[FR_RETURN] response", {
           tag,
@@ -2166,6 +2187,9 @@ export async function GET(request: NextRequest) {
       ].filter(Boolean).join("|") || "none";
 
       frRuntimeDebug.detect_class = detectClass;
+      frRuntimeDebug.fr_property_type_detected = detectClass;
+      frRuntimeDebug.fr_house_flow_used = detectClass === "house";
+      frRuntimeDebug.fr_lot_applied = shouldPromptLot && submittedLotPresent;
       frRuntimeDebug.fr_detect_signals_summary = signalsSummary;
       frRuntimeDebug.fr_detect_used_lot = detectUsedLot;
       frRuntimeDebug.fr_detect_override_reason = detectOverrideReason;
@@ -2533,20 +2557,28 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
       frRuntimeDebug.fr_exact_source_layer = exactRows.length > 0 ? "facts" : "none";
 
-      // Layer 2: france_dvf_rich_source fallback when facts returns no same-address rows
+      // Layer 2: france_dvf_rich_source fallback when facts returns no same-address rows (CRITICAL for house addresses)
       let richSourceRows: Array<Record<string, unknown>> = [];
       const streetCoreForRichSource = streetNormForSource || streetNormForExactMatch || "";
-      if (exactRows.length === 0 && postcodeNormForSource && houseNumberNormForSource && (streetNormForExactMatch || streetNormForSource)) {
+      const hasStreetForRich = streetCoreForRichSource.length >= 2;
+      const hasPostcodeOrCity = postcodeNormForSource || cityNormForSource;
+      if (exactRows.length === 0 && hasPostcodeOrCity && (hasStreetForRich || detectClass === "house")) {
         try {
-          const richSourceExactParams = { ...exactParams, street_core: streetCoreForRichSource };
+          const richSourceExactParams = { ...exactParams, street_core: streetCoreForRichSource || " " };
+          const streetClause = hasStreetForRich ? `AND ${frBqStreetMatchSqlRichSource}` : "";
+          const houseClause = houseNumberNormForSource
+            ? `AND ${frBqHouseNumberMatchSqlRichSource}`
+            : detectClass === "house"
+              ? ""
+              : "";
           const richSourceQueryBase = `
             SELECT country, city, postcode, street, house_number, unit_number, property_type, surface_m2, last_sale_price, last_sale_date, price_per_m2
             FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND ${frBqPostcodeMatchSql}
               AND ${frBqCityMatchSql}
-              AND ${frBqStreetMatchSqlRichSource}
-              AND ${frBqHouseNumberMatchSqlRichSource}
+              ${streetClause}
+              ${houseClause}
             LIMIT 300
           `;
           const [richRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
@@ -2654,9 +2686,9 @@ export async function GET(request: NextRequest) {
       };
 
       const rowUsableForExact = (r: Record<string, unknown>): boolean => {
-        const surf = parseMaybeDecimal((r as any).surface_m2);
         const ppm2 = parseMaybeDecimal((r as any).price_per_m2);
-        return surf != null && surf > 0 && ppm2 != null && ppm2 > 0;
+        const ppm2Euro = frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2);
+        return (ppm2 != null && ppm2 > 0) || (ppm2Euro != null && ppm2Euro > 0);
       };
 
       /** True when unit_number or any lot token (lot_1er, etc.) normalizes to the submitted lot. */
@@ -2751,10 +2783,9 @@ export async function GET(request: NextRequest) {
       };
 
       const rowUsableForExactHouse = (r: Record<string, unknown>): boolean => {
-        const surf = parseMaybeDecimal((r as any).surface_m2);
-        const ppm2 = parseMaybeDecimal((r as any).price_per_m2);
+        const ppm2Euro = frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2);
+        if (ppm2Euro != null && ppm2Euro > 0) return true;
         const lastSale = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
-        if (surf != null && surf > 0 && ppm2 != null && ppm2 > 0) return true;
         if (lastSale != null && lastSale > 0) return true;
         return false;
       };
@@ -2850,7 +2881,7 @@ export async function GET(request: NextRequest) {
             );
         } else {
           const exactHouseRejectReason =
-            exactHouseRows.length === 0 ? "no_house_type_rows_at_address" : "house_rows_missing_surface_or_ppm2";
+            exactHouseRows.length === 0 ? "no_house_type_rows_at_address" : "house_rows_missing_ppm2_or_last_sale";
           frRuntimeDebug.exact_house_reject_reason = exactHouseRejectReason;
           console.log("[FR_HOUSE] reject_reason=" + exactHouseRejectReason);
         }
@@ -2924,7 +2955,7 @@ export async function GET(request: NextRequest) {
         exactMatchReason =
           "address_rows_exist_but_no_unit_or_address_aggregate_row_for_token_" + String(exactLotToken);
       } else if (exactUsableRowsCount === 0) {
-        exactMatchReason = "exact_tier_rows_matched_but_missing_usable_surface_m2_or_price_per_m2";
+        exactMatchReason = "exact_tier_rows_matched_but_missing_usable_price_per_m2";
       } else {
         exactMatchReason = "usable_exact_rows_available";
       }
@@ -3893,7 +3924,7 @@ export async function GET(request: NextRequest) {
         } else if (exactApartmentRowsCount === 0) {
           frExactRejectReason = "lot_or_unit_filter_removed_all_rows";
         } else if (exactUsableRowsCount === 0) {
-          frExactRejectReason = "no_usable_surface_m2_or_price_per_m2_after_lot_filter";
+          frExactRejectReason = "no_usable_price_per_m2_after_lot_filter";
         } else {
           frExactRejectReason = "no_usable_exact_best_after_sort";
         }
@@ -5521,8 +5552,12 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_building_profile_candidate_count = frRuntimeDebug.fr_building_profile_candidate_count ?? buildingProfile?.transaction_count ?? 0;
       if (frRuntimeDebug.fr_commune_emergency_candidate_count == null) frRuntimeDebug.fr_commune_emergency_candidate_count = 0;
       frRuntimeDebug.fr_terminal_no_data_reason = noReliableReason;
+      frRuntimeDebug.fr_no_result_reason = noReliableReason;
       frRuntimeDebug.fr_final_winner_layer = null;
       frRuntimeDebug.fr_fallback_blocked_no_result = false;
+      frRuntimeDebug.fr_exact_candidate_count = frRuntimeDebug.fr_source_lookup_exact_count ?? exactApartmentRowsCount ?? 0;
+      frRuntimeDebug.fr_building_candidate_count = frRuntimeDebug.building_similar_unit_candidates_count ?? sameBuildingUsableRowsCount ?? 0;
+      frRuntimeDebug.fr_rich_source_used = frRuntimeDebug.fr_used_rich_source ?? false;
 
       console.log("[FR_COVERAGE] address=" + addrStr);
       console.log("[FR_COVERAGE] detect_class=" + String(frDetectToUse));
