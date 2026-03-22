@@ -596,7 +596,9 @@ export async function GET(request: NextRequest) {
         fr_apartment_evidence_score: null as number | null,
         fr_detect_classification_reason: null as string | null,
         fr_is_likely_building: null as boolean | null,
+        fr_is_rural_pattern: null as boolean | null,
         fr_building_detection_reason: null as string | null,
+        fr_detection_reason: null as string | null,
         fr_should_prompt_lot: null as boolean | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
@@ -1576,75 +1578,19 @@ export async function GET(request: NextRequest) {
 
       let multiUnitSource: "ban" | "source" | "building_intel" | "none" = "none";
 
-      let detectClass: "apartment" | "house" | "unclear";
-      const detectUsedLot = false;
-      let detectOverrideReason: string | null = null;
-
-      if (!allowMultiUnitFromQueries && (apartmentEvidenceFromFacts || isMultiUnitDetected)) {
-        detectClass = "unclear";
-        detectOverrideReason = "ban_weak_match_ignored_multi_unit_evidence";
-      } else if (strongHouseSignals && !strongApartmentSignals) {
-        detectClass = "house";
-        detectOverrideReason = "facts_maison_dominates";
-      } else if (strongApartmentSignals && !strongHouseSignals) {
-        detectClass = "apartment";
-      } else if (strongHouseSignals && strongApartmentSignals) {
-        detectClass = "house";
-        detectOverrideReason = "conflict_house_wins_over_apartment";
-      } else if (mediumHouseSignals && !mediumApartmentSignals) {
-        detectClass = "house";
-        detectOverrideReason = "intelligence_house_signals";
-      } else if (mediumApartmentSignals && !mediumHouseSignals) {
-        detectClass = "apartment";
-      } else if (mediumHouseSignals && mediumApartmentSignals) {
-        detectClass = "house";
-        detectOverrideReason = "tie_house_preferred_over_apartment";
-      } else {
-        detectClass = "unclear";
-        detectOverrideReason = "no_strong_or_medium_signals";
-      }
-
-      if (strongHouseSignals && detectClass !== "house") {
-        detectClass = "house";
-        detectOverrideReason = "override_strong_house_ignored_other_signals";
-      }
-
-      // Urban apartment override: only when strong same-address evidence exists.
-      // Do NOT force apartment based on department/postcode alone (e.g. 64 Biarritz).
-      // Require: multi-unit at exact address (facts or building intel).
-      // Preserve house: do not override when meaningful house-like evidence exists.
-      const hasStrongSameAddressApartmentEvidence = apartmentEvidenceFromFacts || isMultiUnitDetected;
-      if (
-        detectClass !== "house" &&
-        !mediumHouseSignals &&
-        hasUrbanApartmentSignals &&
-        hasStrongSameAddressApartmentEvidence
-      ) {
-        detectClass = "apartment";
-        detectOverrideReason = "urban_apartment_override_strong_same_address_evidence";
-      }
-
-      if (detectClass === "apartment" && allowMultiUnitFromQueries) {
-        multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
-      }
-
-      // Heuristic building detection (non-DVF): treat urban addressed properties as building when not house.
+      // Rural pattern: CHEMIN + low density, lieu-dit, no postcode.
       const fullRawAddr = (frRuntimeDebug.fr_full_raw_address as string) || "";
       const hasUrbanDept = largeCityDepts.has(pcDept);
-      const urbanStreetPrefixes = /^(rue|avenue|av\.?|bd|boulevard|place|impasse|allee|square|sente|cours|promenade)\s+/i;
       const streetForHeuristic = (streetNorm || streetNormForSource || "").trim();
-      const hasUrbanStreetType = urbanStreetPrefixes.test(streetForHeuristic);
       const hasLieuDit = /\blieu[- ]?dit\b/i.test(fullRawAddr);
-      const isCheminOnlyRural = /^chemin\s+/i.test(streetForHeuristic) && !hasUrbanDept;
-      const urbanContext =
-        Boolean(postcodeNorm && cityNorm) &&
-        (hasUrbanDept || hasUrbanStreetType) &&
-        !hasLieuDit &&
-        !isCheminOnlyRural;
+      const isCheminRural = /^chemin\s+/i.test(streetForHeuristic) && !hasUrbanDept;
+      const noPostcode = !postcodeNorm;
+      const isRuralPattern = hasLieuDit || isCheminRural || noPostcode;
+
+      // Heuristic building: full address + NOT rural. Never depends on city/department alone.
       const isLikelyBuilding =
-        Boolean(houseNumberNorm && streetNorm && cityNorm) &&
-        detectClass !== "house" &&
-        urbanContext;
+        Boolean(houseNumberNorm && streetNorm && cityNorm) && !isRuralPattern;
+
       let frBuildingDetectionReason: string;
       if (!isLikelyBuilding) {
         frBuildingDetectionReason = !houseNumberNorm
@@ -1653,17 +1599,75 @@ export async function GET(request: NextRequest) {
             ? "no_street"
             : !cityNorm
               ? "no_city"
-              : detectClass === "house"
-                ? "classified_as_house"
-                : !urbanContext
-                  ? "not_urban_context"
-                  : "none";
+              : isRuralPattern
+                ? "rural_pattern"
+                : "none";
       } else {
-        frBuildingDetectionReason = hasUrbanDept
-          ? "urban_dept_and_address"
-          : hasUrbanStreetType
-            ? "urban_street_type_and_address"
-            : "urban_address";
+        frBuildingDetectionReason = "urban_address_not_rural";
+      }
+
+      const hasDvfRowsAtAddress = earlyCandidateRows.length > 0;
+
+      // Hybrid classification: DVF first, then heuristic, then house signals, else unclear.
+      // Never force apartment based only on city/department.
+      let detectClass: "apartment" | "house" | "unclear";
+      const detectUsedLot = false;
+      let detectOverrideReason: string | null = null;
+      let frDetectionReason: string;
+
+      if (hasDvfRowsAtAddress) {
+        if (strongHouseSignals && !strongApartmentSignals) {
+          detectClass = "house";
+          detectOverrideReason = "facts_maison_dominates";
+          frDetectionReason = "dvf_rows_house_evidence";
+        } else if (strongApartmentSignals && !strongHouseSignals) {
+          detectClass = "apartment";
+          frDetectionReason = "dvf_rows_apartment_evidence";
+        } else if (strongHouseSignals && strongApartmentSignals) {
+          detectClass = "house";
+          detectOverrideReason = "conflict_house_wins_over_apartment";
+          frDetectionReason = "dvf_rows_conflict_house_wins";
+        } else if (mediumHouseSignals && !mediumApartmentSignals) {
+          detectClass = "house";
+          detectOverrideReason = "intelligence_house_signals";
+          frDetectionReason = "dvf_rows_intelligence_house";
+        } else if (mediumApartmentSignals && !mediumHouseSignals) {
+          detectClass = "apartment";
+          frDetectionReason = "dvf_rows_intelligence_apartment";
+        } else if (mediumHouseSignals && mediumApartmentSignals) {
+          detectClass = "house";
+          detectOverrideReason = "tie_house_preferred_over_apartment";
+          frDetectionReason = "dvf_rows_tie_house";
+        } else {
+          detectClass = "apartment";
+          frDetectionReason = "dvf_rows_default_apartment";
+        }
+        if (strongHouseSignals && detectClass !== "house") {
+          detectClass = "house";
+          detectOverrideReason = "override_strong_house_ignored_other_signals";
+          frDetectionReason = "dvf_rows_strong_house_override";
+        }
+      } else if (isLikelyBuilding) {
+        detectClass = "apartment";
+        frDetectionReason = "no_dvf_heuristic_building";
+      } else if (mediumHouseSignals) {
+        detectClass = "house";
+        detectOverrideReason = "intelligence_house_signals";
+        frDetectionReason = "no_dvf_intelligence_house";
+      } else {
+        detectClass = "unclear";
+        detectOverrideReason = "no_strong_or_medium_signals";
+        frDetectionReason = "no_dvf_no_heuristic_unclear";
+      }
+
+      if (!allowMultiUnitFromQueries && (apartmentEvidenceFromFacts || isMultiUnitDetected)) {
+        detectClass = "unclear";
+        detectOverrideReason = "ban_weak_match_ignored_multi_unit_evidence";
+        frDetectionReason = "ban_weak_unclear";
+      }
+
+      if (detectClass === "apartment" && allowMultiUnitFromQueries) {
+        multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
       const flowAsApartment = detectClass === "apartment" || isLikelyBuilding;
       const shouldPromptLot =
@@ -1696,7 +1700,9 @@ export async function GET(request: NextRequest) {
         detectOverrideReason ??
         (detectClass === "apartment" ? "medium_apartment_signals" : detectClass === "house" ? "house_signals" : "unclear_no_signals");
       frRuntimeDebug.fr_is_likely_building = isLikelyBuilding;
+      frRuntimeDebug.fr_is_rural_pattern = isRuralPattern;
       frRuntimeDebug.fr_building_detection_reason = frBuildingDetectionReason;
+      frRuntimeDebug.fr_detection_reason = frDetectionReason;
       frRuntimeDebug.fr_detect_multi_unit_source = multiUnitSource;
       frRuntimeDebug.fr_detect_ban_strength_used = banStreetThresholdPassed;
       frRuntimeDebug.fr_should_prompt_lot = shouldPromptLot;
