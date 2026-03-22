@@ -658,6 +658,8 @@ export async function GET(request: NextRequest) {
         exact_address_row_count: null as number | null,
         building_similar_unit_candidates_count: null as number | null,
         building_similar_unit_after_filters_count: null as number | null,
+        post_lot_relaxed_candidates_count: null as number | null,
+        post_lot_relaxed_reject_reason: null as string | null,
         exact_house_row_count: null as number | null,
         exact_house_usable_count: null as number | null,
         exact_house_reject_reason: null as string | null,
@@ -706,24 +708,28 @@ export async function GET(request: NextRequest) {
         const exactUnitCnt = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
         const exactAddrCnt = (frRuntimeDebug.exact_address_row_count as number) ?? 0;
         const buildingAfterFilters = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
+        const postLotRelaxedCount = (frRuntimeDebug.post_lot_relaxed_candidates_count as number) ?? 0;
         frRuntimeDebug.fr_lot_used_in_ranking =
           submittedLotPresent &&
           (exactUnitCnt > 0 ||
             (exactAddrCnt > 0 && (frRuntimeDebug.exact_level as string) === "EXACT_ADDRESS") ||
             buildingCandidatesCount > 0 ||
-            buildingRowsCount > 0);
+            buildingRowsCount > 0 ||
+            (postLotRelaxedCount > 0 && (frRuntimeDebug.winning_step as string) === "post_lot_relaxed"));
         frRuntimeDebug.fr_post_lot_candidate_count =
           exactUnitCnt > 0
             ? exactUnitCnt
             : exactAddrCnt > 0
               ? exactAddrCnt
-              : buildingAfterFilters > 0
-                ? buildingAfterFilters
-                : buildingCandidatesCount > 0
-                  ? buildingCandidatesCount
-                  : buildingRowsCount > 0
-                    ? buildingRowsCount
-                    : null;
+              : (frRuntimeDebug.winning_step as string) === "post_lot_relaxed" && (buildingAfterFilters > 0 || postLotRelaxedCount > 0)
+                ? buildingAfterFilters > 0 ? buildingAfterFilters : postLotRelaxedCount
+                : buildingAfterFilters > 0
+                  ? buildingAfterFilters
+                  : buildingCandidatesCount > 0
+                    ? buildingCandidatesCount
+                    : buildingRowsCount > 0
+                      ? buildingRowsCount
+                      : null;
         frRuntimeDebug.fr_post_lot_winning_reason =
           (frRuntimeDebug.winning_step as string) ?? (frRuntimeDebug.exact_match_reason as string) ?? null;
         const ws = String(frRuntimeDebug.winning_step ?? "");
@@ -732,13 +738,14 @@ export async function GET(request: NextRequest) {
             ? null
             : ws === "exact_unit"
               ? "exact"
-              : ws === "exact_address" || ws === "building_similar_unit" || ws === "building_level" || ws === "building_fallback"
+              : ws === "exact_address" || ws === "building_similar_unit" || ws === "building_level" || ws === "building_fallback" || ws === "post_lot_relaxed"
                 ? "building"
                 : "none";
         const candParts: string[] = [];
         if (exactUnitCnt > 0) candParts.push(`exact_unit:${exactUnitCnt}`);
         if (exactAddrCnt > 0) candParts.push(`exact_addr:${exactAddrCnt}`);
         if (buildingCandidatesCount > 0) candParts.push(`building:${buildingCandidatesCount}`);
+        if (postLotRelaxedCount > 0 && ws === "post_lot_relaxed") candParts.push(`post_lot_relaxed:${postLotRelaxedCount}`);
         frRuntimeDebug.fr_lot_candidate_summary =
           submittedLotPresent && candParts.length > 0 ? candParts.join(",") : null;
 
@@ -2683,6 +2690,237 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      /** Post-lot relaxed lookup: when exact returned 0 rows but lot was submitted, try relaxed address matching. */
+      const tryFrancePostLotRelaxedLookup = async (): Promise<ReturnType<typeof frReturn> | null> => {
+        try {
+          if (!exactLotToken || !postcodeNorm || !streetNormForSource) {
+            frRuntimeDebug.post_lot_relaxed_reject_reason = !exactLotToken ? "no_lot" : !postcodeNorm ? "no_postcode" : "no_street";
+            return null;
+          }
+          console.log("[FR_FLOW] ladder_step_started=POST_LOT_RELAXED");
+          const lotColEscaped =
+            exactPrimaryLotColumn
+              ? "`" + String(exactPrimaryLotColumn).replace(/`/g, "") + "`"
+              : null;
+          const lotColSel =
+            lotColEscaped && exactLotToken
+              ? `, CAST(COALESCE(${lotColEscaped}, '') AS STRING) AS lot_col`
+              : "";
+          const cityMain = (cityNormForSource || cityNorm || "").trim();
+          const streetCore = (streetNormForSource || streetNorm || "").trim();
+          const frBqCityRelaxedSql =
+            cityMain.length >= 2
+              ? `(${frBqCityMatchSql} OR LOWER(TRIM(CAST(city AS STRING))) LIKE CONCAT('%', LOWER(TRIM(@city_relaxed)), '%') OR LOWER(TRIM(@city_relaxed)) LIKE CONCAT('%', LOWER(TRIM(CAST(city AS STRING))), '%'))`
+              : "TRUE";
+          const frBqStreetRelaxedSql =
+            streetCore.length >= 2
+              ? `(${frBqStreetMatchSql} OR LOWER(TRIM(CAST(street AS STRING))) LIKE CONCAT('%', LOWER(TRIM(@street_core)), '%'))`
+              : frBqStreetMatchSql;
+          const frBqHouseNumberRelaxedSql =
+            houseNumberNumericTarget != null
+              ? `(COALESCE(SAFE_CAST(REGEXP_EXTRACT(TRIM(CAST(house_number AS STRING)), r'^(\\d+)') AS INT64), 999999) BETWEEN @house_number_numeric_target - 15 AND @house_number_numeric_target + 15`
+              : "TRUE";
+          const postLotRelaxedQuery = `
+          SELECT
+            surface_m2,
+            price_per_m2,
+            last_sale_price,
+            last_sale_date,
+            property_type,
+            house_number${lotColSel}
+          FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+          WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+            AND ${frBqPostcodeMatchSql}
+            AND ${frBqCityRelaxedSql}
+            AND ${frBqStreetRelaxedSql}
+            AND ${frBqHouseNumberRelaxedSql}
+            AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+          LIMIT 300
+        `;
+          const postLotParams = {
+            country: country || "",
+            city: cityNormForSource || cityNorm || "",
+            city_main: cityNormForSource || cityNorm || "",
+            city_relaxed: cityMain,
+            postcode: postcodeNormForSource || "",
+            street: streetNorm || "",
+            street_normalized: streetNormForSource || "",
+            street_core: streetCore,
+            house_number_numeric_target: houseNumberNumericTarget ?? 0,
+          };
+          const [relaxedRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: postLotRelaxedQuery, params: postLotParams },
+            "post_lot_relaxed_query"
+          );
+          const similarRows = relaxedRows ?? [];
+          const rawCount = similarRows.length;
+          frRuntimeDebug.post_lot_relaxed_candidates_count = rawCount;
+          console.log("[FR_POST_LOT_RELAXED] candidates_count=" + String(rawCount));
+          if (rawCount < 2) {
+            frRuntimeDebug.post_lot_relaxed_reject_reason = rawCount === 0 ? "no_rows" : "insufficient_candidates";
+            return null;
+          }
+          const lotDistanceFromRow = (r: Record<string, unknown>): number => {
+            if (!exactLotToken) return 999;
+            const lotColRaw = (r as any).lot_col;
+            if (lotColRaw != null && String(lotColRaw).trim()) {
+              const t = normalizeLotToken(lotColRaw);
+              if (t === exactLotToken) return 0;
+              const rowNum = parseInt(String(t).replace(/\D/g, "") || "0", 10);
+              const reqNum = parseInt(String(exactLotToken).replace(/\D/g, "") || "0", 10);
+              if (Number.isFinite(rowNum) && Number.isFinite(reqNum)) return Math.abs(rowNum - reqNum);
+            }
+            const tokens = extractLotTokensFromRow(r);
+            if (tokens.length > 0) {
+              if (tokens.some((t) => t === exactLotToken)) return 0;
+              const rowNum = parseInt(String(tokens[0]).replace(/\D/g, "") || "0", 10);
+              const reqNum = parseInt(String(exactLotToken).replace(/\D/g, "") || "0", 10);
+              if (Number.isFinite(rowNum) && Number.isFinite(reqNum)) return Math.abs(rowNum - reqNum);
+            }
+            return 999;
+          };
+          type SimilarEnriched = {
+            raw: Record<string, unknown>;
+            surf: number;
+            ppmEuro: number;
+            lastSaleEuro: number;
+            dateStr: string | null;
+            houseDistance: number;
+            lotDistance: number;
+          };
+          const enriched: SimilarEnriched[] = [];
+          const allowRelaxedFiveYearWindow = rawCount <= 4;
+          for (const row of similarRows) {
+            const surf = parseMaybeDecimal((row as any).surface_m2);
+            const ppmRaw = parseMaybeDecimal((row as any).price_per_m2);
+            const ppmEuro = frPropertyLatestFactsMoneyToEuros((row as any).price_per_m2) ?? 0;
+            const lastSaleEuro = frPropertyLatestFactsMoneyToEuros((row as any).last_sale_price) ?? 0;
+            const dateRaw = (row as any).last_sale_date;
+            const dateStr =
+              dateRaw === null || dateRaw === undefined
+                ? null
+                : String(dateRaw).trim() === ""
+                  ? null
+                  : String(dateRaw);
+            const rowHn = (row as any).house_number;
+            const rowNum = extractHouseNumberNumeric(String(rowHn ?? ""));
+            const houseDistance =
+              houseNumberNumericTarget != null && rowNum != null
+                ? Math.abs(rowNum - houseNumberNumericTarget)
+                : 0;
+            const lotDistance = lotDistanceFromRow(row);
+            if (surf == null || surf <= 0) continue;
+            if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
+            if (!allowRelaxedFiveYearWindow && !frSaleDateWithinFiveYears(dateRaw)) continue;
+            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr, houseDistance, lotDistance });
+          }
+          const afterFilters = enriched.length;
+          frRuntimeDebug.building_similar_unit_after_filters_count = afterFilters;
+          frRuntimeDebug.building_similar_unit_candidates_count = rawCount;
+          if (afterFilters === 0) {
+            frRuntimeDebug.post_lot_relaxed_reject_reason = "no_candidates_after_quality_filters";
+            return null;
+          }
+          let trimmed = enriched;
+          if (enriched.length >= 5) {
+            trimmed = frTrimFractionExtremes(enriched, (x) => x.ppmEuro, 0.1);
+          }
+          if (trimmed.length === 0) trimmed = enriched;
+          const medSurfCohort = medianNumber(trimmed.map((x) => x.surf));
+          const targetSurface =
+            validInputSurfaceM2 ??
+            (medSurfCohort != null && Number.isFinite(medSurfCohort) ? medSurfCohort : null);
+          const cohortMedian = medianNumber(trimmed.map((x) => x.ppmEuro).filter((n) => n > 0 && Number.isFinite(n))) ?? 0;
+          const sorted = [...trimmed].sort((a, b) => {
+            if (exactLotToken && a.lotDistance !== b.lotDistance) return a.lotDistance - b.lotDistance;
+            if (targetSurface != null && Number.isFinite(targetSurface)) {
+              const da = Math.abs(a.surf - targetSurface);
+              const db = Math.abs(b.surf - targetSurface);
+              if (da !== db) return da - db;
+            }
+            if (a.houseDistance !== b.houseDistance) return a.houseDistance - b.houseDistance;
+            const ta = a.dateStr ? new Date(a.dateStr).getTime() : 0;
+            const tb = b.dateStr ? new Date(b.dateStr).getTime() : 0;
+            if (tb !== ta) return tb - ta;
+            if (cohortMedian > 0) {
+              const ma = Math.abs(a.ppmEuro - cohortMedian);
+              const mb = Math.abs(b.ppmEuro - cohortMedian);
+              if (ma !== mb) return ma - mb;
+            }
+            if (a.ppmEuro !== b.ppmEuro) return a.ppmEuro - b.ppmEuro;
+            return a.surf - b.surf;
+          });
+          const best = sorted[0];
+          if (!best) return null;
+          const estSurf = validInputSurfaceM2 ?? best.surf;
+          const ppmForEstimate = cohortMedian > 0 ? cohortMedian : best.ppmEuro;
+          const estimated =
+            Number.isFinite(estSurf) && estSurf > 0 && ppmForEstimate > 0 ? Math.round(estSurf * ppmForEstimate) : null;
+          frRuntimeDebug.post_lot_relaxed_reject_reason = null;
+          frRuntimeDebug.winning_step = "post_lot_relaxed";
+          frRuntimeDebug.winning_source_label = "Post-lot relaxed (similar apartments)";
+          frRuntimeDebug.has_surface_for_estimate = estSurf != null && estSurf > 0;
+          frRuntimeDebug.chosen_surface_value = estSurf;
+          frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
+          return frReturn(
+            {
+              address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+              data_source: "properties_france",
+              fr_detect: detectClass,
+              property_result: {
+                exact_value: estimated,
+                exact_value_message:
+                  estimated == null
+                    ? "Post-lot relaxed — similar apartments in area. Total estimate needs surface."
+                    : null,
+                value_level: "building-level",
+                last_transaction: {
+                  amount: best.lastSaleEuro,
+                  date: best.dateStr,
+                  message:
+                    best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row",
+                },
+                street_average: ppmForEstimate > 0 ? ppmForEstimate : null,
+                street_average_message: "Post-lot relaxed (similar apartments)",
+                livability_rating: "FAIR",
+              },
+              fr: emptyFranceResponse({
+                success: true,
+                resultType: "building_similar_unit" as any,
+                confidence: "medium_high",
+                requestedLot: requestedLotNorm,
+                normalizedLot: normalizedRequestedLot,
+                property: {
+                  transactionDate: best.dateStr,
+                  transactionValue: best.lastSaleEuro > 0 ? best.lastSaleEuro : null,
+                  pricePerSqm: ppmForEstimate > 0 ? ppmForEstimate : best.ppmEuro,
+                  surfaceArea: Number.isFinite(estSurf) && estSurf > 0 ? estSurf : null,
+                  rooms: null,
+                  propertyType: "Appartement",
+                  building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                  postalCode: postcodeNorm || null,
+                  commune: cityNorm || null,
+                },
+                buildingStats: {
+                  transactionCount: trimmed.length,
+                  avgPricePerSqm: ppmForEstimate > 0 ? ppmForEstimate : best.ppmEuro,
+                  avgTransactionValue: estimated,
+                },
+                comparables: [],
+                matchExplanation: "Post-lot relaxed — similar apartments in same postcode/street area, ranked by lot match",
+              }),
+            },
+            "valuation_response"
+          );
+        } catch (err) {
+          frRuntimeDebug.post_lot_relaxed_reject_reason = "query_failed";
+          console.error("[FR_POST_LOT_RELAXED] query_failed", err);
+          return null;
+        } finally {
+          console.log("[FR_STEP] post_lot_relaxed_lookup_done");
+        }
+      };
+
       const buildingSimilarBase =
         flowAsApartment && Boolean(exactLotToken) && Boolean(houseNumberNorm) && Boolean(postcodeNorm);
 
@@ -2900,6 +3138,18 @@ export async function GET(request: NextRequest) {
           buildingProfile,
         });
         if (buildingSimilarNoneWin) return buildingSimilarNoneWin;
+      }
+
+      // Post-lot relaxed: when exact returned 0 rows but lot was submitted, try relaxed address matching.
+      if (
+        flowAsApartment &&
+        exactLotToken &&
+        rawExactHouseNumberRowCount === 0 &&
+        postcodeNorm &&
+        (streetNormForSource || streetNorm)
+      ) {
+        const postLotRelaxedWin = await tryFrancePostLotRelaxedLookup();
+        if (postLotRelaxedWin) return postLotRelaxedWin;
       }
 
       // Same building fallback (when unit/lot was provided but exact unit match is missing):
