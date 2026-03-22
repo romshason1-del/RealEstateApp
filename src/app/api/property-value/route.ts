@@ -704,6 +704,10 @@ export async function GET(request: NextRequest) {
         fr_fallback_level_used: null as string | null,
         fr_total_rows_used: null as number | null,
         fr_empty_prevented: null as boolean | null,
+        fr_final_has_display_value: null as boolean | null,
+        fr_final_display_value: null as number | null,
+        fr_final_display_value_type: null as string | null,
+        fr_final_render_path: null as "no_result" | "fallback" | "exact" | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -816,6 +820,19 @@ export async function GET(request: NextRequest) {
         }
 
         const pr = payload.property_result as Record<string, unknown> | undefined;
+        const frObjForFix = payload.fr as Record<string, unknown> | undefined;
+        const propForFix = frObjForFix?.property as Record<string, unknown> | undefined;
+        const ws = String(frRuntimeDebug.winning_step ?? "");
+        const isFallbackStep = ["street_fallback", "commune_fallback", "nearby_fallback", "commune_emergency", "building_profile"].includes(ws);
+        const ppmFromWin = typeof frRuntimeDebug.winning_median_price_per_m2 === "number" && Number.isFinite(frRuntimeDebug.winning_median_price_per_m2) ? frRuntimeDebug.winning_median_price_per_m2 : null;
+        if (tag === "valuation_response" && isFallbackStep && ppmFromWin != null && ppmFromWin > 0) {
+          if (pr && (pr.street_average == null || typeof pr.street_average !== "number")) pr.street_average = ppmFromWin;
+          if (typeof (payload as Record<string, unknown>).price_per_m2 !== "number" || ((payload as Record<string, unknown>).price_per_m2 as number) <= 0) (payload as Record<string, unknown>).price_per_m2 = ppmFromWin;
+          if (propForFix && (propForFix.pricePerSqm == null || typeof propForFix.pricePerSqm !== "number")) propForFix.pricePerSqm = ppmFromWin;
+        } else if (pr && typeof pr.street_average === "number" && Number.isFinite(pr.street_average) && (pr.exact_value == null || typeof pr.exact_value !== "number" || pr.exact_value <= 0)) {
+          if (typeof (payload as Record<string, unknown>).price_per_m2 !== "number") (payload as Record<string, unknown>).price_per_m2 = pr.street_average;
+          if (propForFix && (propForFix.pricePerSqm == null || (typeof propForFix.pricePerSqm !== "number"))) propForFix.pricePerSqm = pr.street_average;
+        }
         const frObj = payload.fr as Record<string, unknown> | undefined;
         const prop = frObj?.property as Record<string, unknown> | null | undefined;
         const bs = frObj?.buildingStats as Record<string, unknown> | undefined;
@@ -995,6 +1012,12 @@ export async function GET(request: NextRequest) {
           if (noSurfaceForDisplay && hasWinningStep && ppmPos) {
             has_display_value = true;
           }
+          if (hasWinningStep && !has_display_value && ppmFromWinningDebug != null && ppmFromWinningDebug > 0) {
+            has_display_value = true;
+            price_per_m2 = ppmFromWinningDebug;
+            display_value = ppmFromWinningDebug;
+            display_value_type = "price_per_m2";
+          }
 
           if (hasWinningStep && !has_display_value) {
             console.error("[FR_RETURN] winning_step_set_but_no_price_or_estimate", {
@@ -1071,10 +1094,28 @@ export async function GET(request: NextRequest) {
         console.log("[FR_STEP] returning_success");
         console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         // Not BAN-specific: every France exit path uses frReturn (valuation, lot prompt, no_data, etc.).
+        const fvDisplay = outPayload.fr_valuation_display as Record<string, unknown> | undefined;
+        const finalHasDisplay = tag === "valuation_response" && Boolean(fvDisplay?.has_display_value ?? (estimated_value_present || price_per_m2_present));
+        const finalDisplayVal = (fvDisplay?.display_value as number | null | undefined) ?? (estimated_value_present ? estimated_value : price_per_m2_present ? price_per_m2 : null);
+        const finalDisplayType = (fvDisplay?.display_value_type as string | null | undefined) ?? (estimated_value_present ? "estimated_total" : price_per_m2_present ? "price_per_m2" : null);
+        frRuntimeDebug.fr_final_has_display_value = finalHasDisplay;
+        frRuntimeDebug.fr_final_display_value = finalDisplayVal;
+        frRuntimeDebug.fr_final_display_value_type = finalDisplayType;
+        frRuntimeDebug.fr_final_render_path =
+          tag === "no_data" || (winning_step_str === "no_data" && !finalHasDisplay)
+            ? "no_result"
+            : /^exact_/.test(winning_step_str) || winning_step_str === "exact_house"
+              ? "exact"
+              : finalHasDisplay
+                ? "fallback"
+                : "no_result";
+
         console.log("[FR_RETURN] response", {
           tag,
           ban_match_found: frRuntimeDebug.ban_match_found,
           ban_rows_count: frRuntimeDebug.ban_rows_count,
+          fr_final_has_display_value: finalHasDisplay,
+          fr_final_render_path: frRuntimeDebug.fr_final_render_path,
         });
         return NextResponse.json(
           { ...outPayload, fr_runtime_debug: frRuntimeDebug },

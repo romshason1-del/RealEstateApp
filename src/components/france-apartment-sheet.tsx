@@ -999,9 +999,13 @@ export function FranceApartmentSheet({
       coercePositiveNumber(rd?.winning_median_price_per_m2);
     const ppm2Display =
       ppm2FromApi != null ? normalizeFrancePricePerSqmForDisplay(ppm2FromApi) : null;
+    const hasDisplayFromApi = (parsed as any)?.fr_valuation_display?.has_display_value === true || (parsed as any)?.fr_runtime_debug?.fr_final_has_display_value === true;
+    const fallbackWinStep = /^(street_fallback|commune_fallback|nearby_fallback|commune_emergency|building_profile)$/.test(String(rd?.winning_step ?? ""));
+    const hasFallbackDisplayData = hasDisplayFromApi || (fallbackWinStep && (ppm2FromApi != null || coercePositiveNumber((parsed as any)?.display_value) != null || coercePositiveNumber((parsed as any)?.estimated_value) != null));
     const isNoResult =
       !isLoadingNow &&
-      (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false);
+      (!fr || fr?.resultType === "no_result" || fr?.resultType === "no_reliable_data" || fr?.success === false) &&
+      !hasFallbackDisplayData;
 
     const isSuspiciousFallbackRaw =
       !isLoadingNow &&
@@ -1427,6 +1431,10 @@ export function FranceApartmentSheet({
                       <div>fr_fallback_level_used: {toDebugStr(rd?.fr_fallback_level_used)}</div>
                       <div>fr_total_rows_used: {toDebugStr(rd?.fr_total_rows_used)}</div>
                       <div>fr_empty_prevented: {toDebugStr(rd?.fr_empty_prevented)}</div>
+                      <div>fr_final_has_display_value: {toDebugStr(rd?.fr_final_has_display_value)}</div>
+                      <div>fr_final_display_value: {toDebugStr(rd?.fr_final_display_value)}</div>
+                      <div>fr_final_display_value_type: {toDebugStr(rd?.fr_final_display_value_type)}</div>
+                      <div>fr_final_render_path: {toDebugStr(rd?.fr_final_render_path)}</div>
                       {toDebugStr(rd?.no_data_reason) !== "—" ? (
                         <div>no_data_reason: {toDebugStr(rd?.no_data_reason)}</div>
                       ) : null}
