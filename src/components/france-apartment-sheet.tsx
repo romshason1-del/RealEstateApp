@@ -37,6 +37,8 @@ export type FranceValuationDisplay = {
   display_value?: number | null;
   display_value_type?: string | null;
   has_display_value?: boolean;
+  /** When false, do not treat transactionValue/last_sale as current estimate. */
+  has_current_valuation?: boolean | null;
   /** Back-compat alias; API may send both. */
   source_label?: string | null;
 };
@@ -972,21 +974,20 @@ export function FranceApartmentSheet({
     const fvDispType = coerceNullableString(fv?.display_value_type as unknown);
 
     const txFromProp = coercePositiveNumber(fr?.property?.transactionValue as unknown);
+    const prExact = coercePositiveNumber(pr?.exact_value);
+    const hasCurrentValuation = fv?.has_current_valuation !== false;
+    const estimatedSources = fvEst ?? topEstimated ?? prExact;
+    const buildingLevelValue =
+      fr?.resultType === "building_level"
+        ? coercePositiveNumber(fr?.buildingStats?.avgTransactionValue as unknown) ??
+          coercePositiveNumber(legacy?.averageBuildingValue as unknown)
+        : null;
     const rawValue =
       fr?.resultType === "building_similar_unit"
-        ? fvEst ??
-          topEstimated ??
-          coercePositiveNumber(pr?.exact_value) ??
-          txFromProp ??
-          null
-        : txFromProp ??
-          fvEst ??
-          topEstimated ??
-          coercePositiveNumber(pr?.exact_value) ??
-          (fr?.resultType === "building_level"
-            ? coercePositiveNumber(fr?.buildingStats?.avgTransactionValue as unknown) ??
-              coercePositiveNumber(legacy?.averageBuildingValue as unknown)
-            : null);
+        ? estimatedSources ?? txFromProp ?? null
+        : hasCurrentValuation
+          ? txFromProp ?? estimatedSources ?? buildingLevelValue
+          : estimatedSources ?? buildingLevelValue;
     const hasValue = typeof rawValue === "number" && rawValue > 0;
     const ppm2FromApi =
       coercePositiveNumber(fr?.property?.pricePerSqm as unknown) ??
@@ -1040,6 +1041,7 @@ export function FranceApartmentSheet({
       if (ws === "street_fallback") return "Based on recent sales on this street";
       if (ws === "commune_fallback") return "Based on similar properties in the same commune";
       if (ws === "nearby_fallback") return "Based on nearby similar properties";
+      if (ws === "no_data" && winningSourceFromApi) return winningSourceFromApi;
       if (fr?.resultType === "exact_apartment") return "Based on exact property match";
       if (fr?.resultType === "exact_address") return "Based on exact address match";
       if (fr?.resultType === "exact_house") return "Based on exact house match";
@@ -1190,6 +1192,9 @@ export function FranceApartmentSheet({
         return referenceSaleValue != null
           ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue} reference sale`
           : `${formatFranceEuroTotal(amt)} • reference sale`;
+      }
+      if (!hasCurrentValuation && amt != null && referenceSaleValue != null) {
+        return `Last recorded transaction: ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
       }
       return "No exact recent transaction available";
     })();

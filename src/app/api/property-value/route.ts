@@ -690,6 +690,9 @@ export async function GET(request: NextRequest) {
         exact_house_usable_count: null as number | null,
         exact_house_reject_reason: null as string | null,
         building_similar_unit_reject_reason: null as string | null,
+        fr_selected_layer_quality: null as string | null,
+        fr_building_value_reliable: null as boolean | null,
+        fr_selected_reason: null as string | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -972,6 +975,7 @@ export async function GET(request: NextRequest) {
             });
           }
 
+          const has_current_valuation = Boolean(evPos || ppmPos);
           outPayload.fr_valuation_display = {
             winning_source_label,
             source_label: winning_source_label,
@@ -984,6 +988,7 @@ export async function GET(request: NextRequest) {
             last_sale_price,
             last_sale_date,
             has_display_value,
+            has_current_valuation,
           };
           if (String(frRuntimeDebug.winning_step) === "exact_unit" || String(frRuntimeDebug.winning_step) === "exact_address") {
             console.log(
@@ -3878,6 +3883,9 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building";
             frRuntimeDebug.has_surface_for_estimate = medianSurfaceM2ForFallback != null;
+            frRuntimeDebug.fr_building_value_reliable = true;
+            frRuntimeDebug.fr_selected_layer_quality = "reliable";
+            frRuntimeDebug.fr_selected_reason = "same_address_sufficient_rows";
             frRuntimeDebug.chosen_surface_value = medianSurfaceM2ForFallback;
             frRuntimeDebug.winning_median_price_per_m2 = medianPricePerM2Euro;
             return frReturn(
@@ -3914,6 +3922,10 @@ export async function GET(request: NextRequest) {
             );
           }
         }
+        if (sameBuildingRowsCount > 0 && sameBuildingUsableRowsCount < MIN_SAME_BUILDING_USABLE_ROWS) {
+          frRuntimeDebug.fr_building_value_reliable = false;
+          frRuntimeDebug.fr_selected_reason = "same_address_insufficient_usable_rows";
+        }
         // When facts has no same-address rows but rich source does, use rich source for building_level
         if (
           sameBuildingUsableRowsCount < MIN_SAME_BUILDING_USABLE_ROWS &&
@@ -3937,6 +3949,9 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building (from DVF rich source)";
             frRuntimeDebug.has_surface_for_estimate = true;
+            frRuntimeDebug.fr_building_value_reliable = true;
+            frRuntimeDebug.fr_selected_layer_quality = "reliable";
+            frRuntimeDebug.fr_selected_reason = "rich_source_sufficient_rows";
             frRuntimeDebug.chosen_surface_value = medianSurf;
             frRuntimeDebug.winning_median_price_per_m2 = medianPpmEuro;
             frRuntimeDebug.building_rows_count = exactRows.length;
@@ -4162,7 +4177,8 @@ export async function GET(request: NextRequest) {
         LIMIT 50
       `;
 
-      // Building profile fallback: prefer over street when available
+      // Building profile fallback: only use when we can produce a reliable valuation.
+      // If no surface → no estimated value → do NOT return building_level; fall through to street.
       const tryBuildingProfileFallback = (): ReturnType<typeof frReturn> | null => {
         if (!buildingProfile || buildingProfile.transaction_count < 1) return null;
         const forHouses = detectClass === "house" && buildingProfile.house_count > 0;
@@ -4172,11 +4188,20 @@ export async function GET(request: NextRequest) {
         const medianPpm = buildingProfile.median_price_per_m2;
         const surfaceForEst = validInputSurfaceM2 ?? buildingProfile.surface_median ?? medianSurfaceM2ForFallback;
         const estimated = surfaceForEst != null && surfaceForEst > 0 ? Math.round(surfaceForEst * medianPpm) : null;
+        if (estimated == null || estimated <= 0) {
+          frRuntimeDebug.fr_building_value_reliable = false;
+          frRuntimeDebug.fr_selected_reason = "building_profile_no_surface_no_value";
+          console.log("[FR_BUILDING_PROFILE] skipped=no_reliable_value (missing surface)");
+          return null;
+        }
         const fallbackSource = "Similar properties in this building";
         console.log("[FR_BUILDING_PROFILE] used_in=fallback");
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
         frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+        frRuntimeDebug.fr_building_value_reliable = true;
+        frRuntimeDebug.fr_selected_layer_quality = "reliable";
+        frRuntimeDebug.fr_selected_reason = "building_profile_has_estimate";
         return frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -4428,7 +4453,8 @@ export async function GET(request: NextRequest) {
       }
       console.log("[FR_STREET] fallback_decision=" + streetFallbackDecision);
 
-      if (streetEstimate && exactRowsCount === 0) {
+      const buildingHadNoReliableValue = frRuntimeDebug.fr_building_value_reliable === false;
+      if (streetEstimate && (exactRowsCount === 0 || buildingHadNoReliableValue)) {
         const rowCount = (frRuntimeDebug.fr_street_row_count as number) ?? 0;
         const filteredCount = (frRuntimeDebug.fr_street_filtered_count as number) ?? 0;
         const recentCount = (frRuntimeDebug.fr_street_recent_count as number) ?? 0;
@@ -4443,6 +4469,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_median_price_per_m2 = streetEstimate.avgPricePerM2;
           frRuntimeDebug.winning_step = "street_fallback";
           frRuntimeDebug.winning_source_label = fallbackSourceStreet;
+          frRuntimeDebug.fr_selected_layer_quality = streetConfidence;
+          frRuntimeDebug.fr_selected_reason = buildingHadNoReliableValue ? "street_preferred_over_weak_building" : "street_fallback";
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
           console.log(
@@ -4500,6 +4528,8 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.winning_step = "street_fallback";
         frRuntimeDebug.winning_source_label = fallbackSourceStreet;
         frRuntimeDebug.has_surface_for_estimate = false;
+        frRuntimeDebug.fr_selected_layer_quality = streetConfidence;
+        frRuntimeDebug.fr_selected_reason = "street_price_only_no_surface";
         frRuntimeDebug.chosen_surface_value = null;
         console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
         return frReturn(
@@ -4658,6 +4688,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = fallbackSourceCommune;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
+          frRuntimeDebug.fr_selected_layer_quality = frConfidence;
+          frRuntimeDebug.fr_selected_reason = "commune_fallback";
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
           frRuntimeDebug.winning_median_price_per_m2 = medianAvgPricePerM2Euro;
           console.log(
@@ -4824,6 +4856,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "nearby_fallback";
           frRuntimeDebug.winning_source_label = label;
           frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.fr_selected_layer_quality = conf;
+          frRuntimeDebug.fr_selected_reason = "nearby_fallback";
 
           return frReturn(
             {
@@ -4942,7 +4976,13 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.winning_source_label = null;
       } else {
         frRuntimeDebug.winning_step = "no_data";
-        frRuntimeDebug.winning_source_label = "No reliable data found";
+        const bRows = (frRuntimeDebug.building_rows_count as number) ?? 0;
+        const hasBuildingEvidenceNoValue =
+          (bRows > 0 || buildingProfile != null) &&
+          frRuntimeDebug.fr_building_value_reliable !== true;
+        frRuntimeDebug.winning_source_label = hasBuildingEvidenceNoValue
+          ? "Building identified, but insufficient reliable valuation data"
+          : "No reliable data found";
         const failedStage =
           !cityNorm && !streetNorm && !postcodeNorm ? "parse"
           : !frRuntimeDebug.ban_match_found ? "ban_selection"
@@ -5005,17 +5045,21 @@ export async function GET(request: NextRequest) {
         );
       }
 
+      const noDataStreetMsg =
+        hasBuildingEvidenceNoValue
+          ? "Building identified, but insufficient reliable valuation data"
+          : "No reliable data found";
       return frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
         data_source: "properties_france",
         fr_detect: frDetectToUse,
         property_result: {
           exact_value: null,
-          exact_value_message: "No reliable data found",
+          exact_value_message: noDataStreetMsg,
           value_level: "no_match",
           last_transaction: { amount: 0, date: null, message: "No recent transaction available" },
           street_average: null,
-          street_average_message: "No reliable data found",
+          street_average_message: noDataStreetMsg,
           livability_rating: "FAIR",
         },
         fr: emptyFranceResponse({
@@ -5027,7 +5071,7 @@ export async function GET(request: NextRequest) {
           property: null,
           buildingStats: null,
           comparables: [],
-          matchExplanation: "No reliable data found",
+          matchExplanation: noDataStreetMsg,
         }),
       }, terminalNoDataTag);
     } catch (err) {
