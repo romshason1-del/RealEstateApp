@@ -1029,6 +1029,12 @@ export async function GET(request: NextRequest) {
           outPayload.display_value_type = display_value_type;
         }
 
+        if (tag === "valuation_response" && estimated_value != null && typeof estimated_value === "number" && estimated_value > 0) {
+          const low = Math.round(estimated_value * 0.88);
+          const high = Math.round(estimated_value * 1.12);
+          outPayload.value_range = { low_estimate: low, estimated_value: estimated_value, high_estimate: high };
+        }
+
         const estimated_value_present =
           estimated_value != null &&
           typeof estimated_value === "number" &&

@@ -1031,29 +1031,17 @@ export function FranceApartmentSheet({
     const basedOnExplainer = (() => {
       if (isLoadingNow || isNoResult) return null;
       const ws = winningStepStr;
-      if (ws === "exact_unit") return "Based on exact property match";
-      if (ws === "exact_address") return "Based on exact address match";
-      if (ws === "exact_house") return "Based on exact house match";
-      if (ws === "exact_approximate") return "Based on similar apartments in this building";
-      if (ws === "building_level" || ws === "building_fallback")
-        return "Based on similar properties in this building";
-      if (ws === "building_similar_unit") return "Based on similar apartments in this building";
+      if (ws === "exact_unit" || ws === "exact_address" || ws === "exact_house") return "Based on this property's recorded sale";
+      if (ws === "exact_approximate" || ws === "building_level" || ws === "building_fallback" || ws === "building_similar_unit")
+        return "Based on recent sales in this building";
       if (ws === "street_fallback") return "Based on recent sales on this street";
-      if (ws === "commune_fallback") return "Based on similar properties in the same commune";
-      if (ws === "nearby_fallback") return "Based on nearby similar properties";
-      if (ws === "no_data" && winningSourceFromApi) return winningSourceFromApi;
-      if (fr?.resultType === "exact_apartment") return "Based on exact property match";
-      if (fr?.resultType === "exact_address") return "Based on exact address match";
-      if (fr?.resultType === "exact_house") return "Based on exact house match";
-      if (fr?.resultType === "building_level" || fr?.resultType === "building_fallback")
-        return "Based on similar properties in this building";
-      if (fr?.resultType === "building_similar_unit") return "Based on similar apartments in this building";
-      if (fr?.resultType === "nearby_comparable") return "Based on nearby similar properties";
+      if (ws === "commune_fallback" || ws === "nearby_fallback")
+        return "Based on similar properties in the area";
       if (fr?.resultType === "similar_apartment_same_building")
-        return isHouseLikeUI
-          ? "Based on nearby property transactions"
-          : "Based on similar apartments in the same building";
-      return null;
+        return isHouseLikeUI ? "Based on recent sales in the area" : "Based on recent sales in this building";
+      if (fr?.resultType === "nearby_comparable") return "Based on similar properties in the area";
+      if (ws === "no_data" && winningSourceFromApi) return winningSourceFromApi;
+      return "Based on recent sales data";
     })();
 
     // Rule: estimated_value null + price_per_m2 (or display_value) → show €/m² in headline, not "—".
@@ -1070,11 +1058,18 @@ export function FranceApartmentSheet({
     const transactionCount =
       transactionCountRaw != null && transactionCountRaw > 0 ? Math.round(transactionCountRaw) : null;
 
+    const apiValueRange = (parsed as any)?.value_range ?? (data as any)?.value_range;
     const valueRange = (() => {
       if (isLoadingNow) return null;
       if (isNoResult) return null;
       if (isSuspiciousFallback) return null;
-      // Only show a range when we have enough building comparables to support it.
+      // API-provided range (France valuation_response).
+      if (apiValueRange?.low_estimate != null && apiValueRange?.high_estimate != null) {
+        const lo = coercePositiveNumber(apiValueRange.low_estimate);
+        const hi = coercePositiveNumber(apiValueRange.high_estimate);
+        if (lo != null && hi != null && hi >= lo) return { min: lo, max: hi };
+      }
+      // Fallback: range from building comparables when enough data.
       if (fr?.resultType !== "building_level" && fr?.resultType !== "similar_apartment_same_building") return null;
       const displayedSurfaceRaw = coercePositiveNumber(fr?.property?.surfaceArea as unknown);
       const displayedSurface = displayedSurfaceRaw;
@@ -1280,73 +1275,81 @@ export function FranceApartmentSheet({
               </div>
             </div>
 
-            {/* Core summary – 4 primary sections */}
+            {/* Core summary – premium layout */}
             <div className="mt-1.5 space-y-[6px]">
-              {/* 1) Estimated market value */}
-              <div className="rounded-[10px] border border-white/10 bg-black/20 p-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                  Estimated market value
-                </div>
-                <div
-                  className={
-                    isLoadingNow
-                      ? `mt-1 flex items-center gap-2 whitespace-nowrap text-[20px] font-medium leading-tight ${goldTextClass}`
-                      : isNoResult
-                        ? "mt-1 text-sm font-semibold whitespace-nowrap leading-tight text-zinc-100"
-                        : `mt-1 text-[26px] sm:text-[28px] whitespace-nowrap font-bold leading-none ${goldTextClass}`
-                  }
-                >
-                  {isLoadingNow ? (
-                    <>
-                      <span className={`inline-flex size-3.5 animate-spin rounded-full border-2 border-white/15 border-t-amber-200`} aria-hidden="true" />
-                      <span>Searching...</span>
-                    </>
-                  ) : (
-                    (isNoResult
-                      ? "No exact data found — showing limited insights"
-                      : valueRange
-                        ? `${formatFranceEuroTotal(valueRange.min)} – ${formatFranceEuroTotal(valueRange.max)}`
-                        : mainValue)
-                  )}
-                </div>
-
-                <div className="mt-1 flex items-center justify-start gap-2">
-                  {showEstimatedValueSubLabel ? (
-                    <div className="text-[11px] font-medium uppercase tracking-wider leading-tight text-zinc-400/70">
+              {/* 1) Estimated value – hero */}
+              <div className="rounded-[10px] border border-white/10 bg-black/20 p-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
                       Estimated value
                     </div>
-                  ) : null}
-                  {!isLoadingNow ? (
-                    <div className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${confidenceTone}`}>
-                      Confidence: {confidenceText}
+                    <div
+                      className={
+                        isLoadingNow
+                          ? `mt-1 flex items-center gap-2 whitespace-nowrap text-[20px] font-medium leading-tight ${goldTextClass}`
+                          : isNoResult
+                            ? "mt-1 text-sm font-semibold whitespace-nowrap leading-tight text-zinc-100"
+                            : `mt-1 text-[24px] sm:text-[26px] whitespace-nowrap font-bold leading-none ${goldTextClass}`
+                      }
+                    >
+                      {isLoadingNow ? (
+                        <>
+                          <span className={`inline-flex size-3.5 animate-spin rounded-full border-2 border-white/15 border-t-amber-200`} aria-hidden="true" />
+                          <span>Searching...</span>
+                        </>
+                      ) : (
+                        (isNoResult
+                          ? "No exact data found"
+                          : mainValue)
+                      )}
+                    </div>
+                  </div>
+                  {!isLoadingNow && !isNoResult ? (
+                    <div className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${confidenceTone}`}>
+                      {confidenceText}
                     </div>
                   ) : null}
                 </div>
-
-                {!isLoadingNow ? (
-                  <div className="mt-1 text-xs font-medium leading-tight text-zinc-300/75">
-                    {frDetect === "unclear" && isNoResult
-                      ? "Try another address with confirmed France DVF coverage."
-                      : basedOnExplainer}
+                {valueRange != null && !isLoadingNow && !isNoResult ? (
+                  <div className="mt-1.5 text-xs font-medium text-zinc-400/90">
+                    Market range: {formatFranceEuroTotal(valueRange.min)} – {formatFranceEuroTotal(valueRange.max)}
                   </div>
                 ) : null}
               </div>
 
-              {/* 2) Last transaction */}
-              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                  Last transaction
-                </div>
-                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
-                  {lastTransactionSummaryLine}
+              {/* 2) Price per m² + Last transaction – compact row */}
+              <div className="grid grid-cols-2 gap-2">
+                {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
+                  <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+                      Price per m²
+                    </div>
+                    <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
+                      {formatFranceEuroPerSqmFromUnknown(displayPricePerSqm, { medianSuffix: false })}
+                    </div>
+                  </div>
+                ) : null}
+                <div className={`rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2 ${!(displayPricePerSqm != null && (hasValue || valueRange != null)) ? "col-span-2" : ""}`}>
+                  <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+                    Last transaction
+                  </div>
+                  <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
+                    {lastTransactionSummaryLine}
+                  </div>
                 </div>
               </div>
 
-              {/* 3) Based on */}
-              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">Source</div>
-                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{sourceText}</div>
-              </div>
+              {/* 3) Explanation */}
+              {!isLoadingNow && (basedOnExplainer || (frDetect === "unclear" && isNoResult)) ? (
+                <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
+                  <div className="text-xs font-medium leading-tight text-zinc-400/90">
+                    {frDetect === "unclear" && isNoResult
+                      ? "Try another address with confirmed France DVF coverage."
+                      : basedOnExplainer}
+                  </div>
+                </div>
+              ) : null}
 
               {/* 4) Livability */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
