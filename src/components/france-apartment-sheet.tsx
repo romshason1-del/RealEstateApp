@@ -1377,8 +1377,11 @@ export function FranceApartmentSheet({
 
               {/* 2) Last transaction – bordered row (same container style as Price per m², Livability) */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                  Last transaction
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+                    Last transaction
+                  </div>
+                  <span className="text-[9px] font-mono text-amber-400/80" title="Temporary patch marker – remove after validation">FR_LAST_TX_PATCH_V2</span>
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
