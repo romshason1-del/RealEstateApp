@@ -41,6 +41,10 @@ export type FranceValuationDisplay = {
   has_current_valuation?: boolean | null;
   /** Back-compat alias; API may send both. */
   source_label?: string | null;
+  /** valuation_response path: last recorded sale amount (from pr.last_transaction.amount). */
+  last_sale_price?: number | null;
+  /** valuation_response path: last recorded sale date (from pr.last_transaction.date). */
+  last_sale_date?: string | null;
 };
 
 export function FranceApartmentSheet({
@@ -956,10 +960,12 @@ export function FranceApartmentSheet({
       return null;
     }
 
+    const fvForDate = (parsed as any)?.fr_valuation_display;
     const referenceSaleValue: string | null = isLoadingNow
       ? null
       : referenceSaleDateLabelFromRaw(fr?.property?.transactionDate as unknown) ??
-        referenceSaleDateLabelFromRaw((pr as any)?.last_transaction?.date as unknown);
+        referenceSaleDateLabelFromRaw((pr as any)?.last_transaction?.date as unknown) ??
+        referenceSaleDateLabelFromRaw(fvForDate?.last_sale_date as unknown);
 
     if (!isLoadingNow && fr?.resultType === "building_similar_unit") {
       console.log("[FR_UI_REF_SALE]", referenceSaleValue, typeof referenceSaleValue);
@@ -1186,8 +1192,30 @@ export function FranceApartmentSheet({
 
     const lastTxAmountPositive = !isLoadingNow
       ? coercePositiveNumber(fr?.property?.transactionValue as unknown) ??
-        coercePositiveNumber((pr as any)?.last_transaction?.amount as unknown)
+        coercePositiveNumber((pr as any)?.last_transaction?.amount as unknown) ??
+        coercePositiveNumber(fv?.last_sale_price as unknown)
       : null;
+
+    // RUNTIME PROOF: log exact data shape for Last transaction row (dev only; run app, check console)
+    if (isDev && !isLoadingNow && fr != null && typeof window !== "undefined") {
+      const fvForTx = (parsed as any)?.fr_valuation_display;
+      const debugKey = `fr_last_tx:${String(fr?.resultType ?? "")}:${addressKey}`;
+      if (lastLoggedFranceKeyRef.current !== debugKey) {
+        lastLoggedFranceKeyRef.current = debugKey;
+        // eslint-disable-next-line no-console
+        console.log("[FR_LAST_TX_DEBUG] RUNTIME_DATA_SHAPE", {
+          fr_resultType: fr?.resultType,
+          fr_property_transactionValue: fr?.property?.transactionValue,
+          fr_property_transactionDate: fr?.property?.transactionDate,
+          pr_last_transaction: (pr as any)?.last_transaction,
+          fr_valuation_display_last_sale_price: fvForTx?.last_sale_price,
+          fr_valuation_display_last_sale_date: fvForTx?.last_sale_date,
+          parsed_keys: parsed ? Object.keys(parsed) : [],
+          computed_lastTxAmountPositive: lastTxAmountPositive,
+          computed_referenceSaleValue: referenceSaleValue,
+        });
+      }
+    }
 
     const dateText = isLoadingNow ? "—" : referenceSaleValue ?? "—";
 
