@@ -300,16 +300,25 @@ export function FranceApartmentSheet({
       : effectiveDetectClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
 
-  // Lot prompt required: apartment detected AND no lot provided.
+  // Lot input: use backend flag as source of truth. Never show when detect_class === "house".
+  const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
+  const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
+  const detectClassIsHouse = frDetectFinalClass === "house";
   const lotPromptGenuinelyRequired =
-    frDetectFinalClass === "apartment" && !(requestedLot ?? "").trim();
+    backendShouldPromptLot && !detectClassIsHouse && !(requestedLot ?? "").trim();
 
-  // Apartment block active: apartment + no lot + not yet submitted. Triggers lot prompt UI.
+  // Apartment block active: backend wants lot + no lot + not yet submitted. Triggers lot prompt UI.
   const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
 
-  // Lot prompt visible when apartment block active or apartment+no-lot with input shown.
-  const lotPromptVisible =
-    apartmentBlockActive || (frDetectFinalClass === "apartment" && !(requestedLot ?? "").trim() && shouldShowApartmentInput);
+  // Lot prompt visible: backend says show AND not house. Do not depend on detect_class for visibility.
+  const lotPromptVisible = backendShouldPromptLot && !detectClassIsHouse;
+
+  const frLotPromptVisibleReason =
+    detectClassIsHouse
+      ? "house_blocks_lot_input"
+      : backendShouldPromptLot
+        ? "fr_should_prompt_lot_true"
+        : "fr_should_prompt_lot_false_or_unset";
 
   // House-direct flow: ONLY when final detect class is house or when we have exact_house result.
   // If frDetectFinalClass === "apartment", isHouseDirectFlow must be false (no override).
@@ -358,10 +367,10 @@ export function FranceApartmentSheet({
 
   const resultCardBlocked = apartmentBlockActive;
 
-  // Strict UI gate for apartment flow: when apartment block active, reset to lot prompt state.
+  // Strict UI gate for lot-prompt flow: when block active, reset to lot prompt state.
   React.useEffect(() => {
     if (isHouseDirectFlow) return;
-    if (frDetectFinalClass !== "apartment") return;
+    if (!backendShouldPromptLot || detectClassIsHouse) return;
     if (!resultCardBlocked) return;
 
     if (isDev) {
@@ -380,7 +389,7 @@ export function FranceApartmentSheet({
     if (resolvedForDisplay != null) setResolvedForDisplay(null);
     if (isMoreDetailsOpen) setIsMoreDetailsOpen(false);
     if (isExpanded) setIsExpanded(false);
-  }, [isHouseDirectFlow, frDetectFinalClass, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded, isDev]);
+  }, [isHouseDirectFlow, backendShouldPromptLot, detectClassIsHouse, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded, isDev]);
 
   const displayConfidence = React.useMemo(() => {
     return coerceConfidenceLabel(normalized?.confidence as unknown);
@@ -445,7 +454,7 @@ export function FranceApartmentSheet({
     | "searched_no_exact_match_but_building_exists_state"
     | "no_result_state";
 
-  const apartmentLotGateActive = effectiveDetectClass === "apartment" && !(requestedLot ?? "").trim();
+  const apartmentLotGateActive = lotPromptGenuinelyRequired;
 
   const phase: Phase = React.useMemo(() => {
     if (apartmentLotGateActive) return "initial_building_state";
@@ -469,7 +478,7 @@ export function FranceApartmentSheet({
     if (isDev) console.log("[FR_UI] direct_house_flow_chosen");
     setHasSubmittedLotSearch(true);
     setIsResultCardOpen(true);
-  }, [frDetectFinalClass, lotPromptGenuinelyRequired, shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, frAddressFetchDone, effectiveData, isDev]);
+  }, [frDetectFinalClass, lotPromptGenuinelyRequired, shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, frAddressFetchDone, effectiveData, isDev, backendShouldPromptLot, detectClassIsHouse]);
 
   React.useEffect(() => {
     if (!isDev) return;
@@ -602,8 +611,8 @@ export function FranceApartmentSheet({
         source,
       });
     }
-    // Hard block: apartment-first flow requires a lot before any final card can render.
-    if (effectiveDetectClass === "apartment" && !lot) {
+    // Hard block: when backend requires lot, block until lot is provided.
+    if (lotPromptGenuinelyRequired && !lot) {
       if (isDev)
         console.log("[FR_UI_DEBUG]", {
           detectClass: effectiveDetectClass,
@@ -620,7 +629,7 @@ export function FranceApartmentSheet({
         });
       return;
     }
-    if (effectiveDetectClass === "apartment" && isLoading) {
+    if (lotPromptGenuinelyRequired && isLoading) {
       if (isDev)
         console.log("[FR_UI_DEBUG]", {
           detectClass: effectiveDetectClass,
@@ -658,7 +667,7 @@ export function FranceApartmentSheet({
         source,
       });
     }
-  }, [lotInput, requestedLot, hasSubmittedLotSearch, effectiveDetectClass, isDev, isLoading, normalized]);
+  }, [lotInput, requestedLot, hasSubmittedLotSearch, lotPromptGenuinelyRequired, effectiveDetectClass, isDev, isLoading, normalized]);
 
   const prevIsLoadingRef = React.useRef<boolean>(false);
   const lastLoggedFranceKeyRef = React.useRef<string | null>(null);
@@ -670,7 +679,7 @@ export function FranceApartmentSheet({
     // Detect transition: lot-search request was in-flight -> now resolved.
     if (prevIsLoadingRef.current && !isLoading) {
       const lotSubmitted = !!(requestedLot ?? "").trim();
-      const resultCardBlocked = effectiveDetectClass === "apartment" && !lotSubmitted;
+      const resultCardBlocked = lotPromptGenuinelyRequired && !lotSubmitted;
       const responsePayloadTag = (normalized as any)?.resultType ?? (data as any)?.message ?? null;
       const responseStatus = (normalized as any)?.success ?? null;
 
@@ -721,7 +730,7 @@ export function FranceApartmentSheet({
       }
     }
     prevIsLoadingRef.current = isLoading;
-  }, [hasSubmittedLotSearch, isLoading, requestedLot, effectiveDetectClass, normalized, isDev, data]);
+  }, [hasSubmittedLotSearch, isLoading, requestedLot, lotPromptGenuinelyRequired, normalized, isDev, data]);
 
   // Capture ONLY the final resolved result for the active lot request.
   // This prevents intermediate flashes from stale building-only payloads.
@@ -1368,7 +1377,8 @@ export function FranceApartmentSheet({
                       <div>fr_detect_final_class: {frDetectFinalClass}</div>
                       <div>fr_should_prompt_lot: {toDebugStr(parsed?.prompt_for_apartment ?? rd?.fr_should_prompt_lot)}</div>
                       <div>fr_lot_prompt_visible: {String(lotPromptVisible)}</div>
-                      <div>fr_lot_prompt_reason: {lotPromptGenuinelyRequired ? "apartment_no_lot" : "—"}</div>
+                      <div>fr_lot_prompt_visible_reason: {frLotPromptVisibleReason}</div>
+                      <div>fr_lot_prompt_reason: {lotPromptGenuinelyRequired ? "backend_requires_lot" : "—"}</div>
                       <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
                       <div>fr_ui_house_flow_active: {String(isHouseDirectFlow)}</div>
                       <div>fr_ui_apartment_block_active: {String(apartmentBlockActive)}</div>
@@ -1636,7 +1646,7 @@ export function FranceApartmentSheet({
             </button>
           </div>
 
-          {!isHouseLikeUI && phase === "initial_building_state" && availableLots.length > 0 && (isApartmentLikely || showOptionalAptInput) ? (
+          {lotPromptVisible && phase === "initial_building_state" && availableLots.length > 0 ? (
             <div className="mt-3">
               <div className="text-[10px] font-medium text-zinc-400">Try one of these lot numbers</div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -1657,7 +1667,7 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
-          {((!isHouseLikeUI && hasMultiUnitEvidence) || apartmentBlockActive) ? (
+          {lotPromptVisible ? (
             <div className="mt-3 rounded-xl border border-zinc-500/20 bg-black/35 px-3 py-2.5">
               <div className="text-[10px] font-medium text-zinc-400">Apartment / lot number</div>
               <div className="mt-2 flex gap-2">
