@@ -183,7 +183,14 @@ function normalizeCityForFranceSource(city: string): string {
   return base;
 }
 
-/** Normalize street for exact DVF matching: uppercase, accents removed, prefixes and stopwords stripped. */
+/** French street type prefixes for normalization. */
+const FR_STREET_TYPES =
+  /^(RUE|AVENUE|AV|BOULEVARD|BD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i;
+
+/** Weak linking words to strip from street core (longer first). */
+const FR_STREET_STOPWORDS = /\b(DE LA|DE L(?=\s)|DES|DU|DE|LA|LE|LES)\b/gi;
+
+/** Normalize street for exact DVF matching: uppercase, accents removed, stopwords stripped. Returns core for matching. */
 function normalizeStreetForExactMatch(street: string): string {
   const s = (street ?? "")
     .trim()
@@ -194,12 +201,28 @@ function normalizeStreetForExactMatch(street: string): string {
     .replace(/\s+/g, " ")
     .trim();
   if (!s) return "";
-  const withoutPrefix = s.replace(
-    /^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\.?\s+/i,
-    ""
-  ).trim();
-  const withoutStopwords = withoutPrefix.replace(/\b(DU|DE|DES|LA|LE)\b/gi, " ").replace(/\s+/g, " ").trim();
+  const withoutPrefix = s.replace(FR_STREET_TYPES, "").trim();
+  const withoutStopwords = withoutPrefix.replace(FR_STREET_STOPWORDS, " ").replace(/\s+/g, " ").trim();
   return withoutStopwords;
+}
+
+/** Parse street into type + core for France. */
+function frParseStreet(raw: string): { type: string; core: string } {
+  const s = (raw ?? "").trim().toUpperCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!s) return { type: "", core: "" };
+  const prefixMatch = s.match(FR_STREET_TYPES);
+  const type = prefixMatch ? prefixMatch[1].toUpperCase().replace(/^AV$/, "AVENUE").replace(/^BD$/, "BOULEVARD").replace(/^CHE$/, "CHEMIN").replace(/^IMP$/, "IMPASSE").replace(/^ALL$/, "ALLEE").replace(/^PL$/, "PLACE").replace(/^SQ$/, "SQUARE").replace(/^PROM$/, "PROMENADE") : "";
+  const rest = prefixMatch ? s.slice(prefixMatch[0].length).trim() : s;
+  const core = rest.replace(FR_STREET_STOPWORDS, " ").replace(/\s+/g, " ").trim();
+  return { type, core };
+}
+
+/** Normalize house number for France: BIS→B, TER→T, QUATER→Q, collapse spaces/dashes. */
+function normalizeHouseNumberForFrance(hn: string): string {
+  let s = (hn ?? "").toString().trim().toUpperCase();
+  s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
+  s = s.replace(/[-–—\s]+/g, "").replace(/[^0-9A-Z]/g, "");
+  return s || "";
 }
 
 /** Check if two city strings match (handles arrondissements). */
@@ -1587,9 +1610,15 @@ export async function GET(request: NextRequest) {
       const noPostcode = !postcodeNorm;
       const isRuralPattern = hasLieuDit || isCheminRural || noPostcode;
 
-      // Heuristic building: full address + NOT rural. Never depends on city/department alone.
+      const streetUpperForHeuristic = (streetForHeuristic || "").toUpperCase();
+      const isVillaLikePattern =
+        (/\b(GOLF|VILLA|PARC|DOMAINE)\b/i.test(streetUpperForHeuristic) && pcDept === "64") ||
+        (/^AVENUE\s+DU\s+GOLF/i.test(streetUpperForHeuristic) || /^AV\.?\s+DU\s+GOLF/i.test(streetUpperForHeuristic));
       const isLikelyBuilding =
-        Boolean(houseNumberNorm && streetNorm && cityNorm) && !isRuralPattern;
+        Boolean(houseNumberNorm && streetNorm && cityNorm && postcodeNorm) &&
+        !isRuralPattern &&
+        !strongHouseSignals &&
+        !isVillaLikePattern;
 
       let frBuildingDetectionReason: string;
       if (!isLikelyBuilding) {
@@ -1601,7 +1630,11 @@ export async function GET(request: NextRequest) {
               ? "no_city"
               : isRuralPattern
                 ? "rural_pattern"
-                : "none";
+                : isVillaLikePattern
+                  ? "villa_like_pattern"
+                  : strongHouseSignals
+                    ? "strong_house_signals"
+                    : "none";
       } else {
         frBuildingDetectionReason = "urban_address_not_rural";
       }
@@ -1613,7 +1646,7 @@ export async function GET(request: NextRequest) {
         apartmentEvidenceFromFacts ||
         isMultiUnitDetected;
 
-      // Classification: apartment ONLY with positive evidence. Otherwise: strong house → house, else unclear.
+      // Hybrid classification. Priority: 1) strong apartment, 2) strong house, 3) likely building heuristic, 4) unclear.
       let detectClass: "apartment" | "house" | "unclear";
       const detectUsedLot = false;
       let detectOverrideReason: string | null = null;
@@ -1632,9 +1665,12 @@ export async function GET(request: NextRequest) {
         detectClass = "house";
         detectOverrideReason = "intelligence_house_signals";
         frDetectionReason = "intelligence_house_signals";
+      } else if (isLikelyBuilding) {
+        detectClass = "apartment";
+        frDetectionReason = "likely_building_heuristic";
       } else {
         detectClass = "unclear";
-        detectOverrideReason = "no_positive_apartment_evidence";
+        detectOverrideReason = "no_positive_evidence";
         frDetectionReason = "unclear_no_positive_evidence";
       }
 
@@ -1648,7 +1684,11 @@ export async function GET(request: NextRequest) {
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
       const flowAsApartment = detectClass === "apartment";
-      const shouldPromptLot = flowAsApartment && !submittedLotPresent && allowMultiUnitFromQueries;
+      const shouldPromptLotInitial =
+        (flowAsApartment || isLikelyBuilding) &&
+        !submittedLotPresent &&
+        (allowMultiUnitFromQueries || isLikelyBuilding);
+      let shouldPromptLot = detectClass !== "house" && shouldPromptLotInitial;
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
@@ -3787,8 +3827,17 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
       frRuntimeDebug.no_data_reason = noDataReasonParts.join(" | ") || "unknown";
 
-      // Req 3: If apartment (or likely building) + no lot and we'd return no_data, prompt for lot instead.
-      if (flowAsApartment && !submittedLotPresent) {
+      const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
+      const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
+      const shouldPromptLotFromBuilding =
+        detectClass !== "house" &&
+        !submittedLotPresent &&
+        (flowAsApartment ||
+          isLikelyBuilding ||
+          buildingRowsCount > 0 ||
+          buildingCandidatesCount > 0);
+      if (shouldPromptLotFromBuilding) {
+        frRuntimeDebug.fr_should_prompt_lot = true;
         console.log("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
         return frReturn(
           {
