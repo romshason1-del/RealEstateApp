@@ -693,6 +693,8 @@ export async function GET(request: NextRequest) {
         fr_selected_layer_quality: null as string | null,
         fr_building_value_reliable: null as boolean | null,
         fr_selected_reason: null as string | null,
+        fr_building_profile_class: null as string | null,
+        fr_building_profile_row_count: null as number | null,
       };
 
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
@@ -1730,24 +1732,57 @@ export async function GET(request: NextRequest) {
 
       console.log("[FR_INIT] about to run first query");
       let detectRows: Array<Record<string, unknown>> = [];
+      let profileRows: Array<Record<string, unknown>> = [];
+
+      const frBqPostcodeMatchSqlProfile = `LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')`;
+      const profileQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
+        ? `
+        SELECT building_key, postcode, normalized_street, house_number,
+               total_transactions, distinct_unit_count, avg_price_m2, median_price_m2, building_class
+        FROM \`streetiq-bigquery.streetiq_gold.france_building_profile\`
+        WHERE ${frBqPostcodeMatchSqlProfile}
+          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND (
+            normalized_street = TRIM(@normalizedStreet)
+            OR normalized_street LIKE CONCAT('%', TRIM(@normalizedStreet), '%')
+            OR TRIM(@normalizedStreet) LIKE CONCAT('%', normalized_street, '%')
+          )
+        ORDER BY total_transactions DESC
+        LIMIT 1
+        `
+        : null;
+
+      const detectParams = {
+        city: cityNormForSource || cityNorm || "",
+        city_main: cityNormForSource || cityNorm || "",
+        postcode: postcodeNormForSource || "",
+        normalizedStreet: streetNormForSource || "",
+        house_number: houseNumberNormForSource || "",
+      };
+
       try {
         console.log("[FR_GOLD] before_intelligence_detection_query");
-        const detectParams = {
-          city: cityNormForSource || cityNorm || "",
-          city_main: cityNormForSource || cityNorm || "",
-          postcode: postcodeNormForSource || "",
-          normalizedStreet: streetNormForSource || "",
-          house_number: houseNumberNormForSource || "",
-        };
-        console.log("[FR_PARAMS]", { query: "intelligence_detection_query", ...detectParams });
-        [detectRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-          {
-            query: detectionQuery,
-            params: detectParams,
-          },
-          "intelligence_detection_query"
-        );
+        const queries: Promise<unknown>[] = [
+          queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: detectionQuery, params: detectParams },
+            "intelligence_detection_query"
+          ),
+        ];
+        if (profileQuery) {
+          queries.push(
+            queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: profileQuery, params: detectParams },
+              "france_building_profile"
+            )
+          );
+        }
+        const results = await Promise.all(queries);
+        [detectRows] = results[0] as [Array<Record<string, unknown>>];
+        if (results.length > 1) {
+          [profileRows] = results[1] as [Array<Record<string, unknown>>];
+        }
         console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
+        if (profileRows?.length) console.log("[FR_GOLD] france_building_profile", { rows: profileRows.length });
       } catch (err) {
         console.error("[FR_ERROR] query failed", err);
         return new Response(JSON.stringify({ success: false, error: "Query failed" }), { status: 200 });
@@ -1765,8 +1800,17 @@ export async function GET(request: NextRequest) {
       });
 
       const detectRow = (detectRows?.[0] ?? {}) as Record<string, unknown>;
-      const isMultiUnitDetected = getBool(detectRow, ["is_multi_unit", "isMultiUnit", "multi_unit", "is_multiunit"]);
-      const isHouseLikeDetected = getBool(detectRow, ["is_house_like", "isHouseLike", "house_like", "is_house_like_flag", "houseLike"]);
+      const profileRow = (profileRows?.[0] ?? {}) as Record<string, unknown>;
+      const profileBuildingClass = getString(profileRow, ["building_class"])?.toLowerCase() ?? "";
+      const profileSaysApartment = profileBuildingClass === "apartment_building";
+      const profileSaysHouse = profileBuildingClass === "likely_house";
+      frRuntimeDebug.fr_building_profile_class = profileBuildingClass || null;
+      frRuntimeDebug.fr_building_profile_row_count = profileRow && profileBuildingClass ? (profileRow.total_transactions as number) ?? null : null;
+
+      let isMultiUnitDetected = getBool(detectRow, ["is_multi_unit", "isMultiUnit", "multi_unit", "is_multiunit"]);
+      let isHouseLikeDetected = getBool(detectRow, ["is_house_like", "isHouseLike", "house_like", "is_house_like_flag", "houseLike"]);
+      if (profileSaysApartment) isMultiUnitDetected = true;
+      if (profileSaysHouse) isHouseLikeDetected = true;
 
       const detectedTypeStr = (getString(detectRow, [
         "detected_property_type",
