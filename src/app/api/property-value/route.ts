@@ -595,6 +595,10 @@ export async function GET(request: NextRequest) {
         fr_rich_source_building_count: null as number | null,
         fr_used_rich_source: false,
         fr_exact_source_layer: null as "facts" | "rich_source" | "none" | null,
+        fr_same_address_count: null as number | null,
+        fr_same_address_used: false,
+        fr_match_street_normalized: null as string | null,
+        fr_match_house_number: null as string | null,
         fr_cache_hit: false,
         fr_cache_bypass_reason: null,
         fr_failed_stage: !frParserStarted && frHadRawInput ? "parse_entry" : null,
@@ -1997,6 +2001,12 @@ export async function GET(request: NextRequest) {
         TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
         OR REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(CAST(house_number AS STRING))), r'\\s+', ''), r'[^0-9A-Z]', '') = @house_number_norm
       )`;
+      // Rich source (DVF) uses relaxed matching: UPPER(street) LIKE '%NATIONALE%' and strict string house_number
+      const frBqStreetMatchSqlRichSource =
+        streetNormForSource && streetNormForSource.length >= 2
+          ? `(${frBqStreetMatchSql} OR UPPER(TRIM(CAST(street AS STRING))) LIKE CONCAT('%', UPPER(TRIM(@street_core)), '%'))`
+          : frBqStreetMatchSql;
+      const frBqHouseNumberMatchSqlRichSource = `TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))`;
       const extractHouseNumberNumeric = (hn: string): number | null => {
         const m = /^\d+/.exec(String(hn ?? "").replace(/\s+/g, ""));
         return m ? parseInt(m[0], 10) : null;
@@ -2096,20 +2106,22 @@ export async function GET(request: NextRequest) {
 
       // Layer 2: france_dvf_rich_source fallback when facts returns no same-address rows
       let richSourceRows: Array<Record<string, unknown>> = [];
-      if (exactRows.length === 0 && postcodeNormForSource && houseNumberNormForSource && streetNormForExactMatch) {
+      const streetCoreForRichSource = streetNormForSource || streetNormForExactMatch || "";
+      if (exactRows.length === 0 && postcodeNormForSource && houseNumberNormForSource && (streetNormForExactMatch || streetNormForSource)) {
         try {
+          const richSourceExactParams = { ...exactParams, street_core: streetCoreForRichSource };
           const richSourceQueryBase = `
             SELECT country, city, postcode, street, house_number, unit_number, property_type, surface_m2, last_sale_price, last_sale_date, price_per_m2
             FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND ${frBqPostcodeMatchSql}
               AND ${frBqCityMatchSql}
-              AND ${frBqStreetMatchSql}
-              AND ${frBqHouseNumberMatchSql}
+              AND ${frBqStreetMatchSqlRichSource}
+              AND ${frBqHouseNumberMatchSqlRichSource}
             LIMIT 300
           `;
           const [richRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            { query: richSourceQueryBase.trim(), params: exactParams },
+            { query: richSourceQueryBase.trim(), params: richSourceExactParams },
             "france_dvf_rich_source_fallback"
           );
           richSourceRows = (richRows ?? []) as Array<Record<string, unknown>>;
@@ -2139,7 +2151,12 @@ export async function GET(request: NextRequest) {
       const exactRowsCount = exactRows.length;
       if (exactRowsCount > 0) {
         frRuntimeDebug.fr_source_lookup_failed_reason = null;
-      } else if (postcodeNormForSource || cityNormForSource || streetNormForSource) {
+        frRuntimeDebug.fr_same_address_count = exactRowsCount;
+        frRuntimeDebug.fr_same_address_used = true;
+        frRuntimeDebug.fr_match_street_normalized = streetNormForExactMatch || streetNormForSource || null;
+        frRuntimeDebug.fr_match_house_number = houseNumberNormForSource || null;
+      }
+      if (exactRowsCount === 0 && (postcodeNormForSource || cityNormForSource || streetNormForSource)) {
         frRuntimeDebug.fr_source_lookup_failed_reason =
           !streetNormForSource ? "no_street_for_lookup" : !postcodeNormForSource && !cityNormForSource ? "no_postcode_or_city" : "no_matching_rows_in_property_latest_facts";
       }
@@ -2680,19 +2697,20 @@ export async function GET(request: NextRequest) {
           }
           if (rawCount < 2 && postcodeNormForSource && houseNumberNormForSource) {
             try {
+              const richSourceBuildingParams = { ...similarParams, street_core: streetCoreForRichSource };
               const richSourceBuildingQuery = `
                 SELECT surface_m2, price_per_m2, last_sale_price, last_sale_date, property_type, house_number, unit_number AS lot_col
                 FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
                 WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
                   AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
                   AND ${frBqPostcodeMatchSql}
-                  AND ${frBqStreetMatchSql}
-                  AND ${frBqHouseNumberMatchSql}
+                  AND ${frBqStreetMatchSqlRichSource}
+                  AND ${frBqHouseNumberMatchSqlRichSource}
                   AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
                 LIMIT 300
               `;
               const [richRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-                { query: richSourceBuildingQuery.trim(), params: similarParams },
+                { query: richSourceBuildingQuery.trim(), params: richSourceBuildingParams },
                 "building_france_dvf_rich_source_fallback"
               );
               const richArr = (richRows ?? []) as Array<Record<string, unknown>>;
@@ -3056,8 +3074,8 @@ export async function GET(request: NextRequest) {
                 WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
                   AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
                   AND ${frBqPostcodeMatchSql}
-                  AND ${frBqStreetMatchSql}
-                  AND ${frBqHouseNumberMatchSql}
+                  AND ${frBqStreetMatchSqlRichSource}
+                  AND ${frBqHouseNumberMatchSqlRichSource}
                   AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
                 LIMIT 300
               `;
@@ -3067,6 +3085,7 @@ export async function GET(request: NextRequest) {
                 postcode: postcodeNormForSource || "",
                 street: streetNorm || "",
                 street_normalized: streetNormForSource || "",
+                street_core: streetCoreForRichSource,
                 house_number: houseNumberNormForSource || "",
                 house_number_norm: houseNumberNormForMatch || "",
               };
@@ -3632,6 +3651,66 @@ export async function GET(request: NextRequest) {
             );
           }
         }
+        // When facts has no same-address rows but rich source does, use rich source for building_level
+        if (
+          sameBuildingUsableRowsCount < MIN_SAME_BUILDING_USABLE_ROWS &&
+          frRuntimeDebug.fr_exact_source_layer === "rich_source" &&
+          exactRows.length >= MIN_SAME_BUILDING_USABLE_ROWS
+        ) {
+          const richUsable = (exactRows as Array<Record<string, unknown>>).filter((r) => {
+            const surf = parseMaybeDecimal((r as any).surface_m2);
+            const ppm2 = parseMaybeDecimal((r as any).price_per_m2);
+            return surf != null && surf > 0 && ppm2 != null && ppm2 > 0;
+          });
+          const richSurfaces = richUsable.map((r) => parseMaybeDecimal((r as any).surface_m2)).filter((v): v is number => v != null && v > 0);
+          const medianSurf = richSurfaces.length > 0 ? medianNumber(richSurfaces) : null;
+          const richPpmValues = richUsable.map((r) => parseMaybeDecimal((r as any).price_per_m2)).filter((v): v is number => v != null && v > 0);
+          const medianPpmRich = medianNumber(richPpmValues);
+          if (medianSurf != null && medianPpmRich != null && medianPpmRich > 0 && richUsable.length >= MIN_SAME_BUILDING_USABLE_ROWS) {
+            const medianPpmEuro = frPropertyLatestFactsMoneyToEuros(medianPpmRich) ?? 0;
+            const estimated = Math.round(medianSurf * medianPpmEuro);
+            frRuntimeDebug.property_latest_facts_money_divisor = 1000;
+            frRuntimeDebug.winning_step = "building_level";
+            frRuntimeDebug.winning_source_label = "Similar properties in this building (from DVF rich source)";
+            frRuntimeDebug.has_surface_for_estimate = true;
+            frRuntimeDebug.chosen_surface_value = medianSurf;
+            frRuntimeDebug.winning_median_price_per_m2 = medianPpmEuro;
+            frRuntimeDebug.building_rows_count = exactRows.length;
+            frRuntimeDebug.building_usable_rows_count = richUsable.length;
+            return frReturn(
+              {
+                address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
+                data_source: "properties_france",
+                fr_detect: detectClass,
+                property_result: {
+                  exact_value: estimated,
+                  exact_value_message: null,
+                  value_level: "building-level",
+                  last_transaction: {
+                    amount: 0,
+                    date: null,
+                    message: "No exact recent transaction available",
+                  },
+                  street_average: null,
+                  street_average_message: "Similar properties in this building (from DVF rich source)",
+                  livability_rating: "FAIR",
+                },
+                fr: emptyFranceResponse({
+                  success: true,
+                  resultType: "building_level",
+                  confidence: "high",
+                  requestedLot: requestedLotNorm,
+                  normalizedLot: normalizedRequestedLot,
+                  property: null,
+                  buildingStats: { transactionCount: richUsable.length, avgPricePerSqm: medianPpmEuro, avgTransactionValue: null },
+                  comparables: [],
+                  matchExplanation: "Similar properties in this building (median from same-address rows in DVF rich source).",
+                }),
+              },
+              "valuation_response"
+            );
+          }
+        }
         // If building-level estimate can't be computed, continue the ladder to street/commune fallback.
         }
       }
@@ -3661,12 +3740,14 @@ export async function GET(request: NextRequest) {
       if (!houseNumberNorm) console.log("[FR_STEP] building_lookup_done");
 
       // Same-street house fallback: when exact_house failed but house-like rows exist on same street.
+      // Do NOT use street_fallback when same-address rows exist (exact_address or building_level preferred).
       const fallbackSourceSameStreetHouse = "Similar houses on same street";
       if (
         detectClass === "house" &&
         streetNorm &&
         postcodeNorm &&
-        cityNorm
+        cityNorm &&
+        exactRowsCount === 0
       ) {
         const sameStreetHouseQuery = `
           SELECT price_per_m2, last_sale_date, house_number
@@ -4044,7 +4125,7 @@ export async function GET(request: NextRequest) {
       }
       console.log("[FR_STREET] fallback_decision=" + streetFallbackDecision);
 
-      if (streetEstimate) {
+      if (streetEstimate && exactRowsCount === 0) {
         const streetConfidence = streetUsableAvgRowsCount <= 2 ? "low" : "medium";
         console.log("[FR_DEBUG] winning_valuation_step", {
           winningValuationStep: "street_fallback",
