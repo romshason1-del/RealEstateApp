@@ -1322,26 +1322,19 @@ export function FranceApartmentSheet({
                 ) : null}
               </div>
 
-              {/* 2) Price per m² + Last transaction – compact row */}
-              <div className="grid grid-cols-2 gap-2">
-                {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
-                  <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                    <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                      Price per m²
-                    </div>
-                    <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
-                      {formatFranceEuroPerSqmFromUnknown(displayPricePerSqm, { medianSuffix: false })}
-                    </div>
-                  </div>
-                ) : null}
-                <div className={`rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2 ${!(displayPricePerSqm != null && (hasValue || valueRange != null)) ? "col-span-2" : ""}`}>
+              {/* 2) Price per m² (boxed) + Last transaction (inline row) */}
+              {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
+                <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                   <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                    Last transaction
+                    Price per m²
                   </div>
                   <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
-                    {lastTransactionSummaryLine}
+                    {formatFranceEuroPerSqmFromUnknown(displayPricePerSqm, { medianSuffix: false })}
                   </div>
                 </div>
+              ) : null}
+              <div className="text-[13px] font-medium leading-tight text-zinc-300/95">
+                Last transaction: {lastTransactionSummaryLine}
               </div>
 
               {/* 3) Explanation */}

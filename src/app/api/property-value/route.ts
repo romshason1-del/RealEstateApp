@@ -1150,6 +1150,30 @@ export async function GET(request: NextRequest) {
           fr_final_has_display_value: finalHasDisplay,
           fr_final_render_path: frRuntimeDebug.fr_final_render_path,
         });
+        const priceLevel = frRuntimeDebug.fr_area_price_level as string | null | undefined;
+        const liquidity = frRuntimeDebug.fr_area_liquidity as string | null | undefined;
+        if (tag === "valuation_response" && outPayload.property_result && priceLevel) {
+          const pr = outPayload.property_result as Record<string, unknown>;
+          const derived: "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT" =
+            priceLevel === "premium"
+              ? liquidity === "high"
+                ? "VERY GOOD"
+                : liquidity === "medium"
+                  ? "GOOD"
+                  : "GOOD"
+              : priceLevel === "moderate"
+                ? liquidity === "high"
+                  ? "GOOD"
+                  : liquidity === "medium"
+                    ? "GOOD"
+                    : "FAIR"
+                : priceLevel === "affordable"
+                  ? liquidity === "high"
+                    ? "FAIR"
+                    : "FAIR"
+                  : (pr.livability_rating as "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT") ?? "FAIR";
+          pr.livability_rating = derived;
+        }
         return NextResponse.json(
           { ...outPayload, fr_runtime_debug: frRuntimeDebug },
           status ? { status } : undefined
@@ -1834,8 +1858,8 @@ export async function GET(request: NextRequest) {
             const medianEuros = frPropertyLatestFactsMoneyToEuros(areaMedianPpm2Raw) ?? 0;
             frRuntimeDebug.fr_area_median_ppm2 = medianEuros;
             frRuntimeDebug.fr_area_tx_count = areaTxCount;
-            if (medianEuros >= 6000) frRuntimeDebug.fr_area_price_level = "premium";
-            else if (medianEuros >= 3500) frRuntimeDebug.fr_area_price_level = "moderate";
+            if (medianEuros >= 5000) frRuntimeDebug.fr_area_price_level = "premium";
+            else if (medianEuros >= 3000) frRuntimeDebug.fr_area_price_level = "moderate";
             else if (medianEuros > 0) frRuntimeDebug.fr_area_price_level = "affordable";
             if (areaTxCount != null) {
               if (areaTxCount < 5) frRuntimeDebug.fr_area_liquidity = "low";
