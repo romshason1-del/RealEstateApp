@@ -724,8 +724,12 @@ export async function GET(request: NextRequest) {
         fr_lot_applied: null as boolean | null,
         fr_address_match_type: null as string | null,
         fr_no_result_reason: null as string | null,
+        fr_terminal_no_result_reason: null as string | null,
+        fr_rich_source_candidate_count: null as number | null,
+        fr_sql_filter_summary: null as string | null,
       };
 
+      frRuntimeDebug.fr_input_address_raw = fullRawAddress || (addressParam || rawInputAddress || "").trim() || null;
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
       frRuntimeDebug.raw_aptNumber_param = searchParams.get("aptNumber");
       frRuntimeDebug.request_url_seen_by_api = request.url;
@@ -1694,6 +1698,10 @@ export async function GET(request: NextRequest) {
       console.log("[FR_SOURCE] normalized_postcode=" + (postcodeNormForSource || "(empty)"));
       console.log("[FR_SOURCE] lookup_keys=postcode|street|house|city");
 
+      frRuntimeDebug.fr_input_address_normalized = [houseNumberNorm, streetNorm, postcodeNorm, cityNorm].filter(Boolean).join(", ") || null;
+      frRuntimeDebug.fr_input_city_normalized = cityNormForSource || cityNorm || null;
+      frRuntimeDebug.fr_input_street_normalized = streetNormForSource || streetNormForExactMatch || streetNorm || null;
+
       const frBqCityNormalizedExpr = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(city AS STRING)), NFD)), r'\\p{M}', ''), r'\\s*\\d{1,2}(?:ER|E|EME)?(?:\\s*ARRONDISSEMENT)?\\s*$', ''))`;
       const frBqCityMatchSql = cityNormForSource
         ? `(${frBqCityNormalizedExpr} = UPPER(@city_main) OR ${frBqCityNormalizedExpr} LIKE CONCAT(UPPER(@city_main), ' %'))`
@@ -1963,8 +1971,9 @@ export async function GET(request: NextRequest) {
         console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
         if (profileRows?.length) console.log("[FR_GOLD] france_building_profile", { rows: profileRows.length });
       } catch (err) {
-        console.error("[FR_ERROR] query failed", err);
-        return new Response(JSON.stringify({ success: false, error: "Query failed" }), { status: 200 });
+        console.error("[FR_ERROR] intelligence_profile_query_failed_continuing_with_valutation", err);
+        detectRows = [];
+        profileRows = [];
       }
 
       // Debug: log exact query params + raw row result (do not change logic).
@@ -2138,6 +2147,12 @@ export async function GET(request: NextRequest) {
         frDetectionReason = "fallback_low_tx_house";
         frDetectReason = `1-2 transactions at address with house-like signals`;
         frDetectConfidence = "low";
+      } else if (isLikelyBuilding && !hasPositiveApartmentEvidence && /^(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(streetForHeuristic)) {
+        detectClass = "house";
+        detectOverrideReason = "house_street_pattern";
+        frDetectionReason = "house_street_pattern";
+        frDetectReason = "Street pattern (chemin/route/etc) indicates house, no apartment evidence";
+        frDetectConfidence = "medium";
       } else if (isLikelyBuilding) {
         detectClass = "apartment";
         frDetectionReason = "likely_building_heuristic";
@@ -5553,11 +5568,16 @@ export async function GET(request: NextRequest) {
       if (frRuntimeDebug.fr_commune_emergency_candidate_count == null) frRuntimeDebug.fr_commune_emergency_candidate_count = 0;
       frRuntimeDebug.fr_terminal_no_data_reason = noReliableReason;
       frRuntimeDebug.fr_no_result_reason = noReliableReason;
+      frRuntimeDebug.fr_terminal_no_result_reason = noReliableReason;
       frRuntimeDebug.fr_final_winner_layer = null;
       frRuntimeDebug.fr_fallback_blocked_no_result = false;
       frRuntimeDebug.fr_exact_candidate_count = frRuntimeDebug.fr_source_lookup_exact_count ?? exactApartmentRowsCount ?? 0;
       frRuntimeDebug.fr_building_candidate_count = frRuntimeDebug.building_similar_unit_candidates_count ?? sameBuildingUsableRowsCount ?? 0;
       frRuntimeDebug.fr_rich_source_used = frRuntimeDebug.fr_used_rich_source ?? false;
+      frRuntimeDebug.fr_rich_source_candidate_count =
+        Number(frRuntimeDebug.fr_rich_source_exact_count ?? 0) + Number(frRuntimeDebug.fr_rich_source_building_count ?? 0);
+      frRuntimeDebug.fr_sql_filter_summary =
+        "France layers: price_per_m2>0 required; surface_m2/recency/lot/streetNormForExactMatch NOT hard-required";
 
       console.log("[FR_COVERAGE] address=" + addrStr);
       console.log("[FR_COVERAGE] detect_class=" + String(frDetectToUse));
