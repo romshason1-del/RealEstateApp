@@ -4177,6 +4177,24 @@ export async function GET(request: NextRequest) {
             const medianPricePerM2Euro = frPropertyLatestFactsMoneyToEuros(medianPricePerM2) ?? 0;
             frRuntimeDebug.fr_price_variance = computeVariance(pricePerM2ValuesEuro);
             const estimated = Math.round(medianSurfaceM2ForFallback * medianPricePerM2Euro);
+            const buildingLevelTxRows = usablePriceRows
+              .map((r) => ({
+                amount: frPropertyLatestFactsMoneyToEuros(r.last_sale_price) ?? null,
+                date: r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null,
+              }))
+              .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
+            buildingLevelTxRows.sort((a, b) => {
+              if (!a.date) return 1;
+              if (!b.date) return -1;
+              return b.date.localeCompare(a.date);
+            });
+            const buildingLevelBestTx = buildingLevelTxRows.length > 0
+              ? { amount: buildingLevelTxRows[0]!.amount, date: buildingLevelTxRows[0]!.date }
+              : null;
+            const hasBuildingLevelTx = buildingLevelBestTx != null && buildingLevelBestTx.amount > 0;
+            const buildingLevelLastTxPayload = hasBuildingLevelTx
+              ? { amount: buildingLevelBestTx!.amount, date: buildingLevelBestTx!.date, message: null as string | null }
+              : { amount: 0, date: null, message: "No exact recent transaction available" };
             console.log("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
               winningSourceLabel: "Similar properties in this building",
@@ -4198,11 +4216,7 @@ export async function GET(request: NextRequest) {
                   exact_value: estimated,
                   exact_value_message: null,
                   value_level: "building-level",
-                  last_transaction: {
-                    amount: 0,
-                    date: null,
-                    message: "No exact recent transaction available",
-                  },
+                  last_transaction: buildingLevelLastTxPayload,
                   street_average: null,
                   street_average_message: "Similar properties in this building",
                   livability_rating: "FAIR",
@@ -4213,8 +4227,18 @@ export async function GET(request: NextRequest) {
                   confidence: "high",
                   requestedLot: requestedLotNorm,
                   normalizedLot: normalizedRequestedLot,
-                  property: null,
-                  buildingStats: { transactionCount: sameBuildingUsableRowsCount, avgPricePerSqm: medianPricePerM2Euro, avgTransactionValue: null },
+                  property: {
+                    transactionDate: hasBuildingLevelTx ? buildingLevelBestTx!.date : null,
+                    transactionValue: hasBuildingLevelTx ? buildingLevelBestTx!.amount : estimated,
+                    pricePerSqm: medianPricePerM2Euro,
+                    surfaceArea: medianSurfaceM2ForFallback,
+                    rooms: null,
+                    propertyType: detectClass === "house" ? "Maison" : "Appartement",
+                    building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                    postalCode: postcodeNorm || null,
+                    commune: cityNorm || null,
+                  },
+                  buildingStats: { transactionCount: sameBuildingUsableRowsCount, avgPricePerSqm: medianPricePerM2Euro, avgTransactionValue: estimated },
                   comparables: [],
                   matchExplanation: "Similar properties in this building (median from same-address rows).",
                 }),
@@ -4246,6 +4270,24 @@ export async function GET(request: NextRequest) {
           if (medianSurf != null && medianPpmRich != null && medianPpmRich > 0 && richUsable.length >= MIN_SAME_BUILDING_USABLE_ROWS) {
             const medianPpmEuro = medianPpmRich;
             const estimated = Math.round(medianSurf * medianPpmEuro);
+            const richBuildingLevelTxRows = richUsable
+              .map((r) => ({
+                amount: frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price) ?? null,
+                date: (r as any).last_sale_date != null && String((r as any).last_sale_date).trim() ? String((r as any).last_sale_date) : null,
+              }))
+              .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
+            richBuildingLevelTxRows.sort((a, b) => {
+              if (!a.date) return 1;
+              if (!b.date) return -1;
+              return b.date.localeCompare(a.date);
+            });
+            const richBuildingLevelBestTx = richBuildingLevelTxRows.length > 0
+              ? { amount: richBuildingLevelTxRows[0]!.amount, date: richBuildingLevelTxRows[0]!.date }
+              : null;
+            const hasRichBuildingLevelTx = richBuildingLevelBestTx != null && richBuildingLevelBestTx.amount > 0;
+            const richBuildingLevelLastTxPayload = hasRichBuildingLevelTx
+              ? { amount: richBuildingLevelBestTx!.amount, date: richBuildingLevelBestTx!.date, message: null as string | null }
+              : { amount: 0, date: null, message: "No exact recent transaction available" };
             frRuntimeDebug.property_latest_facts_money_divisor = 1000;
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building (from DVF rich source)";
@@ -4266,11 +4308,7 @@ export async function GET(request: NextRequest) {
                   exact_value: estimated,
                   exact_value_message: null,
                   value_level: "building-level",
-                  last_transaction: {
-                    amount: 0,
-                    date: null,
-                    message: "No exact recent transaction available",
-                  },
+                  last_transaction: richBuildingLevelLastTxPayload,
                   street_average: null,
                   street_average_message: "Similar properties in this building (from DVF rich source)",
                   livability_rating: "FAIR",
@@ -4281,8 +4319,18 @@ export async function GET(request: NextRequest) {
                   confidence: "high",
                   requestedLot: requestedLotNorm,
                   normalizedLot: normalizedRequestedLot,
-                  property: null,
-                  buildingStats: { transactionCount: richUsable.length, avgPricePerSqm: medianPpmEuro, avgTransactionValue: null },
+                  property: {
+                    transactionDate: hasRichBuildingLevelTx ? richBuildingLevelBestTx!.date : null,
+                    transactionValue: hasRichBuildingLevelTx ? richBuildingLevelBestTx!.amount : estimated,
+                    pricePerSqm: medianPpmEuro,
+                    surfaceArea: medianSurf,
+                    rooms: null,
+                    propertyType: detectClass === "house" ? "Maison" : "Appartement",
+                    building: `${houseNumberNorm} ${streetNorm}`.trim() || null,
+                    postalCode: postcodeNorm || null,
+                    commune: cityNorm || null,
+                  },
+                  buildingStats: { transactionCount: richUsable.length, avgPricePerSqm: medianPpmEuro, avgTransactionValue: estimated },
                   comparables: [],
                   matchExplanation: "Similar properties in this building (median from same-address rows in DVF rich source).",
                 }),
