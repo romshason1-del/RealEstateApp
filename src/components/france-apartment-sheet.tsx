@@ -1387,6 +1387,8 @@ export function FranceApartmentSheet({
                       <div>fr_lot_used_in_ranking: {toDebugStr(rdLot?.fr_lot_used_in_ranking)}</div>
                       <div>fr_post_lot_candidate_count: {toDebugStr(rdLot?.fr_post_lot_candidate_count)}</div>
                       <div>fr_post_lot_winning_reason: {toDebugStr(rdLot?.fr_post_lot_winning_reason)}</div>
+                      <div>fr_lot_match_type: {toDebugStr(rdLot?.fr_lot_match_type)}</div>
+                      <div>fr_lot_candidate_summary: {toDebugStr(rdLot?.fr_lot_candidate_summary)}</div>
                       <div>fr_lot_prompt_reason: {lotPromptGenuinelyRequired ? "backend_requires_lot" : "—"}</div>
                       <div>fr_ui_result_card_open: {String(isResultCardOpen)}</div>
                       <div>fr_ui_house_flow_active: {String(isHouseDirectFlow)}</div>
@@ -1715,6 +1717,10 @@ export function FranceApartmentSheet({
               <div>fr_lot_prompt_visible: {String(rdForLot?.fr_lot_prompt_visible ?? "—")}</div>
               <div>fr_lot_submitted: {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
               <div>fr_lot_value_used: {String(rdForLot?.fr_lot_value_used ?? "—")}</div>
+              <div>fr_lot_used_in_ranking: {String(rdForLot?.fr_lot_used_in_ranking ?? "—")}</div>
+              <div>fr_post_lot_candidate_count: {String(rdForLot?.fr_post_lot_candidate_count ?? "—")}</div>
+              <div>fr_lot_match_type: {String(rdForLot?.fr_lot_match_type ?? "—")}</div>
+              <div>fr_lot_candidate_summary: {String(rdForLot?.fr_lot_candidate_summary ?? "—")}</div>
               <div>fr_ui_apartment_block_active: {String(apartmentBlockActive)}</div>
             </div>
           ) : null}

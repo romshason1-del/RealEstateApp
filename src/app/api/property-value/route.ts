@@ -629,6 +629,8 @@ export async function GET(request: NextRequest) {
         fr_lot_used_in_ranking: null as boolean | null,
         fr_post_lot_candidate_count: null as number | null,
         fr_post_lot_winning_reason: null as string | null,
+        fr_lot_match_type: null as "exact" | "building" | "none" | null,
+        fr_lot_candidate_summary: null as string | null,
         fr_label_safety_override: null as boolean | null,
         fr_confidence_adjustment_reason: null as string | null,
         exact_rows_count: null,
@@ -701,19 +703,44 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_lot_value_used = submittedLotPresent
           ? (normalizedRequestedLot ?? (frRuntimeDebug.submitted_lot as string) ?? null)
           : null;
-        frRuntimeDebug.fr_lot_used_in_ranking =
-          submittedLotPresent && (buildingRowsCount > 0 || buildingCandidatesCount > 0);
         const exactUnitCnt = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
+        const exactAddrCnt = (frRuntimeDebug.exact_address_row_count as number) ?? 0;
+        const buildingAfterFilters = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
+        frRuntimeDebug.fr_lot_used_in_ranking =
+          submittedLotPresent &&
+          (exactUnitCnt > 0 ||
+            (exactAddrCnt > 0 && (frRuntimeDebug.exact_level as string) === "EXACT_ADDRESS") ||
+            buildingCandidatesCount > 0 ||
+            buildingRowsCount > 0);
         frRuntimeDebug.fr_post_lot_candidate_count =
           exactUnitCnt > 0
             ? exactUnitCnt
-            : buildingCandidatesCount > 0
-              ? buildingCandidatesCount
-              : buildingRowsCount > 0
-                ? buildingRowsCount
-                : null;
+            : exactAddrCnt > 0
+              ? exactAddrCnt
+              : buildingAfterFilters > 0
+                ? buildingAfterFilters
+                : buildingCandidatesCount > 0
+                  ? buildingCandidatesCount
+                  : buildingRowsCount > 0
+                    ? buildingRowsCount
+                    : null;
         frRuntimeDebug.fr_post_lot_winning_reason =
           (frRuntimeDebug.winning_step as string) ?? (frRuntimeDebug.exact_match_reason as string) ?? null;
+        const ws = String(frRuntimeDebug.winning_step ?? "");
+        frRuntimeDebug.fr_lot_match_type =
+          !submittedLotPresent
+            ? null
+            : ws === "exact_unit"
+              ? "exact"
+              : ws === "exact_address" || ws === "building_similar_unit" || ws === "building_level" || ws === "building_fallback"
+                ? "building"
+                : "none";
+        const candParts: string[] = [];
+        if (exactUnitCnt > 0) candParts.push(`exact_unit:${exactUnitCnt}`);
+        if (exactAddrCnt > 0) candParts.push(`exact_addr:${exactAddrCnt}`);
+        if (buildingCandidatesCount > 0) candParts.push(`building:${buildingCandidatesCount}`);
+        frRuntimeDebug.fr_lot_candidate_summary =
+          submittedLotPresent && candParts.length > 0 ? candParts.join(",") : null;
 
         if (tag === "prompt_lot_first" && submittedLotPresent) {
           console.error(
@@ -2053,12 +2080,15 @@ export async function GET(request: NextRequest) {
         return surf != null && surf > 0 && ppm2 != null && ppm2 > 0;
       };
 
-      /** True only when `unit_number` normalizes to the submitted lot (strict unit-level evidence). */
+      /** True when unit_number or any lot token (lot_1er, etc.) normalizes to the submitted lot. */
       const unitTokenMatchesSubmittedLot = (r: Record<string, unknown>): boolean => {
         const un = primaryUnitNumberRaw(r);
-        if (un == null) return false;
-        const t = normalizeLotToken(un);
-        return t != null && t === exactLotToken;
+        if (un != null) {
+          const t = normalizeLotToken(un);
+          if (t != null && t === exactLotToken) return true;
+        }
+        const lotTokens = extractLotTokensFromRow(r);
+        return lotTokens.some((t) => t === exactLotToken);
       };
 
       /** Single building-level aggregate: no unit_number and no resolvable lot tokens on the row. */
@@ -2355,6 +2385,14 @@ export async function GET(request: NextRequest) {
           }
           console.log("[FR_FLOW] ladder_step_started=BUILDING_SIMILAR_UNIT");
           console.log("[FR_STEP] building_similar_unit_lookup_start");
+          const lotColEscaped =
+            exactPrimaryLotColumn
+              ? "`" + String(exactPrimaryLotColumn).replace(/`/g, "") + "`"
+              : null;
+          const lotColSel =
+            lotColEscaped && exactLotToken
+              ? `, CAST(COALESCE(${lotColEscaped}, '') AS STRING) AS lot_col`
+              : "";
           const similarUnitQuery = `
           SELECT
             surface_m2,
@@ -2362,7 +2400,7 @@ export async function GET(request: NextRequest) {
             last_sale_price,
             last_sale_date,
             property_type,
-            house_number
+            house_number${lotColSel}
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -2396,7 +2434,7 @@ export async function GET(request: NextRequest) {
               last_sale_price,
               last_sale_date,
               property_type,
-              house_number
+              house_number${lotColSel}
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -2422,6 +2460,26 @@ export async function GET(request: NextRequest) {
           console.log("[FR_GOLD] after_building_similar_unit_query", { rows: rawCount });
           console.log("[FR_BUILDING] candidates_count=" + String(rawCount));
 
+          const lotDistanceFromRow = (r: Record<string, unknown>): number => {
+            if (!exactLotToken) return 999;
+            const lotColRaw = (r as any).lot_col;
+            if (lotColRaw != null && String(lotColRaw).trim()) {
+              const t = normalizeLotToken(lotColRaw);
+              if (t === exactLotToken) return 0;
+              const rowNum = parseInt(String(t).replace(/\D/g, "") || "0", 10);
+              const reqNum = parseInt(String(exactLotToken).replace(/\D/g, "") || "0", 10);
+              if (Number.isFinite(rowNum) && Number.isFinite(reqNum)) return Math.abs(rowNum - reqNum);
+            }
+            const tokens = extractLotTokensFromRow(r);
+            if (tokens.length > 0) {
+              if (tokens.some((t) => t === exactLotToken)) return 0;
+              const rowNum = parseInt(String(tokens[0]).replace(/\D/g, "") || "0", 10);
+              const reqNum = parseInt(String(exactLotToken).replace(/\D/g, "") || "0", 10);
+              if (Number.isFinite(rowNum) && Number.isFinite(reqNum)) return Math.abs(rowNum - reqNum);
+            }
+            return 999;
+          };
+
           type SimilarEnriched = {
             raw: Record<string, unknown>;
             surf: number;
@@ -2429,6 +2487,7 @@ export async function GET(request: NextRequest) {
             lastSaleEuro: number;
             dateStr: string | null;
             houseDistance: number;
+            lotDistance: number;
           };
 
           const enriched: SimilarEnriched[] = [];
@@ -2451,11 +2510,12 @@ export async function GET(request: NextRequest) {
               houseNumberNumericTarget != null && rowNum != null
                 ? Math.abs(rowNum - houseNumberNumericTarget)
                 : 0;
+            const lotDistance = lotDistanceFromRow(row);
 
             if (surf == null || surf <= 0) continue;
             if (ppmRaw == null || ppmRaw <= 0 || ppmEuro <= 0) continue;
             if (!allowRelaxedFiveYearWindow && !frSaleDateWithinFiveYears(dateRaw)) continue;
-            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr, houseDistance });
+            enriched.push({ raw: row, surf, ppmEuro, lastSaleEuro, dateStr, houseDistance, lotDistance });
           }
 
           const afterFilters = enriched.length;
@@ -2492,6 +2552,7 @@ export async function GET(request: NextRequest) {
           }
 
           const sorted = [...trimmed].sort((a, b) => {
+            if (exactLotToken && (a.lotDistance !== b.lotDistance)) return a.lotDistance - b.lotDistance;
             if (targetSurface != null && Number.isFinite(targetSurface)) {
               const da = Math.abs(a.surf - targetSurface);
               const db = Math.abs(b.surf - targetSurface);
