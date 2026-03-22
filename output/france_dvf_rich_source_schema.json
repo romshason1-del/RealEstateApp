@@ -1,0 +1,13 @@
+[
+  {"name":"country","type":"STRING"},
+  {"name":"city","type":"STRING"},
+  {"name":"postcode","type":"STRING"},
+  {"name":"street","type":"STRING"},
+  {"name":"house_number","type":"STRING"},
+  {"name":"unit_number","type":"STRING"},
+  {"name":"property_type","type":"STRING"},
+  {"name":"surface_m2","type":"FLOAT"},
+  {"name":"last_sale_price","type":"FLOAT"},
+  {"name":"last_sale_date","type":"DATE"},
+  {"name":"price_per_m2","type":"FLOAT"}
+]

@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { BigQuery } from "@google-cloud/bigquery";
 import { createClient } from "@supabase/supabase-js";
 import getPropertyValueInsights from "@/lib/property-value-insights";
-import { getFrancePropertyResult, mapLivabilityToRating, normalizeLot, queryFranceRichSourceSameAddress } from "@/lib/bigquery-france-service";
+import { getFrancePropertyResult, mapLivabilityToRating, normalizeLot } from "@/lib/bigquery-france-service";
 import { isBigQueryConfigured } from "@/lib/bigquery-client";
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString, extractFlatPrefix } from "@/lib/address-parse";
 import { fetchNeighborhoodStats } from "@/lib/property-value-providers/us-census-provider";
@@ -2042,48 +2042,6 @@ export async function GET(request: NextRequest) {
       const lotNorm = (normalizedRequestedLot ?? "").trim().toUpperCase();
       const lotStripped = lotNorm.replace(/^0+/, "") || lotNorm;
 
-      // Richer source lookup BEFORE property_latest_facts when enabled (e.g. raw DVF has more same-address rows).
-      const franceRichSourceEnabled = process.env.FRANCE_RICH_SOURCE_ENABLED === "true" || process.env.FRANCE_RICH_SOURCE_ENABLED === "1";
-      let richSourceRows: Array<Record<string, unknown>> = [];
-      if (franceRichSourceEnabled && postcodeNormForSource && houseNumberNormForSource) {
-        try {
-          // DVF expects full street (e.g. "RUE DE RIVOLI"); use streetNorm, not core-only streetNormForExactMatch.
-          const streetForRich = (streetNorm || streetNormForSource || streetNormForExactMatch || "")
-            .trim()
-            .toUpperCase()
-            .normalize("NFD")
-            .replace(/\p{M}/gu, "")
-            .replace(/\s+/g, " ")
-            .trim();
-          if (streetForRich) {
-            const raw = await queryFranceRichSourceSameAddress({
-              postcodeNorm: postcodeNormForSource,
-              streetNorm: streetForRich,
-              houseNumberNorm: houseNumberNormForSource,
-              cityNorm: cityNormForSource || cityNorm || undefined,
-              lotNorm: lotNorm || null,
-            });
-            richSourceRows = raw as Array<Record<string, unknown>>;
-            frRuntimeDebug.fr_used_rich_source = true;
-            frRuntimeDebug.fr_rich_source_building_count = richSourceRows.length;
-            const exactCount = lotNorm
-              ? richSourceRows.filter((r) => {
-                  const un = (r as any).unit_number;
-                  const u = un != null ? String(un).trim().replace(/^0+/, "") || String(un) : "";
-                  return u && u.toUpperCase() === lotStripped;
-                }).length
-              : richSourceRows.length;
-            frRuntimeDebug.fr_rich_source_exact_count = exactCount;
-            console.log("[FR_RICH_SOURCE] rows=" + richSourceRows.length + " exact_count=" + exactCount);
-          }
-        } catch (err) {
-          console.error("[FR_RICH_SOURCE] lookup failed", err);
-          frRuntimeDebug.fr_used_rich_source = true;
-          frRuntimeDebug.fr_rich_source_exact_count = 0;
-          frRuntimeDebug.fr_rich_source_building_count = 0;
-        }
-      }
-
       const exactParamsBase = {
         country: country || "",
         city: cityNormForSource || cityNorm || "",
@@ -2107,42 +2065,76 @@ export async function GET(request: NextRequest) {
       console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
       let exactRows: Array<Record<string, unknown>> = [];
       let exactLotUsedInQuery = false;
-      if (richSourceRows.length > 0) {
-        exactRows = richSourceRows;
-        frRuntimeDebug.fr_exact_source_layer = "rich_source";
-        frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
-        console.log("[FR_EXACT] using_rich_source rows=" + exactRows.length);
-      } else {
-        if (franceRichSourceEnabled) {
-          frRuntimeDebug.fr_exact_source_layer = "none";
-        }
-        if (exactQueryWithLot && lotNorm && frBqLotMatchSql) {
-          const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            { query: exactQueryWithLot, params: exactParams },
-            "exact_query_lot_filtered"
-          );
-          exactRows = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
-          if (exactRows.length > 0) {
-            exactLotUsedInQuery = true;
-            console.log("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
-          } else {
-            const [addressOnlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-              { query: `${exactQueryBase}\n        LIMIT 50`, params: exactParams },
-              "exact_query_address_only"
-            );
-            exactRows = (addressOnlyRows ?? []) as Array<Record<string, unknown>>;
-            console.log("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
-          }
+      // Layer 1: property_latest_facts first
+      if (exactQueryWithLot && lotNorm && frBqLotMatchSql) {
+        const [lotFilteredRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          { query: exactQueryWithLot, params: exactParams },
+          "exact_query_lot_filtered"
+        );
+        exactRows = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
+        if (exactRows.length > 0) {
+          exactLotUsedInQuery = true;
+          console.log("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
         } else {
-          const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-            { query: exactQuery, params: exactParams },
-            "exact_query"
+          const [addressOnlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: `${exactQueryBase}\n        LIMIT 50`, params: exactParams },
+            "exact_query_address_only"
           );
-          exactRows = (rows ?? []) as Array<Record<string, unknown>>;
+          exactRows = (addressOnlyRows ?? []) as Array<Record<string, unknown>>;
+          console.log("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
         }
-        frRuntimeDebug.exact_lot_used_in_query = exactLotUsedInQuery;
-        frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
-        frRuntimeDebug.fr_exact_source_layer = exactRows.length > 0 ? "facts" : "none";
+      } else {
+        const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+          { query: exactQuery, params: exactParams },
+          "exact_query"
+        );
+        exactRows = (rows ?? []) as Array<Record<string, unknown>>;
+      }
+      frRuntimeDebug.exact_lot_used_in_query = exactLotUsedInQuery;
+      frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
+      frRuntimeDebug.fr_exact_source_layer = exactRows.length > 0 ? "facts" : "none";
+
+      // Layer 2: france_dvf_rich_source fallback when facts returns no same-address rows
+      let richSourceRows: Array<Record<string, unknown>> = [];
+      if (exactRows.length === 0 && postcodeNormForSource && houseNumberNormForSource && streetNormForExactMatch) {
+        try {
+          const richSourceQueryBase = `
+            SELECT country, city, postcode, street, house_number, unit_number, property_type, surface_m2, last_sale_price, last_sale_date, price_per_m2
+            FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
+            WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+              AND ${frBqPostcodeMatchSql}
+              AND ${frBqCityMatchSql}
+              AND ${frBqStreetMatchSql}
+              AND ${frBqHouseNumberMatchSql}
+            LIMIT 300
+          `;
+          const [richRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: richSourceQueryBase.trim(), params: exactParams },
+            "france_dvf_rich_source_fallback"
+          );
+          richSourceRows = (richRows ?? []) as Array<Record<string, unknown>>;
+          frRuntimeDebug.fr_used_rich_source = true;
+          frRuntimeDebug.fr_rich_source_building_count = richSourceRows.length;
+          const exactCount = lotNorm
+            ? richSourceRows.filter((r) => {
+                const un = (r as any).unit_number;
+                const u = un != null ? String(un).trim().replace(/^0+/, "") || String(un) : "";
+                return u && u.toUpperCase() === lotStripped;
+              }).length
+            : richSourceRows.length;
+          frRuntimeDebug.fr_rich_source_exact_count = exactCount;
+          if (richSourceRows.length > 0) {
+            exactRows = richSourceRows;
+            frRuntimeDebug.fr_exact_source_layer = "rich_source";
+            frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
+            console.log("[FR_RICH_SOURCE] fallback rows=" + richSourceRows.length + " exact_count=" + exactCount);
+          }
+        } catch (err) {
+          console.error("[FR_RICH_SOURCE] fallback lookup failed", err);
+          frRuntimeDebug.fr_used_rich_source = true;
+          frRuntimeDebug.fr_rich_source_exact_count = 0;
+          frRuntimeDebug.fr_rich_source_building_count = 0;
+        }
       }
       const exactRowsCount = exactRows.length;
       if (exactRowsCount > 0) {
@@ -2686,6 +2678,35 @@ export async function GET(request: NextRequest) {
             rawCount = similarRows.length;
             if (rawCount > 0) console.log("[FR_BUILDING] expanded_with_nearby_house_numbers rows=" + String(rawCount));
           }
+          if (rawCount < 2 && postcodeNormForSource && houseNumberNormForSource) {
+            try {
+              const richSourceBuildingQuery = `
+                SELECT surface_m2, price_per_m2, last_sale_price, last_sale_date, property_type, house_number, unit_number AS lot_col
+                FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
+                WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+                  AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+                  AND ${frBqPostcodeMatchSql}
+                  AND ${frBqStreetMatchSql}
+                  AND ${frBqHouseNumberMatchSql}
+                  AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+                LIMIT 300
+              `;
+              const [richRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+                { query: richSourceBuildingQuery.trim(), params: similarParams },
+                "building_france_dvf_rich_source_fallback"
+              );
+              const richArr = (richRows ?? []) as Array<Record<string, unknown>>;
+              if (richArr.length >= 2) {
+                similarRows = richArr;
+                rawCount = similarRows.length;
+                frRuntimeDebug.fr_used_rich_source = true;
+                frRuntimeDebug.fr_rich_source_building_count = rawCount;
+                console.log("[FR_BUILDING] rich_source_fallback rows=" + String(rawCount));
+              }
+            } catch (err) {
+              console.error("[FR_BUILDING] rich_source fallback failed", err);
+            }
+          }
           frRuntimeDebug.building_similar_unit_candidates_count = rawCount;
           console.log("[FR_GOLD] after_building_similar_unit_query", { rows: rawCount });
           console.log("[FR_BUILDING] candidates_count=" + String(rawCount));
@@ -3026,6 +3047,43 @@ export async function GET(request: NextRequest) {
             );
             relaxedRows = (pcRows ?? []) as Array<Record<string, unknown>>;
             if (relaxedRows.length > 0) console.log("[FR_POST_LOT_RELAXED] postcode_only_fallback rows=" + relaxedRows.length);
+          }
+          if (relaxedRows.length < 1 && postcodeNormForSource && houseNumberNormForSource) {
+            try {
+              const richSourcePostLotQuery = `
+                SELECT surface_m2, price_per_m2, last_sale_price, last_sale_date, property_type, house_number, unit_number AS lot_col
+                FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
+                WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+                  AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
+                  AND ${frBqPostcodeMatchSql}
+                  AND ${frBqStreetMatchSql}
+                  AND ${frBqHouseNumberMatchSql}
+                  AND LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+                LIMIT 300
+              `;
+              const postLotRichParams = {
+                country: country || "",
+                city: cityNormForSource || cityNorm || "",
+                postcode: postcodeNormForSource || "",
+                street: streetNorm || "",
+                street_normalized: streetNormForSource || "",
+                house_number: houseNumberNormForSource || "",
+                house_number_norm: houseNumberNormForMatch || "",
+              };
+              const [richRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+                { query: richSourcePostLotQuery.trim(), params: postLotRichParams },
+                "post_lot_france_dvf_rich_source_fallback"
+              );
+              const richArr = (richRows ?? []) as Array<Record<string, unknown>>;
+              if (richArr.length >= 1) {
+                relaxedRows = richArr;
+                frRuntimeDebug.fr_used_rich_source = true;
+                frRuntimeDebug.fr_rich_source_building_count = richArr.length;
+                console.log("[FR_POST_LOT_RELAXED] rich_source_fallback rows=" + richArr.length);
+              }
+            } catch (err) {
+              console.error("[FR_POST_LOT_RELAXED] rich_source fallback failed", err);
+            }
           }
           const similarRows = relaxedRows;
           const rawCount = similarRows.length;
