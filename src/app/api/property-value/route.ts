@@ -41,7 +41,7 @@ function frParseNumericLoose(value: unknown): number | null {
 
 /**
  * France DVF-derived **staging** tables (and fallbacks like `property_area_fallback`) store money in
- * **centimes** (1/100 €). Use for API JSON only; do not use for row matching / sorting.
+ * **centimes** (1/100 ג‚¬). Use for API JSON only; do not use for row matching / sorting.
  */
 function frDvfMoneyCentsToEuros(value: unknown): number | null {
   const n = frParseNumericLoose(value);
@@ -50,8 +50,8 @@ function frDvfMoneyCentsToEuros(value: unknown): number | null {
 
 /**
  * `streetiq_gold.property_latest_facts` uses a different fixed-point convention than raw DVF centimes:
- * `last_sale_price` and `price_per_m2` are stored in **thousandths of a euro** (raw integer N ⇒ N/1000 €).
- * Using centime scaling (/100) on this table inflates amounts by 10× (e.g. 173 886 € shown as 1 738 860 €).
+ * `last_sale_price` and `price_per_m2` are stored in **thousandths of a euro** (raw integer N ג‡’ N/1000 ג‚¬).
+ * Using centime scaling (/100) on this table inflates amounts by 10ֳ— (e.g. 173ג€¯886 ג‚¬ shown as 1ג€¯738ג€¯860 ג‚¬).
  * Apply this converter exactly once when reading those columns; keep sorting/matching on raw N.
  */
 function frPropertyLatestFactsMoneyToEuros(raw: unknown): number | null {
@@ -150,7 +150,7 @@ function frTrimFractionExtremes<T>(items: T[], getNumeric: (x: T) => number, fra
   return decorated.slice(dropEach, n - dropEach).map((x) => x.item);
 }
 
-/** Scale sale prices in legacy `building_sales` arrays (cents → euros). */
+/** Scale sale prices in legacy `building_sales` arrays (cents ג†’ euros). */
 function mapFranceBuildingSalesPricesToEuros(sales: unknown[] | undefined | null): Array<Record<string, unknown>> {
   if (!Array.isArray(sales)) return [];
   return sales.map((s) => {
@@ -282,11 +282,11 @@ function frParseStreet(raw: string): { type: string; core: string } {
   return { type, core };
 }
 
-/** Normalize house number for France: BIS→B, TER→T, QUATER→Q, collapse spaces/dashes. */
+/** Normalize house number for France: BISג†’B, TERג†’T, QUATERג†’Q, collapse spaces/dashes. */
 function normalizeHouseNumberForFrance(hn: string): string {
   let s = (hn ?? "").toString().trim().toUpperCase();
   s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
-  s = s.replace(/[-–—\s]+/g, "").replace(/[^0-9A-Z]/g, "");
+  s = s.replace(/[-ג€“ג€”\s]+/g, "").replace(/[^0-9A-Z]/g, "");
   return s || "";
 }
 
@@ -464,7 +464,7 @@ export async function GET(request: NextRequest) {
             let lastAmount = 0;
             let lastDate: string | null = null;
             if (match.last_sale_info) {
-              const parts = String(match.last_sale_info).split(" · ");
+              const parts = String(match.last_sale_info).split(" ֲ· ");
               if (parts[0]) lastAmount = parseFloat(String(parts[0]).replace(/[^\d.-]/g, "")) || 0;
               if (parts[1]) lastDate = parts[1].trim();
             }
@@ -496,19 +496,13 @@ export async function GET(request: NextRequest) {
   }
 
   if (isFR) {
-    // Minimal France gold-table path (exact -> area fallback -> no data).
     const rawInput = (addressParam || rawInputAddress || "").trim();
-    const countryDetected = (countryCode ?? "").toUpperCase();
-    console.log("[FR_ENTRY] raw_input=" + (rawInput || "(empty)"));
-    console.log("[FR_ENTRY] address_param=" + (addressParam || "(empty)"));
+    const _frLog = process.env.NODE_ENV === "development" ? console.log.bind(console) : () => {};
+    const _frErr = process.env.NODE_ENV === "development" ? console.error.bind(console) : () => {};
     try {
-      console.log("[FR_STEP] entered");
       const frStartTs = Date.now();
 
       const fullRawAddress = (rawInputAddress || addressParam || rawInput || [houseNumber, street, city, postcode || zip].filter(Boolean).join(", ")).trim();
-      console.log("[FR_ENTRY] fullRawAddress=" + (fullRawAddress || "(empty)"));
-      console.log("[FR_PARSE] raw_input=" + (fullRawAddress || "(empty)"));
-      console.log("[FR_PARSE] parser_started=" + (fullRawAddress ? "true" : "false"));
 
       const rawPostcodeMatch = fullRawAddress.match(/\b(\d{5})\b/);
       const frRawPostcodeToken = rawPostcodeMatch ? rawPostcodeMatch[1] : null;
@@ -533,11 +527,6 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      console.log("[FR_PARSE] parsed_house_number=" + (houseNumberParsed || "(empty)"));
-      console.log("[FR_PARSE] parsed_street=" + (streetParsed || "(empty)"));
-      console.log("[FR_PARSE] parsed_postcode=" + (postcodeParsed || "(empty)"));
-      console.log("[FR_PARSE] parsed_city=" + (cityParsed || "(empty)"));
-
       const requestedLotNorm = normalizeLot(aptNumber) || null;
       const normalizedRequestedLot = requestedLotNorm ? (requestedLotNorm.replace(/^0+/, "") || requestedLotNorm) : null;
       // Strict: any non-empty apt param skips lot prompt (avoids normalize edge cases vs raw UI input).
@@ -545,41 +534,16 @@ export async function GET(request: NextRequest) {
       const submittedLotPresent =
         aptNumberRawTrimmed.length > 0 ||
         (normalizedRequestedLot != null && String(normalizedRequestedLot).length > 0);
-      console.log("[FR_STEP] lot_received");
-      console.log("[FR_LOT_API] apt_number raw", {
-        apt_number: searchParams.get("apt_number"),
-        aptNumber: searchParams.get("aptNumber"),
-      });
-      console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
-      console.log("[FR_DEBUG] submitted_lot_and_normalized_lot", {
-        submittedLot: aptNumber?.trim() || null,
-        requestedLotNorm,
-        normalizedLot: normalizedRequestedLot,
-      });
-      console.log("[FR_GOLD] request_start", {
-        city: cityParsed,
-        street: streetParsed,
-        houseNumber: houseNumberParsed,
-        postcode: postcodeParsed,
-        aptNumber: (aptNumber ?? "").trim(),
-      });
-      console.log("[FR_BAN] entered_france_flow", {
-        hasBigQueryKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
-        // projectId is printed inside [FR_INIT] too, but log here to correlate request->query quickly.
-        // (We keep it best-effort: it may be undefined if init throws.)
-      });
-      console.log("[FR_INIT] creating BigQuery client");
+
       let bq: BigQuery;
       try {
         const key = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}");
-        console.log("[FR_INIT] projectId from key:", (key as any)?.project_id);
         bq = new BigQuery({
           projectId: (key as any)?.project_id,
           credentials: key,
         });
-        console.log("[FR_INIT] BigQuery client created");
       } catch (err) {
-        console.error("[FR_ERROR] BigQuery init failed", err);
+        _frErr("[FR] BigQuery init failed", err);
         return new Response(JSON.stringify({ success: false, error: "BigQuery init failed" }), { status: 200 });
       }
       const country = "FR";
@@ -609,10 +573,11 @@ export async function GET(request: NextRequest) {
             : sql.includes("newest_sale_date")
               ? "newest_sale_date"
               : null;
-          console.error("[FR_SQL] failing_query_name", label);
-          console.error("[FR_SQL] failing_table", tableName);
-          console.error("[FR_SQL] sale_date_column_used", saleDateColumnUsed);
-          console.error("[FR_SQL] failing_sql_text", sql);
+          if (process.env.NODE_ENV === "development") {
+            _frErr("[FR_SQL] failing_query_name", label);
+            _frErr("[FR_SQL] failing_table", tableName);
+            _frErr("[FR_SQL] failing_sql_text", sql);
+          }
           throw err;
         }
       };
@@ -755,7 +720,7 @@ export async function GET(request: NextRequest) {
         exact_reject_reason: null,
         exact_lot_column_used: null,
         winning_median_price_per_m2: null,
-        /** Set when `property_latest_facts` money converter runs (1000 = thousandths of €). */
+        /** Set when `property_latest_facts` money converter runs (1000 = thousandths of ג‚¬). */
         property_latest_facts_money_divisor: null,
         exact_level: null as "EXACT_UNIT" | "EXACT_ADDRESS" | "APPROXIMATE" | "NONE" | null,
         exact_unit_row_count: null as number | null,
@@ -812,19 +777,9 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.raw_apt_number_param = searchParams.get("apt_number");
       frRuntimeDebug.raw_aptNumber_param = searchParams.get("aptNumber");
       frRuntimeDebug.request_url_seen_by_api = request.url;
-      console.log("[FR_LOT_API] incoming_request", {
-        requestUrl: request.url,
-        queryString: searchParams.toString(),
-        apt_number: searchParams.get("apt_number"),
-        aptNumber: searchParams.get("aptNumber"),
-      });
       // Normalize the received lot/apartment number for stable matching + runtime debug.
       // (normalizedRequestedLot is computed above from `aptNumber`.)
       frRuntimeDebug.submitted_lot = normalizedRequestedLot ?? null;
-      console.log("[FR_DEBUG] lot_value_received_in_api", {
-        aptNumberRaw: aptNumber?.trim() || null,
-        normalized_submitted_lot: normalizedRequestedLot,
-      });
 
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
@@ -916,12 +871,12 @@ export async function GET(request: NextRequest) {
 
         if (tag === "prompt_lot_first" && submittedLotPresent) {
           console.error(
-            "[FR_RETURN] INVARIANT_VIOLATION prompt_lot_first with submitted_lot_present=true — check client request order"
+            "[FR_RETURN] INVARIANT_VIOLATION prompt_lot_first with submitted_lot_present=true ג€” check client request order"
           );
         }
         if (tag === "valuation_response" && frRuntimeDebug.winning_step == null) {
           console.error(
-            "[FR_RETURN] INVARIANT_VIOLATION valuation_response without winning_step — check ladder exit path"
+            "[FR_RETURN] INVARIANT_VIOLATION valuation_response without winning_step ג€” check ladder exit path"
           );
         }
         if (tag === "valuation_response" && frRuntimeDebug.fr_fallback_level_used == null) {
@@ -1098,7 +1053,7 @@ export async function GET(request: NextRequest) {
         const hasWinningStep = frRuntimeDebug.winning_step != null && String(frRuntimeDebug.winning_step) !== "";
 
         if (tag === "valuation_response") {
-          // No surface: ladder still provides median €/m² on property / street_average — ensure display path sees it.
+          // No surface: ladder still provides median ג‚¬/mֲ² on property / street_average ג€” ensure display path sees it.
           if (price_per_m2 == null && ppmFromStreetAvg != null) {
             price_per_m2 = ppmFromStreetAvg;
           }
@@ -1177,7 +1132,7 @@ export async function GET(request: NextRequest) {
           }
 
           if (hasWinningStep && !has_display_value) {
-            console.error("[FR_RETURN] winning_step_set_but_no_price_or_estimate", {
+            _frErr("[FR_RETURN] winning_step_set_but_no_price_or_estimate", {
               winning_step: frRuntimeDebug.winning_step,
               winning_source_label,
             });
@@ -1259,19 +1214,19 @@ export async function GET(request: NextRequest) {
         const winning_step_str =
           frRuntimeDebug.winning_step == null ? "" : String(frRuntimeDebug.winning_step);
 
-        console.log("[FR_LOT_API] response_tag", tag);
-        console.log("[FR_RETURN] submitted_lot_present=" + String(submittedLotPresent));
-        console.log("[FR_RETURN] has_winner=" + String(has_winner));
-        console.log("[FR_RETURN] winning_step=" + winning_step_str);
-        console.log("[FR_RETURN] returning_tag=" + tag);
+        _frLog("[FR_LOT_API] response_tag", tag);
+        _frLog("[FR_RETURN] submitted_lot_present=" + String(submittedLotPresent));
+        _frLog("[FR_RETURN] has_winner=" + String(has_winner));
+        _frLog("[FR_RETURN] winning_step=" + winning_step_str);
+        _frLog("[FR_RETURN] returning_tag=" + tag);
         console.log(
           "[FR_RETURN] has_surface_for_estimate=" + String(Boolean(frRuntimeDebug.has_surface_for_estimate))
         );
-        console.log("[FR_RETURN] estimated_value_present=" + String(estimated_value_present));
-        console.log("[FR_RETURN] price_per_m2_present=" + String(price_per_m2_present));
-        console.log("[FR_RETURN] has_display_value=" + String(has_display_value));
-        console.log("[FR_STEP] returning_success");
-        console.log("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
+        _frLog("[FR_RETURN] estimated_value_present=" + String(estimated_value_present));
+        _frLog("[FR_RETURN] price_per_m2_present=" + String(price_per_m2_present));
+        _frLog("[FR_RETURN] has_display_value=" + String(has_display_value));
+        _frLog("[FR_STEP] returning_success");
+        _frLog("[FR_GOLD] return", { tag, status: status ?? 200, durationMs: Date.now() - frStartTs });
         // Not BAN-specific: every France exit path uses frReturn (valuation, lot prompt, no_data, etc.).
         const fvDisplay = outPayload.fr_valuation_display as Record<string, unknown> | undefined;
         const finalHasDisplay = tag === "valuation_response" && Boolean(fvDisplay?.has_display_value ?? (estimated_value_present || price_per_m2_present));
@@ -1302,7 +1257,7 @@ export async function GET(request: NextRequest) {
             : null;
         if (matchType != null) frRuntimeDebug.fr_address_match_type = matchType;
 
-        console.log("[FR_RETURN] response", {
+        _frLog("[FR_RETURN] response", {
           tag,
           ban_match_found: frRuntimeDebug.ban_match_found,
           ban_rows_count: frRuntimeDebug.ban_rows_count,
@@ -1343,7 +1298,7 @@ export async function GET(request: NextRequest) {
         // Example: "Rue Adolphe Pajeaud" -> "ADOLPHE PAJEAUD"
         const unified = s
           .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
-          .replace(/[’‘]/g, "'")
+          .replace(/[ג€™ג€˜]/g, "'")
           .replace(/\s+/g, " ")
           .trim()
           .toUpperCase()
@@ -1430,7 +1385,7 @@ export async function GET(request: NextRequest) {
       const normalizeForBanText = (s: string): string => {
         const unified = s
           .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
-          .replace(/[’‘]/g, "'")
+          .replace(/[ג€™ג€˜]/g, "'")
           .replace(/\s+/g, " ")
           .trim()
           .toUpperCase()
@@ -1446,7 +1401,7 @@ export async function GET(request: NextRequest) {
         // BAN house numbers can contain letter suffixes; keep digits + A-Z only.
         return hn
           .replace(/[\u2019\u2018\u02BC\u00B4\u0060]/g, "'")
-          .replace(/[’‘]/g, "'")
+          .replace(/[ג€™ג€˜]/g, "'")
           .trim()
           .toUpperCase()
           .replace(/\s+/g, "")
@@ -1458,8 +1413,8 @@ export async function GET(request: NextRequest) {
       const banInputStreetNorm = streetNormalizedDet || normalizeForBanText(streetNorm);
       const banInputHouseNumber = normalizeHouseNumberForBan(houseNumberNorm);
 
-      console.log("[FR_BAN] raw_city=" + (banInputCity || "(empty)"));
-      console.log("[FR_BAN] raw_postcode=" + (banInputPostcode || "(empty)"));
+      _frLog("[FR_BAN] raw_city=" + (banInputCity || "(empty)"));
+      _frLog("[FR_BAN] raw_postcode=" + (banInputPostcode || "(empty)"));
 
       const banQueryAttempts: Array<{ postcode: string; city_norm: string; street_norm: string; house_number_norm: string; query_mode: string }> = [];
       let streetForBan = banInputStreetNorm || banInputCity || "";
@@ -1513,21 +1468,21 @@ export async function GET(request: NextRequest) {
             house_number_norm: rawHn,
             query_mode: "raw",
           });
-          console.log("[FR_BAN] raw_attempt_added=true");
+          _frLog("[FR_BAN] raw_attempt_added=true");
         }
       }
       const rawAttemptAdded = banQueryAttempts.some((a) => a.query_mode === "raw");
       if (!rawAttemptAdded && fullRawAddress && banQueryAttempts.length === 0) {
-        console.log("[FR_BAN] raw_attempt_added=false");
+        _frLog("[FR_BAN] raw_attempt_added=false");
       }
-      console.log("[FR_BAN] ban_attempt_count=" + banQueryAttempts.length);
+      _frLog("[FR_BAN] ban_attempt_count=" + banQueryAttempts.length);
       frRuntimeDebug.fr_ban_attempt_count = banQueryAttempts.length;
       frRuntimeDebug.fr_ban_query_mode = banQueryAttempts.length > 0 ? banQueryAttempts.map((a) => a.query_mode).join(",") : "(none)";
-      console.log("[FR_BAN] raw_query_attempted=" + (banInputPostcode || banInputStreetNorm || banInputCity ? "true" : "false"));
-      console.log("[FR_BAN] query_input=" + (fullRawAddress || "(empty)"));
+      _frLog("[FR_BAN] raw_query_attempted=" + (banInputPostcode || banInputStreetNorm || banInputCity ? "true" : "false"));
+      _frLog("[FR_BAN] query_input=" + (fullRawAddress || "(empty)"));
 
       try {
-        console.log("[FR_BAN] before_ban_query", {
+        _frLog("[FR_BAN] before_ban_query", {
           banInputPostcode,
           banInputCity,
           banInputStreetNorm,
@@ -1564,9 +1519,9 @@ export async function GET(request: NextRequest) {
           };
           if (!attempt.street_norm && !attempt.postcode) continue;
           const queryInputComposite = [attempt.postcode, attempt.city_norm, attempt.street_norm].filter(Boolean).join(" ");
-          console.log("[FR_BAN] query_mode=" + attempt.query_mode);
-          console.log("[FR_BAN] query_input=" + (queryInputComposite || "(empty)"));
-          console.log("[FR_PARAMS]", { query: "ban_normalized_lookup_query", attempt: i + 1, ...banParams });
+          _frLog("[FR_BAN] query_mode=" + attempt.query_mode);
+          _frLog("[FR_BAN] query_input=" + (queryInputComposite || "(empty)"));
+          _frLog("[FR_PARAMS]", { query: "ban_normalized_lookup_query", attempt: i + 1, ...banParams });
           const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
             { query: banLookupQuery, params: banParams },
             "ban_normalized_lookup_query"
@@ -1586,7 +1541,7 @@ export async function GET(request: NextRequest) {
             if (banInputPostcode && banPc && banInputPostcode.trim() !== banPc.trim()) {
               postcodeMismatchCount++;
               if (process.env.NODE_ENV !== "production") {
-                console.log("[FR_BAN] postcode_mismatch_reject", { requested: banInputPostcode, candidate: banPc });
+                _frLog("[FR_BAN] postcode_mismatch_reject", { requested: banInputPostcode, candidate: banPc });
               }
               return false;
             }
@@ -1601,9 +1556,9 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        console.log("[FR_BAN] after_ban_query");
+        _frLog("[FR_BAN] after_ban_query");
         const banRowsCount = banRows?.length ?? 0;
-        console.log("[FR_BAN] candidate_count=" + banRowsCount);
+        _frLog("[FR_BAN] candidate_count=" + banRowsCount);
         frRuntimeDebug.ban_rows_count = banRowsCount;
         frRuntimeDebug.fr_typed_street_normalized = streetNormalizedDet || null;
         frRuntimeDebug.fr_ban_candidate_count = banRowsCount;
@@ -1664,21 +1619,21 @@ export async function GET(request: NextRequest) {
             : null;
 
         const selectedMatchLevel = banRow ? "full" : "none";
-        console.log("[FR_BAN] selected_match_level=" + selectedMatchLevel);
-        console.log("[FR_BAN] street_score=" + String(banRowScore ?? "n/a"));
-        console.log("[FR_BAN] selection_reason=" + banSelectionReason);
+        _frLog("[FR_BAN] selected_match_level=" + selectedMatchLevel);
+        _frLog("[FR_BAN] street_score=" + String(banRowScore ?? "n/a"));
+        _frLog("[FR_BAN] selection_reason=" + banSelectionReason);
 
         if (banRow) {
           const selCity = (banRow.city_norm ?? banRow.city ?? banRow.normalized_city) as string | undefined;
           const selPc = (banRow.postcode ?? banRow.postal_code ?? banRow.code_postal) as string | undefined;
-          console.log("[FR_BAN] selected_city=" + String(selCity ?? "(empty)"));
-          console.log("[FR_BAN] selected_postcode=" + String(selPc ?? "(empty)"));
+          _frLog("[FR_BAN] selected_city=" + String(selCity ?? "(empty)"));
+          _frLog("[FR_BAN] selected_postcode=" + String(selPc ?? "(empty)"));
           const selReason = banInputPostcode && String(selPc ?? "").trim() === banInputPostcode.trim()
             ? "exact_postcode_match"
             : banInputCity && frCityMatches(banInputCity, String(selCity ?? ""))
               ? "exact_city_match"
               : banSelectionReason;
-          console.log("[FR_BAN] selection_reason=" + selReason);
+          _frLog("[FR_BAN] selection_reason=" + selReason);
         }
         if (banRow) {
           const pickString = (keys: string[]): string | null => {
@@ -1721,8 +1676,8 @@ export async function GET(request: NextRequest) {
           else if (streetExact && !postcodeExact) banQuality = "street_same_no_exact_postcode_or_city";
           else banQuality = "ban_match_found";
 
-          console.log("[FR_BAN] match_level=" + matchLevel);
-          console.log("[FR_BAN] partial_match=" + String(partialMatch));
+          _frLog("[FR_BAN] match_level=" + matchLevel);
+          _frLog("[FR_BAN] partial_match=" + String(partialMatch));
 
           // Source of truth: overwrite inputs for the rest of the FR pipeline.
           if (banCity) {
@@ -1758,7 +1713,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.ban_postcode = ban_postcode;
           frRuntimeDebug.ban_street = ban_street;
           frRuntimeDebug.ban_house_number = ban_house_number;
-          console.log("[FR_BAN] populated_debug_fields", {
+          _frLog("[FR_BAN] populated_debug_fields", {
             ban_match_found: frRuntimeDebug.ban_match_found,
             ban_rows_count: frRuntimeDebug.ban_rows_count,
             ban_city: frRuntimeDebug.ban_city,
@@ -1770,7 +1725,7 @@ export async function GET(request: NextRequest) {
         } else {
           frRuntimeDebug.ban_match_found = false;
           frRuntimeDebug.ban_match_quality = "no_ban_row";
-          console.log("[FR_BAN] populated_debug_fields", {
+          _frLog("[FR_BAN] populated_debug_fields", {
             ban_match_found: frRuntimeDebug.ban_match_found,
             ban_rows_count: frRuntimeDebug.ban_rows_count,
             ban_city: frRuntimeDebug.ban_city,
@@ -1781,7 +1736,7 @@ export async function GET(request: NextRequest) {
           });
         }
       } catch (err) {
-        console.error("[FR_ERROR] BAN normalized lookup failed", err);
+        _frErr("[FR_ERROR] BAN normalized lookup failed", err);
         frRuntimeDebug.ban_query_error = err instanceof Error ? err.message : String(err);
         frRuntimeDebug.ban_match_found = false;
         frRuntimeDebug.ban_match_quality = "ban_normalized_lookup_error";
@@ -1796,7 +1751,7 @@ export async function GET(request: NextRequest) {
       if (frRuntimeDebug.ban_lon == null) frRuntimeDebug.ban_lon = ban_lon;
 
       // Diagnostic: final BAN-normalized inputs used by detection + valuation.
-      console.log("[FR_DEBUG] normalized_ban_output", {
+      _frLog("[FR_DEBUG] normalized_ban_output", {
         ban_match_found: frRuntimeDebug.ban_match_found,
         ban_match_quality: frRuntimeDebug.ban_match_quality,
         ban_city: frRuntimeDebug.ban_city,
@@ -1810,11 +1765,11 @@ export async function GET(request: NextRequest) {
         streetNorm,
         houseNumberNorm,
       });
-      console.log("[FR_FLOW] ban_matched=" + String(Boolean(frRuntimeDebug.ban_match_found)));
-      console.log("[FR_STEP] ban_lookup_done");
+      _frLog("[FR_FLOW] ban_matched=" + String(Boolean(frRuntimeDebug.ban_match_found)));
+      _frLog("[FR_STEP] ban_lookup_done");
 
-      console.log("[FR_ADDR] normalized_ban_street=" + String(streetNormalizedDet || ""));
-      console.log("[FR_ADDR] normalized_house_number=" + String(houseNumberNorm || ""));
+      _frLog("[FR_ADDR] normalized_ban_street=" + String(streetNormalizedDet || ""));
+      _frLog("[FR_ADDR] normalized_house_number=" + String(houseNumberNorm || ""));
 
       const getBool = (obj: Record<string, unknown>, keys: string[]): boolean => {
         for (const k of keys) {
@@ -1875,11 +1830,11 @@ export async function GET(request: NextRequest) {
           : streetNormalizedDet || "";
       const streetNormForExactMatch = normalizeStreetForExactMatch(streetNorm || streetNormalizedDet || "") || streetNormForSource;
       const houseNumberNormForSource = houseNumberNorm || "";
-      console.log("[FR_SOURCE] normalized_city=" + (cityNormForSource || "(empty)"));
-      console.log("[FR_SOURCE] street_core=" + (streetNormForSource || "(empty)"));
-      console.log("[FR_SOURCE] street_type=" + (streetParsedForSource.type || "(empty)"));
-      console.log("[FR_SOURCE] normalized_postcode=" + (postcodeNormForSource || "(empty)"));
-      console.log("[FR_SOURCE] lookup_keys=postcode|street|house|city");
+      _frLog("[FR_SOURCE] normalized_city=" + (cityNormForSource || "(empty)"));
+      _frLog("[FR_SOURCE] street_core=" + (streetNormForSource || "(empty)"));
+      _frLog("[FR_SOURCE] street_type=" + (streetParsedForSource.type || "(empty)"));
+      _frLog("[FR_SOURCE] normalized_postcode=" + (postcodeNormForSource || "(empty)"));
+      _frLog("[FR_SOURCE] lookup_keys=postcode|street|house|city");
 
       frRuntimeDebug.fr_input_address_normalized = [houseNumberNorm, streetNorm, postcodeNorm, cityNorm].filter(Boolean).join(", ") || null;
       frRuntimeDebug.fr_input_city_normalized = cityNormForSource || cityNorm || null;
@@ -1898,7 +1853,7 @@ export async function GET(request: NextRequest) {
       const normHn = (hn: string) => {
         let s = (hn ?? "").toString().trim().toUpperCase();
         s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
-        s = s.replace(/[-–—\s]+/g, "").replace(/[^0-9A-Z]/g, "");
+        s = s.replace(/[-ג€“ג€”\s]+/g, "").replace(/[^0-9A-Z]/g, "");
         return s || "";
       };
       const houseNumberNormForEarly = normHn(houseNumberNorm);
@@ -1950,7 +1905,7 @@ export async function GET(request: NextRequest) {
         try {
           frRuntimeDebug.building_unit_flags_query_executed = true;
           if (unitFlagsStrictQuerySql) {
-            console.log("[FR_UNIT_FLAGS] running_strict_always", unitFlagsParams);
+            _frLog("[FR_UNIT_FLAGS] running_strict_always", unitFlagsParams);
             const [strictResult] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
               { query: unitFlagsStrictQuerySql, params: unitFlagsParams, location: "EU" },
               "france_building_unit_flags_strict_always"
@@ -1968,10 +1923,10 @@ export async function GET(request: NextRequest) {
               if (relaxedRows.length > 0) {
                 unitFlagsRows = [relaxedRows[0]];
                 unitFlagsMatchType = "relaxed";
-                console.log("[FR_UNIT_FLAGS] relaxed_match", { rows: relaxedRows.length });
+                _frLog("[FR_UNIT_FLAGS] relaxed_match", { rows: relaxedRows.length });
               }
             } catch (e) {
-              console.log("[FR_UNIT_FLAGS] relaxed_query_failed", (e as Error)?.message);
+              _frLog("[FR_UNIT_FLAGS] relaxed_query_failed", (e as Error)?.message);
             }
           }
           const unitFlagsRow = unitFlagsRows?.[0] ?? null;
@@ -1989,16 +1944,16 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.debug_match_key = [unitFlagsPostcodeNorm, unitFlagsCityNorm, unitFlagsStreetNorm, unitFlagsHouseNorm].filter(Boolean).join("|") || null;
           frRuntimeDebug.matched_flags_key = unitFlagsRow ? [unitFlagsRow.postcode_norm, unitFlagsRow.city_norm, unitFlagsRow.street_norm_clean, unitFlagsRow.house_number_norm].filter((v) => v != null && String(v).trim() !== "").join("|") || null : null;
           frRuntimeDebug.debug_unit_flags_row = unitFlagsRow ? { postcode: unitFlagsRow.postcode, city: unitFlagsRow.city, street: unitFlagsRow.street, house_number: unitFlagsRow.house_number, postcode_norm: unitFlagsRow.postcode_norm, city_norm: unitFlagsRow.city_norm, street_norm_clean: unitFlagsRow.street_norm_clean, house_number_norm: unitFlagsRow.house_number_norm, distinct_unit_count: unitFlagsRow.distinct_unit_count, has_unit_level_differentiation: unitFlagsRow.has_unit_level_differentiation } : null;
-          console.log("[FR_UNIT_FLAGS] executed_always", { matchFound: unitFlagsRows.length > 0, matchType: unitFlagsMatchType });
+          _frLog("[FR_UNIT_FLAGS] executed_always", { matchFound: unitFlagsRows.length > 0, matchType: unitFlagsMatchType });
         } catch (err) {
-          console.error("[FR_UNIT_FLAGS] query_failed", err);
+          _frErr("[FR_UNIT_FLAGS] query_failed", err);
           frRuntimeDebug.building_unit_flags_query_executed = true; // we attempted it
           unitFlagsRows = [];
           unitFlagsMatchType = "none";
         }
       } else {
         frRuntimeDebug.building_unit_flags_query_executed = false;
-        console.log("[FR_UNIT_FLAGS] skipped_no_address", { postcode: !!unitFlagsPostcodeNorm, street: !!unitFlagsStreetNorm, house: !!unitFlagsHouseNorm });
+        _frLog("[FR_UNIT_FLAGS] skipped_no_address", { postcode: !!unitFlagsPostcodeNorm, street: !!unitFlagsStreetNorm, house: !!unitFlagsHouseNorm });
       }
 
       let earlyCandidateRows: Array<Record<string, unknown>> = [];
@@ -2156,7 +2111,7 @@ export async function GET(request: NextRequest) {
               return true;
             });
             if (strictRowsFromQuery.length !== earlyStrictRows.length) {
-              console.log("[FR_STRICT] true_same_address_filter: pre=" + strictRowsFromQuery.length + " post=" + earlyStrictRows.length);
+              _frLog("[FR_STRICT] true_same_address_filter: pre=" + strictRowsFromQuery.length + " post=" + earlyStrictRows.length);
             }
           }
           const densityRows = (densityResult as [unknown[]])?.[0];
@@ -2246,12 +2201,12 @@ export async function GET(request: NextRequest) {
             (strictAppartCount >= 2 && strictMaisonCount > 0);
           houseEvidenceFromFacts = strictMaisonCount >= 1 && (strictAppartCount === 0 || strictMaisonCount > strictAppartCount);
           candidateLotsFromFacts = earlyStrictRows.length > 0 ? Array.from(strictLots).filter(Boolean) : Array.from(lots).filter(Boolean);
-          console.log("[FR_SOURCE] source_path=facts");
-          console.log("[FR_SOURCE] candidate_rows_found=" + String(earlyCandidateRows.length));
-          console.log("[FR_STRICT_DVF_ROWS] count=" + String(earlyStrictRows.length) + " maison=" + String(strictMaisonCount) + " appart=" + String(strictAppartCount) + " lots=" + String(strictLots.size));
+          _frLog("[FR_SOURCE] source_path=facts");
+          _frLog("[FR_SOURCE] candidate_rows_found=" + String(earlyCandidateRows.length));
+          _frLog("[FR_STRICT_DVF_ROWS] count=" + String(earlyStrictRows.length) + " maison=" + String(strictMaisonCount) + " appart=" + String(strictAppartCount) + " lots=" + String(strictLots.size));
           for (let i = 0; i < earlyStrictRows.length; i++) {
             const r = earlyStrictRows[i] as Record<string, unknown>;
-            console.log("[FR_STRICT_DVF_ROW " + (i + 1) + "]", JSON.stringify({
+            _frLog("[FR_STRICT_DVF_ROW " + (i + 1) + "]", JSON.stringify({
               type_local: String(r?.property_type ?? ""),
               house_number: String(r?.house_number ?? ""),
               street: String(r?.street ?? ""),
@@ -2262,10 +2217,10 @@ export async function GET(request: NextRequest) {
               last_sale_price: typeof r?.last_sale_price === "number" ? r.last_sale_price : null,
             }));
           }
-          console.log("[FR_CLASSIFY] apartment_evidence=" + (apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts" : "none_from_facts"));
-          console.log("[FR_CLASSIFY] house_evidence_from_facts=" + (houseEvidenceFromFacts ? "maison_dominates" : "false"));
+          _frLog("[FR_CLASSIFY] apartment_evidence=" + (apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts" : "none_from_facts"));
+          _frLog("[FR_CLASSIFY] house_evidence_from_facts=" + (houseEvidenceFromFacts ? "maison_dominates" : "false"));
         } catch (e) {
-          console.log("[FR_SOURCE] early_candidate_query_error", (e as Error)?.message);
+          _frLog("[FR_SOURCE] early_candidate_query_error", (e as Error)?.message);
         }
       }
 
@@ -2334,7 +2289,7 @@ export async function GET(request: NextRequest) {
         LIMIT 1
       `;
 
-      console.log("[FR_INIT] about to run first query");
+      _frLog("[FR_INIT] about to run first query");
       let detectRows: Array<Record<string, unknown>> = [];
       let strictDetectRowsArr: Array<Record<string, unknown>> = [];
       let profileRows: Array<Record<string, unknown>> = [];
@@ -2367,7 +2322,7 @@ export async function GET(request: NextRequest) {
       };
 
       try {
-        console.log("[FR_GOLD] before_intelligence_detection_query");
+        _frLog("[FR_GOLD] before_intelligence_detection_query");
         const queries: Promise<unknown>[] = [
           queryWithTimeout<[Array<Record<string, unknown>>]>(
             { query: detectionQuery, params: detectParams },
@@ -2395,24 +2350,24 @@ export async function GET(request: NextRequest) {
           const profileResult = results[2] as [Array<Record<string, unknown>>];
           profileRows = (Array.isArray(profileResult?.[0]) ? profileResult[0] : []) as Array<Record<string, unknown>>;
         }
-        console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
-        if (profileRows?.length) console.log("[FR_GOLD] france_building_profile", { rows: profileRows.length });
-        if (unitFlagsRows?.length) console.log("[FR_GOLD] france_building_unit_flags", { rows: unitFlagsRows.length, matchType: unitFlagsMatchType });
+        _frLog("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
+        if (profileRows?.length) _frLog("[FR_GOLD] france_building_profile", { rows: profileRows.length });
+        if (unitFlagsRows?.length) _frLog("[FR_GOLD] france_building_unit_flags", { rows: unitFlagsRows.length, matchType: unitFlagsMatchType });
       } catch (err) {
-        console.error("[FR_ERROR] intelligence_profile_query_failed_continuing_with_valutation", err);
+        _frErr("[FR_ERROR] intelligence_profile_query_failed_continuing_with_valutation", err);
         detectRows = [];
         strictDetectRowsArr = [];
         profileRows = [];
       }
 
       // Debug: log exact query params + raw row result (do not change logic).
-      console.log("[FR_GOLD] intelligence_detection_query_params", {
+      _frLog("[FR_GOLD] intelligence_detection_query_params", {
         city: cityNorm,
         postcode: postcodeNorm,
         normalized_street: streetNormalizedDet,
         house_number: houseNumberNorm,
       });
-      console.log("[FR_GOLD] intelligence_detection_raw_row", {
+      _frLog("[FR_GOLD] intelligence_detection_raw_row", {
         row: detectRows?.[0] ?? null,
       });
 
@@ -2542,7 +2497,7 @@ export async function GET(request: NextRequest) {
       const hasDvfTypeLocal = strictMaisonCount > 0 || strictAppartCount > 0;
       const hasPositiveApartmentEvidence = apartmentEvidenceFromFacts || isMultiUnitDetected;
 
-      // Strict property-type resolution: official data first. Decision order A → E.
+      // Strict property-type resolution: official data first. Decision order A ג†’ E.
       type PropertyTypeSource = "dvf_type_local" | "strict_same_address_lot_evidence" | "official_building_evidence" | "heuristic_fallback";
       type PropertyTypeFinal = "house" | "apartment" | "unknown";
       let propertyTypeFinal: PropertyTypeFinal = "unknown";
@@ -2555,7 +2510,7 @@ export async function GET(request: NextRequest) {
       let frDetectConfidence: "high" | "medium" | "low" = "low";
       let frDetectReason = "No DVF type_local and insufficient evidence";
 
-      // A–B–C: Strict same-address DVF rows with type_local (Maison / Appartement)
+      // Aג€“Bג€“C: Strict same-address DVF rows with type_local (Maison / Appartement)
       if (hasDvfRowsAtAddress && hasDvfTypeLocal) {
         if (maisonDominant) {
           propertyTypeFinal = "house";
@@ -2563,7 +2518,7 @@ export async function GET(request: NextRequest) {
           propertyTypeConfidence = "high";
           detectClass = "house";
           frDetectionReason = "dvf_maison_dominant";
-          frDetectReason = "DVF type_local Maison dominant at address — house, never prompt for lot";
+          frDetectReason = "DVF type_local Maison dominant at address ג€” house, never prompt for lot";
           frDetectConfidence = "high";
         } else if (appartementDominant || strictLots.size >= 2) {
           propertyTypeFinal = "apartment";
@@ -2581,18 +2536,18 @@ export async function GET(request: NextRequest) {
           propertyTypeConfidence = "medium";
           detectClass = "apartment";
           frDetectionReason = "dvf_mixed_prefer_apartment";
-          frDetectReason = "DVF mixed Maison/Appartement at address — prefer apartment for lot prompt";
+          frDetectReason = "DVF mixed Maison/Appartement at address ג€” prefer apartment for lot prompt";
           frDetectConfidence = "medium";
         }
       } else if (!hasDvfTypeLocal) {
-        // D: No usable type_local — building-level official evidence (strict same-address only)
+        // D: No usable type_local ג€” building-level official evidence (strict same-address only)
         if (buildingIntelStrictMatch && isMultiUnitDetected) {
           propertyTypeFinal = "apartment";
           propertyTypeSource = "official_building_evidence";
           propertyTypeConfidence = "medium";
           detectClass = "apartment";
           frDetectionReason = "official_building_multi_unit";
-          frDetectReason = "No DVF type_local — strict building intelligence multi-unit at address";
+          frDetectReason = "No DVF type_local ג€” strict building intelligence multi-unit at address";
           frDetectConfidence = "medium";
         } else if (buildingIntelStrictMatch && isHouseLikeDetected) {
           propertyTypeFinal = "house";
@@ -2600,7 +2555,7 @@ export async function GET(request: NextRequest) {
           propertyTypeConfidence = "medium";
           detectClass = "house";
           frDetectionReason = "official_building_house_like";
-          frDetectReason = "No DVF type_local — strict building intelligence house-like at address";
+          frDetectReason = "No DVF type_local ג€” strict building intelligence house-like at address";
           frDetectConfidence = "medium";
         } else {
           // E: Heuristic fallback only when official evidence inconclusive
@@ -2610,7 +2565,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "medium";
             detectClass = "house";
             frDetectionReason = "heuristic_strong_house";
-            frDetectReason = "No DVF type_local — heuristic: maison signals from related data";
+            frDetectReason = "No DVF type_local ג€” heuristic: maison signals from related data";
             frDetectConfidence = "medium";
           } else if (hasPositiveApartmentEvidence && !houseLikeNoStrictEvidence) {
             propertyTypeFinal = "apartment";
@@ -2618,7 +2573,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = apartmentEvidenceFromFacts ? "medium" : "low";
             detectClass = "apartment";
             frDetectionReason = apartmentEvidenceFromFacts ? "heuristic_multi_lot" : "heuristic_building_intel";
-            frDetectReason = apartmentEvidenceFromFacts ? "No DVF type_local — multi-lot at address" : "No DVF type_local — building intelligence multi-unit";
+            frDetectReason = apartmentEvidenceFromFacts ? "No DVF type_local ג€” multi-lot at address" : "No DVF type_local ג€” building intelligence multi-unit";
             frDetectConfidence = apartmentEvidenceFromFacts ? "medium" : "low";
           } else if (houseFromLowDensityAndMaison && !apartmentFromHighTxCount) {
             propertyTypeFinal = "house";
@@ -2626,7 +2581,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "low";
             detectClass = "house";
             frDetectionReason = "heuristic_low_density_maison";
-            frDetectReason = "No DVF type_local — low density, maison-related signals";
+            frDetectReason = "No DVF type_local ג€” low density, maison-related signals";
             frDetectConfidence = "low";
           } else if (apartmentFromHighTxCount && !houseLikeNoStrictEvidence) {
             propertyTypeFinal = "apartment";
@@ -2634,7 +2589,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "medium";
             detectClass = "apartment";
             frDetectionReason = "heuristic_high_tx_count";
-            frDetectReason = `No DVF type_local — 5+ transactions at same address (${sameAddressTxCount})`;
+            frDetectReason = `No DVF type_local ג€” 5+ transactions at same address (${sameAddressTxCount})`;
             frDetectConfidence = "medium";
           } else if (mediumHouseSignals) {
             propertyTypeFinal = "house";
@@ -2642,7 +2597,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "low";
             detectClass = "house";
             frDetectionReason = "heuristic_intelligence_house";
-            frDetectReason = "No DVF type_local — building intelligence house-like";
+            frDetectReason = "No DVF type_local ג€” building intelligence house-like";
             frDetectConfidence = "low";
           } else if (lowTxSameAddress && (maisonDominant || isHouseLikeDetected)) {
             propertyTypeFinal = "house";
@@ -2650,7 +2605,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "low";
             detectClass = "house";
             frDetectionReason = "heuristic_low_tx_house";
-            frDetectReason = "No DVF type_local — 1-2 transactions with house-like signals";
+            frDetectReason = "No DVF type_local ג€” 1-2 transactions with house-like signals";
             frDetectConfidence = "low";
           } else if (isLikelyBuilding && /^(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(streetForHeuristic)) {
             propertyTypeFinal = "house";
@@ -2658,7 +2613,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "low";
             detectClass = "house";
             frDetectionReason = "heuristic_street_pattern";
-            frDetectReason = "No DVF type_local — street pattern (chemin/route/etc) fallback";
+            frDetectReason = "No DVF type_local ג€” street pattern (chemin/route/etc) fallback";
             frDetectConfidence = "low";
           } else if (isLikelyBuilding) {
             propertyTypeFinal = "apartment";
@@ -2666,7 +2621,7 @@ export async function GET(request: NextRequest) {
             propertyTypeConfidence = "low";
             detectClass = "apartment";
             frDetectionReason = "heuristic_likely_building";
-            frDetectReason = "No DVF type_local — urban address default to building";
+            frDetectReason = "No DVF type_local ג€” urban address default to building";
             frDetectConfidence = "low";
           } else {
             propertyTypeFinal = "unknown";
@@ -2705,7 +2660,7 @@ export async function GET(request: NextRequest) {
         detectClass = "house";
         detectOverrideReason = "hard_lock_maison_overrides";
         frDetectionReason = "dvf_maison_hard_lock";
-        frDetectReason = "DVF Maison at strict same-address — hard lock, not overridden by heuristics";
+        frDetectReason = "DVF Maison at strict same-address ג€” hard lock, not overridden by heuristics";
         frDetectConfidence = "high";
       }
 
@@ -2724,18 +2679,18 @@ export async function GET(request: NextRequest) {
           propertyTypeSource = "heuristic_fallback";
           propertyTypeConfidence = "low";
           detectClass = "house";
-          detectOverrideReason = "low_conf_heuristic_apartment_no_strict→house";
+          detectOverrideReason = "low_conf_heuristic_apartment_no_strictג†’house";
           frDetectionReason = "heuristic_house_like_no_strict_dvf";
-          frDetectReason = "No strict DVF — low-confidence heuristic apartment overridden to house (street/intel house-like)";
+          frDetectReason = "No strict DVF ג€” low-confidence heuristic apartment overridden to house (street/intel house-like)";
           frDetectConfidence = "low";
         } else {
           propertyTypeFinal = "unknown";
           propertyTypeSource = "heuristic_fallback";
           propertyTypeConfidence = "low";
           detectClass = "unclear";
-          detectOverrideReason = "low_conf_heuristic_apartment_no_strict→unknown";
+          detectOverrideReason = "low_conf_heuristic_apartment_no_strictג†’unknown";
           frDetectionReason = "unclear_no_strict_evidence";
-          frDetectReason = "No strict DVF — low-confidence heuristic apartment overridden to unknown (inconclusive)";
+          frDetectReason = "No strict DVF ג€” low-confidence heuristic apartment overridden to unknown (inconclusive)";
           frDetectConfidence = "low";
         }
       }
@@ -2828,14 +2783,14 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_detect_multi_unit_source = multiUnitSource;
       frRuntimeDebug.fr_detect_ban_strength_used = banStreetThresholdPassed;
       frRuntimeDebug.fr_should_prompt_lot = shouldPromptLot;
-      console.log("[FR_CLASSIFY] apartment_evidence=" + apartmentEvidenceDesc);
-      console.log("[FR_CLASSIFY] multi_unit_evidence=" + multiUnitEvidenceDesc);
-      console.log("[FR_CLASSIFY] detect_class=" + detectClass);
+      _frLog("[FR_CLASSIFY] apartment_evidence=" + apartmentEvidenceDesc);
+      _frLog("[FR_CLASSIFY] multi_unit_evidence=" + multiUnitEvidenceDesc);
+      _frLog("[FR_CLASSIFY] detect_class=" + detectClass);
       const flowPropertyType = detectClass === "house" ? "house" : detectClass === "apartment" ? "apartment" : "unknown";
-      console.log("[FR_FLOW] property_type=" + flowPropertyType);
-      console.log("[FR_STEP] apartment_detection_done");
+      _frLog("[FR_FLOW] property_type=" + flowPropertyType);
+      _frLog("[FR_STEP] apartment_detection_done");
 
-      console.log("[FR_GOLD] intelligence_detection_computed", {
+      _frLog("[FR_GOLD] intelligence_detection_computed", {
         isMultiUnitDetected,
         isHouseLikeDetected,
         detectedTypeStr,
@@ -2852,8 +2807,8 @@ export async function GET(request: NextRequest) {
       ]);
       const candidateLots = candidateLotsFromFacts.length > 0 ? candidateLotsFromFacts : candidateLotsFromIntelligence;
 
-      console.log("[FR_CLASSIFY] should_prompt_lot=" + String(detectClass === "apartment" && !submittedLotPresent));
-      console.log("[FR_GOLD] intelligence_apartment_vs_house", {
+      _frLog("[FR_CLASSIFY] should_prompt_lot=" + String(detectClass === "apartment" && !submittedLotPresent));
+      _frLog("[FR_GOLD] intelligence_apartment_vs_house", {
         detectClass,
         isMultiUnitDetected,
         isHouseLikeDetected,
@@ -2951,7 +2906,7 @@ export async function GET(request: NextRequest) {
         return Number.isFinite(n) ? n : null;
       };
 
-      /** Cents → euros for display payloads (uses same parsing as ladder raw reads). */
+      /** Cents ג†’ euros for display payloads (uses same parsing as ladder raw reads). */
       const frDvfCentsToEurosFromRow = (raw: unknown): number | null => {
         const n = parseMaybeDecimal(raw);
         if (n == null || !Number.isFinite(n)) return null;
@@ -2987,9 +2942,9 @@ export async function GET(request: NextRequest) {
         );
         const sampleRow = (sampleRows?.[0] ?? null) as Record<string, unknown> | null;
 
-        console.log("[FR_SQL] ladder_step=" + ladderStep);
-        console.log("[FR_SQL] table_name=" + `streetiq-bigquery.streetiq_gold.${tableName}`);
-        console.log("[FR_SQL] columns_detected=", columns);
+        _frLog("[FR_SQL] ladder_step=" + ladderStep);
+        _frLog("[FR_SQL] table_name=" + `streetiq-bigquery.streetiq_gold.${tableName}`);
+        _frLog("[FR_SQL] columns_detected=", columns);
         return { columns, sampleRow };
       };
 
@@ -3051,9 +3006,9 @@ export async function GET(request: NextRequest) {
       const frBqLotMatchSql = buildLotMatchSql();
       frRuntimeDebug.exact_lot_column_used = exactPrimaryLotColumn;
       frRuntimeDebug.exact_lot_match_columns = lotMatchColumns.length > 0 ? lotMatchColumns : null;
-      console.log("[FR_EXACT] lot_column_used=" + String(exactPrimaryLotColumn ?? "none"));
-      console.log("[FR_EXACT] lot_match_columns=" + JSON.stringify(lotMatchColumns));
-      console.log("[FR_EXACT] lot_like_schema_columns=" + JSON.stringify(lotLikeColsFromSchema));
+      _frLog("[FR_EXACT] lot_column_used=" + String(exactPrimaryLotColumn ?? "none"));
+      _frLog("[FR_EXACT] lot_match_columns=" + JSON.stringify(lotMatchColumns));
+      _frLog("[FR_EXACT] lot_like_schema_columns=" + JSON.stringify(lotLikeColsFromSchema));
 
       const frBqStreetBase = `REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(street AS STRING)), NFD)), r'\\p{M}', ''), r'[^A-Z0-9 ]+', ' ')`;
       const frBqStreetNoPrefix = `REGEXP_REPLACE(${frBqStreetBase}, r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', '')`;
@@ -3065,7 +3020,7 @@ export async function GET(request: NextRequest) {
       const normalizeHouseNumberForFacts = (hn: string): string => {
         let s = (hn ?? "").toString().trim().toUpperCase();
         s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
-        s = s.replace(/[-–—\s]+/g, "").replace(/[^0-9A-Z]/g, "");
+        s = s.replace(/[-ג€“ג€”\s]+/g, "").replace(/[^0-9A-Z]/g, "");
         return s || "";
       };
       const houseNumberNormForMatch = normalizeHouseNumberForFacts(houseNumberNorm);
@@ -3100,27 +3055,27 @@ export async function GET(request: NextRequest) {
         : null;
       const exactQuery = exactQueryWithLot ?? `${exactQueryBase}\n        LIMIT 50`;
       const shouldPromptLotFirst = shouldPromptLot;
-      console.log("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
-      console.log("[FR_LOT_API] submittedLotPresent", submittedLotPresent);
-      console.log("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);
-      console.log("[FR_FLOW] submitted_lot=" + String(normalizedRequestedLot ?? ""));
-      console.log("[FR_FLOW] should_prompt_lot=" + String(shouldPromptLotFirst));
-      console.log("[FR_FLOW] continue_to_valuation=" + String(!shouldPromptLotFirst));
+      _frLog("[FR_LOT_API] normalizedRequestedLot", normalizedRequestedLot);
+      _frLog("[FR_LOT_API] submittedLotPresent", submittedLotPresent);
+      _frLog("[FR_LOT_API] shouldPromptLotFirst", shouldPromptLotFirst);
+      _frLog("[FR_FLOW] submitted_lot=" + String(normalizedRequestedLot ?? ""));
+      _frLog("[FR_FLOW] should_prompt_lot=" + String(shouldPromptLotFirst));
+      _frLog("[FR_FLOW] continue_to_valuation=" + String(!shouldPromptLotFirst));
       if (shouldPromptLotFirst) {
         if (submittedLotPresent) {
           console.error(
-            "[FR_RETURN] blocked_prompt_lot_first_submitted_lot_present=true — continuing to valuation ladder"
+            "[FR_RETURN] blocked_prompt_lot_first_submitted_lot_present=true ג€” continuing to valuation ladder"
           );
         } else {
           // Defer lot prompt: run ladder first to try building-level fallback (req 4).
           // If building profile returns a result, we return it. If not, return prompt before no_data (req 3).
-          console.log("[FR_FLOW] apartment_no_lot_defer_prompt_until_after_building_fallback");
+          _frLog("[FR_FLOW] apartment_no_lot_defer_prompt_until_after_building_fallback");
         }
       }
 
-      console.log("[FR_FLOW] ladder_step_started=EXACT");
-      console.log("[FR_STEP] exact_lookup_start");
-      console.log("[FR_GOLD] before_exact_query");
+      _frLog("[FR_FLOW] ladder_step_started=EXACT");
+      _frLog("[FR_STEP] exact_lookup_start");
+      _frLog("[FR_GOLD] before_exact_query");
       const lotNorm = (normalizedRequestedLot ?? "").trim().toUpperCase();
       const lotStripped = lotNorm.replace(/^0+/, "") || lotNorm;
 
@@ -3144,7 +3099,7 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_source_lookup_street_type = streetParsedForSource.type || null;
       frRuntimeDebug.fr_source_lookup_street = streetNormForSource || null;
       frRuntimeDebug.fr_source_lookup_house_number = houseNumberNormForSource || null;
-      console.log("[FR_PARAMS]", { query: "exact_query", ...exactParams });
+      _frLog("[FR_PARAMS]", { query: "exact_query", ...exactParams });
       let exactRows: Array<Record<string, unknown>> = [];
       let exactLotUsedInQuery = false;
       // Layer 1: property_latest_facts first
@@ -3156,14 +3111,14 @@ export async function GET(request: NextRequest) {
         exactRows = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
         if (exactRows.length > 0) {
           exactLotUsedInQuery = true;
-          console.log("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
+          _frLog("[FR_EXACT] lot_filtered_query returned rows=" + exactRows.length);
         } else {
           const [addressOnlyRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
             { query: `${exactQueryBase}\n        LIMIT 50`, params: exactParams },
             "exact_query_address_only"
           );
           exactRows = (addressOnlyRows ?? []) as Array<Record<string, unknown>>;
-          console.log("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
+          _frLog("[FR_EXACT] lot_filtered=0, address_only_query returned rows=" + exactRows.length);
         }
       } else {
         const [rows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
@@ -3219,10 +3174,10 @@ export async function GET(request: NextRequest) {
             exactRows = richSourceRows;
             frRuntimeDebug.fr_exact_source_layer = "rich_source";
             frRuntimeDebug.fr_source_lookup_exact_count = exactRows.length;
-            console.log("[FR_RICH_SOURCE] fallback rows=" + richSourceRows.length + " exact_count=" + exactCount);
+            _frLog("[FR_RICH_SOURCE] fallback rows=" + richSourceRows.length + " exact_count=" + exactCount);
           }
         } catch (err) {
-          console.error("[FR_RICH_SOURCE] fallback lookup failed", err);
+          _frErr("[FR_RICH_SOURCE] fallback lookup failed", err);
           frRuntimeDebug.fr_used_rich_source = true;
           frRuntimeDebug.fr_rich_source_exact_count = 0;
           frRuntimeDebug.fr_rich_source_building_count = 0;
@@ -3240,11 +3195,11 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_source_lookup_failed_reason =
           !streetNormForSource ? "no_street_for_lookup" : !postcodeNormForSource && !cityNormForSource ? "no_postcode_or_city" : "no_matching_rows_in_property_latest_facts";
       }
-      console.log("[FR_SOURCE] source_rows_exact=" + exactRowsCount);
-      console.log("[FR_GOLD] after_exact_query", { rows: exactRowsCount });
-      console.log("[FR_SQL] query_ok=true");
-      console.log("[FR_SQL] rows_count=", (exactRows as any[])?.length ?? 0);
-      console.log("[FR_SQL] columns_detected=", Object.keys(exactTableInspection.sampleRow ?? {}));
+      _frLog("[FR_SOURCE] source_rows_exact=" + exactRowsCount);
+      _frLog("[FR_GOLD] after_exact_query", { rows: exactRowsCount });
+      _frLog("[FR_SQL] query_ok=true");
+      _frLog("[FR_SQL] rows_count=", (exactRows as any[])?.length ?? 0);
+      _frLog("[FR_SQL] columns_detected=", Object.keys(exactTableInspection.sampleRow ?? {}));
 
       const rawExactHouseNumberRowCount = (exactRows as Array<Record<string, unknown>>).length;
 
@@ -3415,19 +3370,19 @@ export async function GET(request: NextRequest) {
         const normalizedFactStreet = factStreetRaw ? normalizeStreetForDetection(factStreetRaw) : "";
         const matchedHouseNumber = firstExactRow ? String((firstExactRow as any).house_number ?? "") : houseNumberNorm;
 
-        console.log("[FR_HOUSE] normalized_ban_street=" + String(streetNormalizedDet || ""));
-        console.log("[FR_HOUSE] normalized_fact_street=" + String(normalizedFactStreet || ""));
-        console.log("[FR_HOUSE] matched_house_number=" + String(matchedHouseNumber || ""));
+        _frLog("[FR_HOUSE] normalized_ban_street=" + String(streetNormalizedDet || ""));
+        _frLog("[FR_HOUSE] normalized_fact_street=" + String(normalizedFactStreet || ""));
+        _frLog("[FR_HOUSE] matched_house_number=" + String(matchedHouseNumber || ""));
 
         const exactHouseRows = (exactRows as Array<Record<string, unknown>>).filter(isHouseLikePropertyType);
         const exactHouseUsable = exactHouseRows.filter(rowUsableForExactHouse);
         frRuntimeDebug.exact_house_row_count = exactHouseRows.length;
         frRuntimeDebug.exact_house_usable_count = exactHouseUsable.length;
 
-        console.log("[FR_HOUSE] row_found=" + String(exactHouseRows.length > 0));
-        console.log("[FR_HOUSE] usable=" + String(exactHouseUsable.length > 0));
-        console.log("[FR_HOUSE] exact_house_row_count=" + String(exactHouseRows.length));
-        console.log("[FR_HOUSE] exact_house_usable_count=" + String(exactHouseUsable.length));
+        _frLog("[FR_HOUSE] row_found=" + String(exactHouseRows.length > 0));
+        _frLog("[FR_HOUSE] usable=" + String(exactHouseUsable.length > 0));
+        _frLog("[FR_HOUSE] exact_house_row_count=" + String(exactHouseRows.length));
+        _frLog("[FR_HOUSE] exact_house_usable_count=" + String(exactHouseUsable.length));
 
         const houseBest =
           exactHouseUsable.length > 0
@@ -3501,18 +3456,18 @@ export async function GET(request: NextRequest) {
           const exactHouseRejectReason =
             exactHouseRows.length === 0 ? "no_house_type_rows_at_address" : "house_rows_missing_ppm2_or_last_sale";
           frRuntimeDebug.exact_house_reject_reason = exactHouseRejectReason;
-          console.log("[FR_HOUSE] reject_reason=" + exactHouseRejectReason);
+          _frLog("[FR_HOUSE] reject_reason=" + exactHouseRejectReason);
         }
       }
 
       if (detectClass === "house" && rawExactHouseNumberRowCount === 0) {
-        console.log("[FR_HOUSE] normalized_ban_street=" + String(streetNormalizedDet || ""));
-        console.log("[FR_HOUSE] normalized_fact_street=(no_rows)");
-        console.log("[FR_HOUSE] matched_house_number=" + String(houseNumberNorm || ""));
-        console.log("[FR_HOUSE] row_found=false");
-        console.log("[FR_HOUSE] usable=false");
+        _frLog("[FR_HOUSE] normalized_ban_street=" + String(streetNormalizedDet || ""));
+        _frLog("[FR_HOUSE] normalized_fact_street=(no_rows)");
+        _frLog("[FR_HOUSE] matched_house_number=" + String(houseNumberNorm || ""));
+        _frLog("[FR_HOUSE] row_found=false");
+        _frLog("[FR_HOUSE] usable=false");
         frRuntimeDebug.exact_house_reject_reason = "no_exact_rows_for_address";
-        console.log("[FR_HOUSE] reject_reason=no_exact_rows_for_address");
+        _frLog("[FR_HOUSE] reject_reason=no_exact_rows_for_address");
       }
 
       let exactTier: "EXACT_UNIT" | "EXACT_ADDRESS" | "APPROXIMATE" | "NONE" = "NONE";
@@ -3548,7 +3503,7 @@ export async function GET(request: NextRequest) {
       const exactApartmentRowsCount = exactMatchingRows.length;
       const exactUsableRowsCount = usableUnitRows.length + usableAddressRows.length;
 
-      console.log("[FR_DEBUG] exact_apartment_query_counts", {
+      _frLog("[FR_DEBUG] exact_apartment_query_counts", {
         submittedLot: aptNumber?.trim() || null,
         normalizedLot: normalizedRequestedLot,
         exactApartmentRowsCount,
@@ -3556,7 +3511,7 @@ export async function GET(request: NextRequest) {
         exact_unit_row_count: frRuntimeDebug.exact_unit_row_count,
         exact_address_row_count: frRuntimeDebug.exact_address_row_count,
       });
-      console.log("[FR_STEP] exact_lookup_done");
+      _frLog("[FR_STEP] exact_lookup_done");
 
       frRuntimeDebug.exact_rows_count = exactApartmentRowsCount;
       frRuntimeDebug.exact_usable_rows_count = exactUsableRowsCount;
@@ -3569,7 +3524,7 @@ export async function GET(request: NextRequest) {
       } else if (exactApartmentRowsCount === 0) {
         const sample = (exactRows as Array<Record<string, unknown>>)[0];
         const sampleTokens = sample ? extractLotTokensFromRow(sample) : [];
-        console.log("[FR_EXACT] sample_row_lot_tokens=" + JSON.stringify(sampleTokens));
+        _frLog("[FR_EXACT] sample_row_lot_tokens=" + JSON.stringify(sampleTokens));
         exactMatchReason =
           "address_rows_exist_but_no_unit_or_address_aggregate_row_for_token_" + String(exactLotToken);
       } else if (exactUsableRowsCount === 0) {
@@ -3578,7 +3533,7 @@ export async function GET(request: NextRequest) {
         exactMatchReason = "usable_exact_rows_available";
       }
       frRuntimeDebug.exact_match_reason = exactMatchReason;
-      console.log("[FR_EXACT] exact_match_reason=" + exactMatchReason);
+      _frLog("[FR_EXACT] exact_match_reason=" + exactMatchReason);
       console.log(
         "[FR_EXACT] raw_address_rows_count=" +
           String(rawExactHouseNumberRowCount) +
@@ -3617,9 +3572,9 @@ export async function GET(request: NextRequest) {
               ? usableApproximateRows
               : [];
 
-      console.log("[FR_EXACT] submitted_lot=" + String(exactLotToken ?? ""));
-      console.log("[FR_EXACT] unit_match=" + String(exactUnitMatch));
-      console.log("[FR_EXACT] exact_level=" + exactTier);
+      _frLog("[FR_EXACT] submitted_lot=" + String(exactLotToken ?? ""));
+      _frLog("[FR_EXACT] unit_match=" + String(exactUnitMatch));
+      _frLog("[FR_EXACT] exact_level=" + exactTier);
 
       const logRowForFrExact =
         exactBest ??
@@ -3628,25 +3583,25 @@ export async function GET(request: NextRequest) {
         ((exactRows as Array<Record<string, unknown>>)[0] ?? null);
       const factStreetRawForLog = logRowForFrExact ? String((logRowForFrExact as any).street ?? "") : "";
       const normalizedFactStreet = factStreetRawForLog ? normalizeStreetForDetection(factStreetRawForLog) : "";
-      console.log("[FR_ADDR] normalized_ban_street=" + String(streetNormalizedDet || ""));
-      console.log("[FR_ADDR] normalized_fact_street=" + String(normalizedFactStreet || "—"));
-      console.log("[FR_ADDR] normalized_house_number=" + String(houseNumberNorm || ""));
-      console.log("[FR_EXACT] normalized_ban_street=" + String(streetNormalizedDet || ""));
-      console.log("[FR_EXACT] normalized_fact_street=" + String(normalizedFactStreet || "—"));
+      _frLog("[FR_ADDR] normalized_ban_street=" + String(streetNormalizedDet || ""));
+      _frLog("[FR_ADDR] normalized_fact_street=" + String(normalizedFactStreet || "ג€”"));
+      _frLog("[FR_ADDR] normalized_house_number=" + String(houseNumberNorm || ""));
+      _frLog("[FR_EXACT] normalized_ban_street=" + String(streetNormalizedDet || ""));
+      _frLog("[FR_EXACT] normalized_fact_street=" + String(normalizedFactStreet || "ג€”"));
       console.log(
         "[FR_EXACT] matched_house_number=" +
-          (logRowForFrExact ? String((logRowForFrExact as any).house_number ?? "") : "—")
+          (logRowForFrExact ? String((logRowForFrExact as any).house_number ?? "") : "ג€”")
       );
       {
         const rowForUnitLog = exactBest ?? logRowForFrExact;
         const un = rowForUnitLog ? (rowForUnitLog as any).unit_number : undefined;
         const unLog =
           !rowForUnitLog
-            ? "—"
+            ? "ג€”"
             : un === null || un === undefined || String(un).trim() === ""
               ? "null"
               : String(un);
-        console.log("[FR_EXACT] matched_unit_number=" + unLog);
+        _frLog("[FR_EXACT] matched_unit_number=" + unLog);
       }
 
       const FR_LABEL_BUILDING_SIMILAR_UNIT = "Based on similar apartments in this building";
@@ -3686,16 +3641,16 @@ export async function GET(request: NextRequest) {
           if (!houseNumberNorm || !postcodeNorm) {
             const rr = !houseNumberNorm ? "missing_house_number" : "missing_postcode";
             frRuntimeDebug.building_similar_unit_reject_reason = rr;
-            console.log("[FR_BUILDING] reject_reason=" + rr);
+            _frLog("[FR_BUILDING] reject_reason=" + rr);
             return null;
           }
-          console.log("[FR_FLOW] ladder_step_started=BUILDING_SIMILAR_UNIT");
-          console.log("[FR_STEP] building_similar_unit_lookup_start");
+          _frLog("[FR_FLOW] ladder_step_started=BUILDING_SIMILAR_UNIT");
+          _frLog("[FR_STEP] building_similar_unit_lookup_start");
           const preloaded = (p.preloadedSameAddressRows ?? []).filter(
             (r) => (String((r as any).property_type ?? "") || "").toLowerCase().trim() === "appartement"
           );
           if (preloaded.length >= 2) {
-            console.log("[FR_BUILDING] using_preloaded_rich_source rows=" + preloaded.length);
+            _frLog("[FR_BUILDING] using_preloaded_rich_source rows=" + preloaded.length);
           }
           const lotColEscaped =
             exactPrimaryLotColumn
@@ -3752,9 +3707,9 @@ export async function GET(request: NextRequest) {
             const lotFiltered = (lotFilteredRows ?? []) as Array<Record<string, unknown>>;
             if (lotFiltered.length >= 2) {
               similarRowsRaw = lotFiltered;
-              console.log("[FR_BUILDING] lot_filtered_candidates=" + lotFiltered.length);
+              _frLog("[FR_BUILDING] lot_filtered_candidates=" + lotFiltered.length);
             } else {
-              console.log("[FR_BUILDING] lot_filtered_rows=" + lotFiltered.length + ", falling_back_to_address_only");
+              _frLog("[FR_BUILDING] lot_filtered_rows=" + lotFiltered.length + ", falling_back_to_address_only");
               [similarRowsRaw] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
                 { query: `${similarUnitQueryBase}\n          LIMIT 300`, params: similarParams },
                 "building_similar_unit_query"
@@ -3797,7 +3752,7 @@ export async function GET(request: NextRequest) {
             );
             similarRows = nearbyRows ?? [];
             rawCount = similarRows.length;
-            if (rawCount > 0) console.log("[FR_BUILDING] expanded_with_nearby_house_numbers rows=" + String(rawCount));
+            if (rawCount > 0) _frLog("[FR_BUILDING] expanded_with_nearby_house_numbers rows=" + String(rawCount));
           }
           if (rawCount < 2 && postcodeNormForSource && houseNumberNormForSource) {
             try {
@@ -3823,15 +3778,15 @@ export async function GET(request: NextRequest) {
                 rawCount = similarRows.length;
                 frRuntimeDebug.fr_used_rich_source = true;
                 frRuntimeDebug.fr_rich_source_building_count = rawCount;
-                console.log("[FR_BUILDING] rich_source_fallback rows=" + String(rawCount));
+                _frLog("[FR_BUILDING] rich_source_fallback rows=" + String(rawCount));
               }
             } catch (err) {
-              console.error("[FR_BUILDING] rich_source fallback failed", err);
+              _frErr("[FR_BUILDING] rich_source fallback failed", err);
             }
           }
           frRuntimeDebug.building_similar_unit_candidates_count = rawCount;
-          console.log("[FR_GOLD] after_building_similar_unit_query", { rows: rawCount });
-          console.log("[FR_BUILDING] candidates_count=" + String(rawCount));
+          _frLog("[FR_GOLD] after_building_similar_unit_query", { rows: rawCount });
+          _frLog("[FR_BUILDING] candidates_count=" + String(rawCount));
 
           const lotDistanceFromRow = (r: Record<string, unknown>): number => {
             if (!exactLotToken) return 999;
@@ -3893,11 +3848,11 @@ export async function GET(request: NextRequest) {
 
           const afterFilters = enriched.length;
           frRuntimeDebug.building_similar_unit_after_filters_count = afterFilters;
-          console.log("[FR_BUILDING] after_filters_count=" + String(afterFilters));
+          _frLog("[FR_BUILDING] after_filters_count=" + String(afterFilters));
 
           if (afterFilters === 0) {
             frRuntimeDebug.building_similar_unit_reject_reason = "no_candidates_after_quality_filters";
-            console.log("[FR_BUILDING] reject_reason=no_candidates_after_quality_filters");
+            _frLog("[FR_BUILDING] reject_reason=no_candidates_after_quality_filters");
             return null;
           }
 
@@ -3906,7 +3861,7 @@ export async function GET(request: NextRequest) {
             trimmed = frTrimFractionExtremes(enriched, (x) => x.ppmEuro, 0.1);
           }
           if (trimmed.length === 0) {
-            console.log("[FR_BUILDING] reject_reason=outlier_trim_removed_all_fallback_to_untrimmed");
+            _frLog("[FR_BUILDING] reject_reason=outlier_trim_removed_all_fallback_to_untrimmed");
             trimmed = enriched;
           }
 
@@ -3921,7 +3876,7 @@ export async function GET(request: NextRequest) {
               ? p.buildingProfile.median_price_per_m2
               : cohortMedian;
           if (p.buildingProfile && rawCount <= 2) {
-            console.log("[FR_BUILDING_PROFILE] used_in=building (low candidates, using building median)");
+            _frLog("[FR_BUILDING_PROFILE] used_in=building (low candidates, using building median)");
           }
 
           const sorted = [...trimmed].sort((a, b) => {
@@ -3947,7 +3902,7 @@ export async function GET(request: NextRequest) {
           const best = sorted[0];
           if (!best) {
             frRuntimeDebug.building_similar_unit_reject_reason = "no_best_after_sort";
-            console.log("[FR_BUILDING] reject_reason=no_best_after_sort");
+            _frLog("[FR_BUILDING] reject_reason=no_best_after_sort");
             return null;
           }
 
@@ -3981,16 +3936,16 @@ export async function GET(request: NextRequest) {
           const recencyTs = best.dateStr ? new Date(best.dateStr).getTime() : 0;
           const rankingScore = (selectedSurfaceDiff ?? 0) * 1000 + (recencyTs > 0 ? 1e15 - recencyTs : 0);
 
-          console.log("[FR_SURFACE] chosen_surface_value=" + String(targetSurface ?? "null"));
-          console.log("[FR_SURFACE] candidate_surface=" + String(best.surf));
-          console.log("[FR_SURFACE] surface_diff=" + String(selectedSurfaceDiff ?? "null"));
-          console.log("[FR_SURFACE] ranking_score=" + String(rankingScore));
+          _frLog("[FR_SURFACE] chosen_surface_value=" + String(targetSurface ?? "null"));
+          _frLog("[FR_SURFACE] candidate_surface=" + String(best.surf));
+          _frLog("[FR_SURFACE] surface_diff=" + String(selectedSurfaceDiff ?? "null"));
+          _frLog("[FR_SURFACE] ranking_score=" + String(rankingScore));
 
-          console.log("[FR_BUILDING] selected_surface=" + String(estSurf));
-          console.log("[FR_BUILDING] selected_surface_diff=" + String(selectedSurfaceDiff ?? "null"));
-          console.log("[FR_BUILDING] selected_house_distance=" + String(best.houseDistance));
-          console.log("[FR_BUILDING] selected_sale_date=" + String(best.dateStr ?? "null"));
-          console.log("[FR_BUILDING] selected_price_per_m2=" + String(best.ppmEuro));
+          _frLog("[FR_BUILDING] selected_surface=" + String(estSurf));
+          _frLog("[FR_BUILDING] selected_surface_diff=" + String(selectedSurfaceDiff ?? "null"));
+          _frLog("[FR_BUILDING] selected_house_distance=" + String(best.houseDistance));
+          _frLog("[FR_BUILDING] selected_sale_date=" + String(best.dateStr ?? "null"));
+          _frLog("[FR_BUILDING] selected_price_per_m2=" + String(best.ppmEuro));
 
           frRuntimeDebug.building_similar_unit_reject_reason = null;
           frRuntimeDebug.winning_step = "building_similar_unit";
@@ -4001,7 +3956,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
           frRuntimeDebug.property_latest_facts_money_divisor = 1000;
 
-          console.log("[FR_DEBUG] winning_valuation_step", {
+          _frLog("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "building_similar_unit",
             winningSourceLabel: FR_LABEL_BUILDING_SIMILAR_UNIT,
           });
@@ -4015,7 +3970,7 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message:
                   estimated == null
-                    ? `${FR_LABEL_BUILDING_SIMILAR_UNIT} — total estimate needs surface where available.`
+                    ? `${FR_LABEL_BUILDING_SIMILAR_UNIT} ג€” total estimate needs surface where available.`
                     : null,
                 value_level: "building-level",
                 last_transaction: frLastTransactionPayload(
@@ -4064,10 +4019,10 @@ export async function GET(request: NextRequest) {
           );
         } catch (err) {
           frRuntimeDebug.building_similar_unit_reject_reason = "building_similar_unit_query_failed";
-          console.error("[FR_BUILDING] building_similar_unit_query_failed", err);
+          _frErr("[FR_BUILDING] building_similar_unit_query_failed", err);
           return null;
         } finally {
-          console.log("[FR_STEP] building_similar_unit_lookup_done");
+          _frLog("[FR_STEP] building_similar_unit_lookup_done");
         }
       };
 
@@ -4081,12 +4036,12 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.post_lot_relaxed_reject_reason = !exactLotToken ? "no_lot" : "no_postcode";
             return null;
           }
-          console.log("[FR_FLOW] ladder_step_started=POST_LOT_RELAXED");
+          _frLog("[FR_FLOW] ladder_step_started=POST_LOT_RELAXED");
           const preloaded = (preloadedSameAddressRows ?? []).filter(
             (r) => (String((r as any).property_type ?? "") || "").toLowerCase().trim() === "appartement"
           );
           if (preloaded.length >= 2) {
-            console.log("[FR_POST_LOT_RELAXED] using_preloaded_rich_source rows=" + preloaded.length);
+            _frLog("[FR_POST_LOT_RELAXED] using_preloaded_rich_source rows=" + preloaded.length);
           }
           const lotColEscaped =
             exactPrimaryLotColumn
@@ -4157,9 +4112,9 @@ export async function GET(request: NextRequest) {
             const lotFilteredArr = (lotFiltered ?? []) as Array<Record<string, unknown>>;
             if (lotFilteredArr.length >= 2) {
               relaxedRows = lotFilteredArr;
-              console.log("[FR_POST_LOT_RELAXED] lot_filtered_candidates=" + lotFilteredArr.length);
+              _frLog("[FR_POST_LOT_RELAXED] lot_filtered_candidates=" + lotFilteredArr.length);
             } else {
-              console.log("[FR_POST_LOT_RELAXED] lot_filtered_rows=" + lotFilteredArr.length + ", using_relaxed_only");
+              _frLog("[FR_POST_LOT_RELAXED] lot_filtered_rows=" + lotFilteredArr.length + ", using_relaxed_only");
             }
           }
           if (relaxedRows == null) {
@@ -4183,7 +4138,7 @@ export async function GET(request: NextRequest) {
               "post_lot_relaxed_postcode_only"
             );
             relaxedRows = (pcRows ?? []) as Array<Record<string, unknown>>;
-            if (relaxedRows.length > 0) console.log("[FR_POST_LOT_RELAXED] postcode_only_fallback rows=" + relaxedRows.length);
+            if (relaxedRows.length > 0) _frLog("[FR_POST_LOT_RELAXED] postcode_only_fallback rows=" + relaxedRows.length);
           }
           if (relaxedRows.length < 1 && postcodeNormForSource && houseNumberNormForSource) {
             try {
@@ -4217,16 +4172,16 @@ export async function GET(request: NextRequest) {
                 relaxedRows = richArr;
                 frRuntimeDebug.fr_used_rich_source = true;
                 frRuntimeDebug.fr_rich_source_building_count = richArr.length;
-                console.log("[FR_POST_LOT_RELAXED] rich_source_fallback rows=" + richArr.length);
+                _frLog("[FR_POST_LOT_RELAXED] rich_source_fallback rows=" + richArr.length);
               }
             } catch (err) {
-              console.error("[FR_POST_LOT_RELAXED] rich_source fallback failed", err);
+              _frErr("[FR_POST_LOT_RELAXED] rich_source fallback failed", err);
             }
           }
           const similarRows = relaxedRows;
           const rawCount = similarRows.length;
           frRuntimeDebug.post_lot_relaxed_candidates_count = rawCount;
-          console.log("[FR_POST_LOT_RELAXED] candidates_count=" + String(rawCount));
+          _frLog("[FR_POST_LOT_RELAXED] candidates_count=" + String(rawCount));
           if (rawCount < 1) {
             frRuntimeDebug.post_lot_relaxed_reject_reason = "no_rows";
             return null;
@@ -4354,7 +4309,7 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message:
                   estimated == null
-                    ? "Post-lot relaxed — similar apartments in area. Total estimate needs surface."
+                    ? "Post-lot relaxed ג€” similar apartments in area. Total estimate needs surface."
                     : null,
                 value_level: "building-level",
                 last_transaction: {
@@ -4390,17 +4345,17 @@ export async function GET(request: NextRequest) {
                   avgTransactionValue: estimated,
                 },
                 comparables: [],
-                matchExplanation: "Post-lot relaxed — similar apartments in same postcode/street area, ranked by lot match",
+                matchExplanation: "Post-lot relaxed ג€” similar apartments in same postcode/street area, ranked by lot match",
               }),
             },
             "valuation_response"
           );
         } catch (err) {
           frRuntimeDebug.post_lot_relaxed_reject_reason = "query_failed";
-          console.error("[FR_POST_LOT_RELAXED] query_failed", err);
+          _frErr("[FR_POST_LOT_RELAXED] query_failed", err);
           return null;
         } finally {
-          console.log("[FR_STEP] post_lot_relaxed_lookup_done");
+          _frLog("[FR_STEP] post_lot_relaxed_lookup_done");
         }
       };
 
@@ -4428,14 +4383,14 @@ export async function GET(request: NextRequest) {
         const pricePerM2Euro = frPropertyLatestFactsMoneyToEuros(rawPricePerM2Plf) ?? 0;
         const lastSaleEuro = frPropertyLatestFactsMoneyToEuros(rawLastSalePrice) ?? 0;
         frRuntimeDebug.property_latest_facts_money_divisor = 1000;
-        console.log("[FR_PRICE] raw_last_sale_price=" + String(rawLastSalePrice));
-        console.log("[FR_PRICE] raw_price_per_m2_property_latest_facts=" + String(rawPricePerM2Plf));
+        _frLog("[FR_PRICE] raw_last_sale_price=" + String(rawLastSalePrice));
+        _frLog("[FR_PRICE] raw_price_per_m2_property_latest_facts=" + String(rawPricePerM2Plf));
         if (nLspProbe != null && Number.isFinite(nLspProbe)) {
-          console.log("[FR_PRICE] probe_last_sale_euros_if_centimes_div100=" + String(nLspProbe / 100));
-          console.log("[FR_PRICE] probe_last_sale_euros_if_plf_thousandths_div1000=" + String(nLspProbe / 1000));
+          _frLog("[FR_PRICE] probe_last_sale_euros_if_centimes_div100=" + String(nLspProbe / 100));
+          _frLog("[FR_PRICE] probe_last_sale_euros_if_plf_thousandths_div1000=" + String(nLspProbe / 1000));
         }
-        console.log("[FR_PRICE] api_last_sale_price=" + String(lastSaleEuro));
-        console.log("[FR_PRICE] api_price_per_m2_euro=" + String(pricePerM2Euro));
+        _frLog("[FR_PRICE] api_last_sale_price=" + String(lastSaleEuro));
+        _frLog("[FR_PRICE] api_price_per_m2_euro=" + String(pricePerM2Euro));
         const estimated =
           Number.isFinite(surface) && surface > 0 && Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0
             ? Math.round(surface * pricePerM2Euro)
@@ -4455,7 +4410,7 @@ export async function GET(request: NextRequest) {
         }
 
         if (hasEstimated) {
-          console.log("[FR_PRICE] api_estimated_value_exact_surface_x_ppm=" + String(estimated));
+          _frLog("[FR_PRICE] api_estimated_value_exact_surface_x_ppm=" + String(estimated));
           const isExactUnitTier = exactTier === "EXACT_UNIT";
           const isApproximateTier = exactTier === "APPROXIMATE";
           const winningStep =
@@ -4480,8 +4435,8 @@ export async function GET(request: NextRequest) {
                 ? 1 - Math.min(1, Math.abs(bestSurf - targetSurfForSim) / targetSurfForSim)
                 : null;
           }
-          console.log("[FR_EXACT] exact_reject_reason=");
-          console.log("[FR_DEBUG] winning_valuation_step", {
+          _frLog("[FR_EXACT] exact_reject_reason=");
+          _frLog("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: winningStep,
             winningSourceLabel,
             exact_level: exactTier,
@@ -4560,7 +4515,7 @@ export async function GET(request: NextRequest) {
           frExactRejectReason = "no_usable_exact_best_after_sort";
         }
         frRuntimeDebug.exact_reject_reason = frExactRejectReason;
-        console.log("[FR_EXACT] exact_reject_reason=" + frExactRejectReason);
+        _frLog("[FR_EXACT] exact_reject_reason=" + frExactRejectReason);
       }
 
       let buildingProfile: BuildingProfile | null = null;
@@ -4640,12 +4595,12 @@ export async function GET(request: NextRequest) {
               house_count: houseCount,
               last_transaction: bestTx,
             };
-            console.log("[FR_BUILDING_PROFILE] building_id=" + buildingId);
-            console.log("[FR_BUILDING_PROFILE] median_price_per_m2=" + String(buildingProfile.median_price_per_m2));
-            console.log("[FR_BUILDING_PROFILE] transaction_count=" + String(buildingProfile.transaction_count));
+            _frLog("[FR_BUILDING_PROFILE] building_id=" + buildingId);
+            _frLog("[FR_BUILDING_PROFILE] median_price_per_m2=" + String(buildingProfile.median_price_per_m2));
+            _frLog("[FR_BUILDING_PROFILE] transaction_count=" + String(buildingProfile.transaction_count));
           }
         } catch (e) {
-          console.log("[FR_BUILDING_PROFILE] query_error", (e as Error)?.message);
+          _frLog("[FR_BUILDING_PROFILE] query_error", (e as Error)?.message);
         }
       }
 
@@ -4684,12 +4639,12 @@ export async function GET(request: NextRequest) {
           );
           frRuntimeDebug.building_rows_count = 0;
           frRuntimeDebug.building_usable_rows_count = 0;
-          console.log("[FR_STEP] building_lookup_done");
+          _frLog("[FR_STEP] building_lookup_done");
         } else {
-        console.log("[FR_FLOW] ladder_step_started=BUILDING");
+        _frLog("[FR_FLOW] ladder_step_started=BUILDING");
         const buildingTable = "property_latest_facts";
         const buildingTableInspection = await inspectFranceTable("BUILDING", buildingTable);
-        console.log("[FR_STEP] building_lookup_start");
+        _frLog("[FR_STEP] building_lookup_start");
         const buildingQuery = `
           SELECT
             surface_m2,
@@ -4704,7 +4659,7 @@ export async function GET(request: NextRequest) {
             AND ${frBqHouseNumberMatchSql}
           LIMIT 50
         `;
-        console.log("[FR_GOLD] before_building_query");
+        _frLog("[FR_GOLD] before_building_query");
         const buildingParams = {
           country: country || "",
           city: cityNormForSource || cityNorm || "",
@@ -4714,7 +4669,7 @@ export async function GET(request: NextRequest) {
           house_number: houseNumberNormForSource || "",
           house_number_norm: houseNumberNormForMatch || "",
         };
-        console.log("[FR_PARAMS]", { query: "building_same_address_query", ...buildingParams });
+        _frLog("[FR_PARAMS]", { query: "building_same_address_query", ...buildingParams });
         const [buildingRows] = await queryWithTimeout<
           Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>
         >(
@@ -4724,10 +4679,10 @@ export async function GET(request: NextRequest) {
           },
           "building_same_address_query"
         );
-        console.log("[FR_GOLD] after_building_query", { rows: (buildingRows as any[])?.length ?? 0 });
-        console.log("[FR_SQL] query_ok=true");
-        console.log("[FR_SQL] rows_count=", (buildingRows as any[])?.length ?? 0);
-        console.log("[FR_SQL] columns_detected=", Object.keys(buildingTableInspection.sampleRow ?? {}));
+        _frLog("[FR_GOLD] after_building_query", { rows: (buildingRows as any[])?.length ?? 0 });
+        _frLog("[FR_SQL] query_ok=true");
+        _frLog("[FR_SQL] rows_count=", (buildingRows as any[])?.length ?? 0);
+        _frLog("[FR_SQL] columns_detected=", Object.keys(buildingTableInspection.sampleRow ?? {}));
 
         const sameBuildingRows = buildingRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>;
         sameBuildingRowsCount = sameBuildingRows.length;
@@ -4743,7 +4698,7 @@ export async function GET(request: NextRequest) {
           .filter((v): v is number => v != null && v > 0);
         medianSurfaceM2ForFallback = surfacesForMedian.length > 0 ? medianNumber(surfacesForMedian) : null;
 
-        console.log("[FR_DEBUG] same_building_matching", {
+        _frLog("[FR_DEBUG] same_building_matching", {
           submittedLot: aptNumber?.trim() || null,
           normalizedLot: normalizedRequestedLot,
           sameBuildingRowsCount,
@@ -4754,7 +4709,7 @@ export async function GET(request: NextRequest) {
 
         frRuntimeDebug.building_rows_count = sameBuildingRowsCount;
         frRuntimeDebug.building_usable_rows_count = sameBuildingUsableRowsCount;
-        console.log("[FR_STEP] building_lookup_done");
+        _frLog("[FR_STEP] building_lookup_done");
 
         if (sameBuildingUsableRowsCount >= MIN_SAME_BUILDING_USABLE_ROWS && medianSurfaceM2ForFallback != null) {
           const pricePerM2ValuesRaw = usablePriceRows.map((r) => parseMaybeDecimal(r.price_per_m2)).filter((v): v is number => v != null && v > 0);
@@ -4784,7 +4739,7 @@ export async function GET(request: NextRequest) {
             const buildingLevelLastTxPayload = hasBuildingLevelTx
               ? frLastTransactionPayload(buildingLevelBestTx!.amount, buildingLevelBestTx!.date, "same_building_similar_unit", buildingLevelSourceAddr)
               : frLastTransactionPayload(0, null, "same_building_similar_unit", buildingLevelSourceAddr, "No exact recent transaction available");
-            console.log("[FR_DEBUG] winning_valuation_step", {
+            _frLog("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
               winningSourceLabel: "Similar properties in this building",
             });
@@ -4957,7 +4912,7 @@ export async function GET(request: NextRequest) {
         if (buildingSimilarLate) return buildingSimilarLate;
       }
 
-      if (!houseNumberNorm) console.log("[FR_STEP] building_lookup_done");
+      if (!houseNumberNorm) _frLog("[FR_STEP] building_lookup_done");
 
       // Same-street house fallback: when exact_house failed but house-like rows exist on same street.
       // Do NOT use street_fallback when same-address rows exist (exact_address or building_level preferred).
@@ -5039,7 +4994,7 @@ export async function GET(request: NextRequest) {
               frRuntimeDebug.has_surface_for_estimate = surfaceForEst != null;
               frRuntimeDebug.surface_source = "same_street_similar";
               frRuntimeDebug.chosen_surface_value = surfaceForEst;
-              console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=SAME_STREET_HOUSE_FROM_FACTS");
+              _frLog("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=SAME_STREET_HOUSE_FROM_FACTS");
               return frReturn(
                 {
                   address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -5089,7 +5044,7 @@ export async function GET(request: NextRequest) {
             }
           }
         } catch (e) {
-          console.log("[FR_FLOW] same_street_house_fallback_error", (e as Error)?.message);
+          _frLog("[FR_FLOW] same_street_house_fallback_error", (e as Error)?.message);
         }
       }
 
@@ -5109,12 +5064,12 @@ export async function GET(request: NextRequest) {
       const communeTableInspection = await inspectFranceTable("COMMUNE", communeTable);
       const streetSaleDateColumn = detectSaleDateColumn(streetTableInspection.columns);
       const communeSaleDateColumn = detectSaleDateColumn(communeTableInspection.columns);
-      console.log("[FR_SQL] failing_query_name", "fallback_street_query");
-      console.log("[FR_SQL] failing_table", `streetiq-bigquery.streetiq_gold.${streetTable}`);
-      console.log("[FR_SQL] sale_date_column_used", streetSaleDateColumn);
-      console.log("[FR_SQL] failing_query_name", "fallback_commune_stats_query");
-      console.log("[FR_SQL] failing_table", `streetiq-bigquery.streetiq_gold.${communeTable}`);
-      console.log("[FR_SQL] sale_date_column_used", communeSaleDateColumn);
+      _frLog("[FR_SQL] failing_query_name", "fallback_street_query");
+      _frLog("[FR_SQL] failing_table", `streetiq-bigquery.streetiq_gold.${streetTable}`);
+      _frLog("[FR_SQL] sale_date_column_used", streetSaleDateColumn);
+      _frLog("[FR_SQL] failing_query_name", "fallback_commune_stats_query");
+      _frLog("[FR_SQL] failing_table", `streetiq-bigquery.streetiq_gold.${communeTable}`);
+      _frLog("[FR_SQL] sale_date_column_used", communeSaleDateColumn);
 
       const fallbackStreetQuery = `
         SELECT
@@ -5154,7 +5109,7 @@ export async function GET(request: NextRequest) {
         const lastTransactionPayload = hasRealTx
           ? frLastTransactionPayload(lastTx!.amount, lastTx!.date, "same_building_similar_unit", buildingProfileSourceAddr)
           : frLastTransactionPayload(0, null, "same_building_similar_unit", buildingProfileSourceAddr, "No exact recent transaction available");
-        console.log("[FR_BUILDING_PROFILE] used_in=fallback");
+        _frLog("[FR_BUILDING_PROFILE] used_in=fallback");
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
         frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
@@ -5179,7 +5134,7 @@ export async function GET(request: NextRequest) {
               value_level: "building-level",
               last_transaction: lastTransactionPayload,
               street_average: medianPpm,
-              street_average_message: estimated == null ? `${fallbackSource} — pricing available, surface needed for total estimate` : fallbackSource,
+              street_average_message: estimated == null ? `${fallbackSource} ג€” pricing available, surface needed for total estimate` : fallbackSource,
               livability_rating: "FAIR",
             },
             fr: emptyFranceResponse({
@@ -5223,9 +5178,9 @@ export async function GET(request: NextRequest) {
         if (lotAwareRetry) return lotAwareRetry;
       }
 
-      console.log("[FR_FLOW] ladder_step_started=STREET");
-      console.log("[FR_STEP] street_lookup_start");
-      console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
+      _frLog("[FR_FLOW] ladder_step_started=STREET");
+      _frLog("[FR_STEP] street_lookup_start");
+      _frLog("[FR_GOLD] before_fallback_query", { level: "same_street" });
       /** When street fallback uses property_latest_facts, best row's sale (amount+date) for last_transaction. */
       let streetFactsBestSale: { amount: number; date: string | null; sourceAddress?: string | null; matchType?: "same_street_similar_house" | "area_fallback" } | null = null;
       const effectivePropertyType =
@@ -5238,7 +5193,7 @@ export async function GET(request: NextRequest) {
         street_normalized: streetNormForSource || "",
         property_type: effectivePropertyType,
       };
-      console.log("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
+      _frLog("[FR_PARAMS]", { query: "fallback_street_query", ...streetParams });
       let [fallbackStreetRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }> ]>(
         {
           query: fallbackStreetQuery,
@@ -5248,18 +5203,18 @@ export async function GET(request: NextRequest) {
       );
       if ((fallbackStreetRows ?? []).length === 0 && effectivePropertyType) {
         const streetParamsNoType = { ...streetParams, property_type: "" };
-        console.log("[FR_PARAMS]", { query: "fallback_street_query_retry_no_property_type", ...streetParamsNoType });
+        _frLog("[FR_PARAMS]", { query: "fallback_street_query_retry_no_property_type", ...streetParamsNoType });
         const [retryRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }> ]>(
           { query: fallbackStreetQuery, params: streetParamsNoType },
           "fallback_street_query_retry"
         );
         fallbackStreetRows = retryRows;
-        if ((fallbackStreetRows ?? []).length > 0) console.log("[FR_FLOW] street_retry_without_property_type_rows=" + String((fallbackStreetRows ?? []).length));
+        if ((fallbackStreetRows ?? []).length > 0) _frLog("[FR_FLOW] street_retry_without_property_type_rows=" + String((fallbackStreetRows ?? []).length));
       }
-      console.log("[FR_GOLD] after_fallback_query", { level: "same_street", rows: (fallbackStreetRows as any[])?.length ?? 0 });
-      console.log("[FR_SQL] query_ok=true");
-      console.log("[FR_SQL] rows_count=", (fallbackStreetRows as any[])?.length ?? 0);
-      console.log("[FR_SQL] columns_detected=", Object.keys(streetTableInspection.sampleRow ?? {}));
+      _frLog("[FR_GOLD] after_fallback_query", { level: "same_street", rows: (fallbackStreetRows as any[])?.length ?? 0 });
+      _frLog("[FR_SQL] query_ok=true");
+      _frLog("[FR_SQL] rows_count=", (fallbackStreetRows as any[])?.length ?? 0);
+      _frLog("[FR_SQL] columns_detected=", Object.keys(streetTableInspection.sampleRow ?? {}));
       const fallbackSourceStreet = "Based on recent sales on this street";
       const fallbackSourceCommune = "Similar properties in same commune";
 
@@ -5344,11 +5299,11 @@ export async function GET(request: NextRequest) {
             streetUsableAvgRowsCount = 1;
             streetFactsFilteredCount = trimmedPpm.length;
             streetFactsRecentCount = recentPool.length;
-            console.log("[FR_FLOW] street_from_facts_fallback rows=" + String(withPpm.length) + " pool=" + String(pool.length) + " recent=" + String(recentPool.length) + " median_ppm=" + String(medianPpmEuro));
+            _frLog("[FR_FLOW] street_from_facts_fallback rows=" + String(withPpm.length) + " pool=" + String(pool.length) + " recent=" + String(recentPool.length) + " median_ppm=" + String(medianPpmEuro));
             streetClosestHouseDistance = closestDist;
           }
         } catch (e) {
-          console.log("[FR_FLOW] street_from_facts_fallback_error", (e as Error)?.message);
+          _frLog("[FR_FLOW] street_from_facts_fallback_error", (e as Error)?.message);
         }
       }
       if (streetFallbackRowsCount === 0 && streetUsableAvgRowsCount === 0 && postcodeNorm && cityNorm) {
@@ -5395,23 +5350,23 @@ export async function GET(request: NextRequest) {
                 matchType: "area_fallback",
               };
             }
-            console.log("[FR_FLOW] street_from_facts_postcode_city rows=" + String(withPpmPostcodeCity.length) + " median_ppm=" + String(medianPpmEuro));
+            _frLog("[FR_FLOW] street_from_facts_postcode_city rows=" + String(withPpmPostcodeCity.length) + " median_ppm=" + String(medianPpmEuro));
           }
         } catch (e) {
-          console.log("[FR_FLOW] street_from_facts_postcode_city_error", (e as Error)?.message);
+          _frLog("[FR_FLOW] street_from_facts_postcode_city_error", (e as Error)?.message);
         }
       }
 
       const surfaceForEstimation = validInputSurfaceM2 ?? medianSurfaceM2ForFallback;
 
-      console.log("[FR_DEBUG] street_fallback_matching", {
+      _frLog("[FR_DEBUG] street_fallback_matching", {
         submittedLot: aptNumber?.trim() || null,
         normalizedLot: normalizedRequestedLot,
         streetFallbackRowsCount,
         streetUsableAvgRowsCount,
         surfaceForEstimation,
       });
-      console.log("[FR_STEP] street_lookup_done");
+      _frLog("[FR_STEP] street_lookup_done");
 
       frRuntimeDebug.street_rows_count = streetFallbackRowsCount;
       frRuntimeDebug.street_usable_rows_count = streetUsableAvgRowsCount;
@@ -5475,16 +5430,16 @@ export async function GET(request: NextRequest) {
 
       const streetEstimate = tryStreetFallback();
       const streetFallbackDecision = streetEstimate ? "street" : "commune";
-      console.log("[FR_STREET] rows_found=" + String(streetFallbackRowsCount));
-      console.log("[FR_STREET] rows_used=" + String(streetUsableAvgRowsCount));
+      _frLog("[FR_STREET] rows_found=" + String(streetFallbackRowsCount));
+      _frLog("[FR_STREET] rows_used=" + String(streetUsableAvgRowsCount));
       if (streetEstimate) {
-        console.log("[FR_STREET] median_price_per_m2=" + String(streetEstimate.avgPricePerM2));
-        if (streetClosestHouseDistance != null) console.log("[FR_STREET] closest_house_distance=" + String(streetClosestHouseDistance));
+        _frLog("[FR_STREET] median_price_per_m2=" + String(streetEstimate.avgPricePerM2));
+        if (streetClosestHouseDistance != null) _frLog("[FR_STREET] closest_house_distance=" + String(streetClosestHouseDistance));
       }
       if (!streetEstimate) {
-        console.log("[FR_STREET] rejected_reason=" + (streetUsableAvgRowsCount <= 0 ? "no_usable_rows" : "median_invalid"));
+        _frLog("[FR_STREET] rejected_reason=" + (streetUsableAvgRowsCount <= 0 ? "no_usable_rows" : "median_invalid"));
       }
-      console.log("[FR_STREET] fallback_decision=" + streetFallbackDecision);
+      _frLog("[FR_STREET] fallback_decision=" + streetFallbackDecision);
 
       const buildingHadNoReliableValue = frRuntimeDebug.fr_building_value_reliable === false;
       if (streetEstimate && (exactRowsCount === 0 || buildingHadNoReliableValue)) {
@@ -5494,7 +5449,7 @@ export async function GET(request: NextRequest) {
         const effectiveCount = rowCount > filteredCount && rowCount >= 10 ? rowCount : filteredCount;
         const streetConfidence: "medium_high" | "medium" | "low" =
           effectiveCount >= 20 && (recentCount >= 10 || rowCount > filteredCount) ? "medium_high" : effectiveCount >= 10 ? "medium" : "low";
-        console.log("[FR_DEBUG] winning_valuation_step", {
+        _frLog("[FR_DEBUG] winning_valuation_step", {
           winningValuationStep: "street_fallback",
           winningSourceLabel: fallbackSourceStreet,
         });
@@ -5535,7 +5490,7 @@ export async function GET(request: NextRequest) {
               exact_value_message: null,
               value_level: "street-level",
               last_transaction: streetTxPayload,
-              // Median €/m² for UI when headline uses price/m² (same numeric scale as exact_value uses total €).
+              // Median ג‚¬/mֲ² for UI when headline uses price/mֲ² (same numeric scale as exact_value uses total ג‚¬).
               street_average: streetEstimate.avgPricePerM2,
               street_average_message: fallbackSourceStreet,
               livability_rating: "FAIR",
@@ -5562,13 +5517,13 @@ export async function GET(request: NextRequest) {
               comparables: [],
               matchExplanation:
                 surfaceForEstimation == null
-                  ? `${fallbackSourceStreet} — comparable pricing available, but exact estimate could not be computed (missing surface).`
+                  ? `${fallbackSourceStreet} ג€” comparable pricing available, but exact estimate could not be computed (missing surface).`
                   : fallbackSourceStreet,
             }),
           }, "valuation_response");
         }
         // Street has valid price_per_m2 but no surface for total estimate: prefer street over commune.
-        const streetOnlyMessage = `${fallbackSourceStreet} — comparable pricing available, but exact estimate could not be computed (missing surface).`;
+        const streetOnlyMessage = `${fallbackSourceStreet} ג€” comparable pricing available, but exact estimate could not be computed (missing surface).`;
         frRuntimeDebug.winning_median_price_per_m2 = streetEstimate.avgPricePerM2;
         frRuntimeDebug.winning_step = "street_fallback";
         frRuntimeDebug.winning_source_label = fallbackSourceStreet;
@@ -5579,7 +5534,7 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_fallback_level_used = "street_fallback";
         frRuntimeDebug.fr_total_rows_used = streetFallbackRowsCount;
         frRuntimeDebug.fr_final_winner_layer = "street_fallback";
-        console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
+        _frLog("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
         const lastTxFromStreetPriceOnly = streetFactsBestSale ?? (streetEstimate.newestSaleDate != null && String(streetEstimate.newestSaleDate).trim()
           ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim(), sourceAddress: null as string | null, matchType: undefined as "same_street_similar_house" | "area_fallback" | undefined }
           : null);
@@ -5633,15 +5588,15 @@ export async function GET(request: NextRequest) {
       }
 
       // Street fallback wasn't usable; try commune fallback next.
-      console.log("[FR_FLOW] ladder_step_started=COMMUNE");
-      console.log("[FR_STEP] commune_lookup_start");
-      console.log("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
+      _frLog("[FR_FLOW] ladder_step_started=COMMUNE");
+      _frLog("[FR_STEP] commune_lookup_start");
+      _frLog("[FR_GOLD] before_fallback_query", { level: "commune_stats" });
       const communeParams = {
         country: country || "",
         city: cityNormForSource || cityNorm || "",
         postcode: postcodeNormForSource || "",
       };
-      console.log("[FR_PARAMS]", { query: "fallback_commune_stats_query", ...communeParams });
+      _frLog("[FR_PARAMS]", { query: "fallback_commune_stats_query", ...communeParams });
       const [fallbackCommuneRows] = await queryWithTimeout<[Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }> ]>(
         {
           query: fallbackCommuneStatsQuery,
@@ -5649,10 +5604,10 @@ export async function GET(request: NextRequest) {
         },
         "fallback_commune_stats_query"
       );
-      console.log("[FR_GOLD] after_fallback_query", { level: "commune_stats", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
-      console.log("[FR_SQL] query_ok=true");
-      console.log("[FR_SQL] rows_count=", (fallbackCommuneRows as any[])?.length ?? 0);
-      console.log("[FR_SQL] columns_detected=", Object.keys(communeTableInspection.sampleRow ?? {}));
+      _frLog("[FR_GOLD] after_fallback_query", { level: "commune_stats", rows: (fallbackCommuneRows as any[])?.length ?? 0 });
+      _frLog("[FR_SQL] query_ok=true");
+      _frLog("[FR_SQL] rows_count=", (fallbackCommuneRows as any[])?.length ?? 0);
+      _frLog("[FR_SQL] columns_detected=", Object.keys(communeTableInspection.sampleRow ?? {}));
 
       let communeRows = fallbackCommuneRows as Array<{ avg_price_per_m2?: number; newest_sale_date?: string | null; latest_sale_date?: string | null; sale_date?: string | null }>;
       let communeFallbackRowsCount = communeRows.length;
@@ -5688,10 +5643,10 @@ export async function GET(request: NextRequest) {
             communeFallbackRowsCount = 1;
             communeUsableAvgRows = communeRows;
             communeUsableAvgRowsCount = 1;
-            console.log("[FR_FLOW] commune_from_facts_fallback rows=" + String(communePpmEuros.length) + " median_ppm=" + String(medianCommunePpm));
+            _frLog("[FR_FLOW] commune_from_facts_fallback rows=" + String(communePpmEuros.length) + " median_ppm=" + String(medianCommunePpm));
           }
         } catch (e) {
-          console.log("[FR_FLOW] commune_from_facts_fallback_error", (e as Error)?.message);
+          _frLog("[FR_FLOW] commune_from_facts_fallback_error", (e as Error)?.message);
         }
       }
       if (communeFallbackRowsCount === 0 && postcodeNorm) {
@@ -5716,21 +5671,21 @@ export async function GET(request: NextRequest) {
             communeFallbackRowsCount = communePpmEuros.length;
             communeUsableAvgRows = communeRows;
             communeUsableAvgRowsCount = 1;
-            console.log("[FR_FLOW] commune_from_facts_postcode_only rows=" + String(communePpmEuros.length) + " median_ppm=" + String(medianCommunePpm));
+            _frLog("[FR_FLOW] commune_from_facts_postcode_only rows=" + String(communePpmEuros.length) + " median_ppm=" + String(medianCommunePpm));
           }
         } catch (e) {
-          console.log("[FR_FLOW] commune_from_facts_postcode_only_error", (e as Error)?.message);
+          _frLog("[FR_FLOW] commune_from_facts_postcode_only_error", (e as Error)?.message);
         }
       }
 
-      console.log("[FR_DEBUG] commune_fallback_matching", {
+      _frLog("[FR_DEBUG] commune_fallback_matching", {
         submittedLot: aptNumber?.trim() || null,
         normalizedLot: normalizedRequestedLot,
         communeFallbackRowsCount,
         communeUsableAvgRowsCount,
         surfaceForEstimation,
       });
-      console.log("[FR_STEP] commune_lookup_done");
+      _frLog("[FR_STEP] commune_lookup_done");
 
       frRuntimeDebug.commune_rows_count = communeFallbackRowsCount;
       frRuntimeDebug.commune_usable_rows_count = communeUsableAvgRowsCount;
@@ -5770,7 +5725,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_fallback_quality_score = Math.round(Math.min(1, communeFilteredCount / 15) * 100) / 100;
           const communeForMedianEuro = communeForMedian.map((v) => v / 100);
           frRuntimeDebug.fr_price_variance = computeVariance(communeForMedianEuro);
-          console.log("[FR_DEBUG] winning_valuation_step", {
+          _frLog("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "commune_fallback",
             winningSourceLabel: fallbackSourceCommune,
           });
@@ -5806,7 +5761,7 @@ export async function GET(request: NextRequest) {
               street_average: medianAvgPricePerM2Euro,
             street_average_message:
               surfaceForEstimation == null
-                ? `${fallbackSourceCommune} — comparable pricing available, but exact estimate could not be computed (missing surface).`
+                ? `${fallbackSourceCommune} ג€” comparable pricing available, but exact estimate could not be computed (missing surface).`
                 : fallbackSourceCommune,
               livability_rating: "FAIR",
             },
@@ -5831,14 +5786,14 @@ export async function GET(request: NextRequest) {
               comparables: [],
               matchExplanation:
                 surfaceForEstimation == null
-                  ? `${fallbackSourceCommune} — comparable pricing available, but exact estimate could not be computed (missing surface).`
+                  ? `${fallbackSourceCommune} ג€” comparable pricing available, but exact estimate could not be computed (missing surface).`
                   : fallbackSourceCommune,
             }),
           }, "valuation_response");
         }
       }
 
-      // NEARBY fallback: same postcode, nearby streets/addresses — before no_data
+      // NEARBY fallback: same postcode, nearby streets/addresses ג€” before no_data
       const tryNearbyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
         if (!postcodeNorm || !cityNorm) return null;
         const isHouse = detectClass === "house";
@@ -5939,12 +5894,12 @@ export async function GET(request: NextRequest) {
             if (extraRows.length > withPpm.length) {
               withPpm.length = 0;
               withPpm.push(...extraRows);
-              console.log("[FR_NEARBY] fallback_no_type_rows=" + String(extraRows.length));
+              _frLog("[FR_NEARBY] fallback_no_type_rows=" + String(extraRows.length));
             }
           }
           if (withPpm.length < 1) {
             frRuntimeDebug.fr_nearby_candidate_count = 0;
-            console.log("[FR_NEARBY] nearby_rows_found=0");
+            _frLog("[FR_NEARBY] nearby_rows_found=0");
             return null;
           }
 
@@ -6003,12 +5958,12 @@ export async function GET(request: NextRequest) {
               )
             : frLastTransactionPayload(0, null, nearbyMatchType, null, "No exact recent transaction available");
 
-          console.log("[FR_NEARBY] detect_class=" + String(detectClass));
-          console.log("[FR_NEARBY] nearby_rows_found=" + String(withPpm.length));
-          console.log("[FR_NEARBY] nearby_rows_used=" + String(pool.length));
-          console.log("[FR_NEARBY] nearby_scope=" + nearbyScope);
-          console.log("[FR_NEARBY] selected_price_per_m2=" + String(medianPpm));
-          console.log("[FR_NEARBY] selected_reason=" + (nearbyScope === "same_street" ? "same_street" : nearbyScope === "nearby_street" ? "nearby_street_with_same_street" : "same_postcode_only"));
+          _frLog("[FR_NEARBY] detect_class=" + String(detectClass));
+          _frLog("[FR_NEARBY] nearby_rows_found=" + String(withPpm.length));
+          _frLog("[FR_NEARBY] nearby_rows_used=" + String(pool.length));
+          _frLog("[FR_NEARBY] nearby_scope=" + nearbyScope);
+          _frLog("[FR_NEARBY] selected_price_per_m2=" + String(medianPpm));
+          _frLog("[FR_NEARBY] selected_reason=" + (nearbyScope === "same_street" ? "same_street" : nearbyScope === "nearby_street" ? "nearby_street_with_same_street" : "same_postcode_only"));
 
           frRuntimeDebug.winning_step = "nearby_fallback";
           frRuntimeDebug.winning_source_label = label;
@@ -6063,7 +6018,7 @@ export async function GET(request: NextRequest) {
             "valuation_response"
           );
         } catch (e) {
-          console.log("[FR_NEARBY] query_error", (e as Error)?.message);
+          _frLog("[FR_NEARBY] query_error", (e as Error)?.message);
           return null;
         }
       };
@@ -6116,7 +6071,7 @@ export async function GET(request: NextRequest) {
             const [rowsCityOnly] = await runCommuneEmergencyQuery(false);
             ppmAndTxRows = rowsToPpmAndTx(rowsCityOnly ?? []);
             if (ppmAndTxRows.length >= 1) {
-              console.log("[FR_EMERGENCY] commune_emergency city_only_fallback rows=" + String(ppmAndTxRows.length));
+              _frLog("[FR_EMERGENCY] commune_emergency city_only_fallback rows=" + String(ppmAndTxRows.length));
             }
           }
 
@@ -6154,7 +6109,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
           frRuntimeDebug.fr_commune_emergency_candidate_count = ppmAndTxRows.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_emergency";
-          console.log("[FR_EMERGENCY] commune_emergency rows=" + String(ppmAndTxRows.length) + " median_ppm=" + String(medianPpm));
+          _frLog("[FR_EMERGENCY] commune_emergency rows=" + String(ppmAndTxRows.length) + " median_ppm=" + String(medianPpm));
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -6194,7 +6149,7 @@ export async function GET(request: NextRequest) {
             "valuation_response"
           );
         } catch (e) {
-          console.log("[FR_EMERGENCY] commune_emergency_error", (e as Error)?.message);
+          _frLog("[FR_EMERGENCY] commune_emergency_error", (e as Error)?.message);
           return null;
         }
       };
@@ -6261,7 +6216,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_empty_prevented = true;
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
-          console.log("[FR_SAFETY] commune_safety_net rows=" + String(safetyNetRows.length) + " median_ppm=" + String(medianPpm));
+          _frLog("[FR_SAFETY] commune_safety_net rows=" + String(safetyNetRows.length) + " median_ppm=" + String(medianPpm));
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -6301,7 +6256,7 @@ export async function GET(request: NextRequest) {
             "valuation_response"
           );
         } catch (e) {
-          console.log("[FR_SAFETY] commune_safety_net_error", (e as Error)?.message);
+          _frLog("[FR_SAFETY] commune_safety_net_error", (e as Error)?.message);
           return null;
         }
       };
@@ -6309,7 +6264,7 @@ export async function GET(request: NextRequest) {
       const safetyNetWin = await tryCommuneSafetyNet();
       if (safetyNetWin) return safetyNetWin;
 
-      // Hard fix: postcode-only fallback – BigQuery has data by postcode (Cannes 06400, Biarritz 64200).
+      // Hard fix: postcode-only fallback ג€“ BigQuery has data by postcode (Cannes 06400, Biarritz 64200).
       const tryPostcodeOnlyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
         const postcodeForQuery = (postcodeNormForSource ?? postcodeNorm ?? "").trim();
         if (!postcodeForQuery || postcodeForQuery.length < 4) return null;
@@ -6366,7 +6321,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_empty_prevented = true;
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
-          console.log("[FR_HARD] postcode_only_fallback rows=" + String(postcodeRows.length) + " median_ppm=" + String(medianPpm) + " postcode=" + postcodeForQuery);
+          _frLog("[FR_HARD] postcode_only_fallback rows=" + String(postcodeRows.length) + " median_ppm=" + String(medianPpm) + " postcode=" + postcodeForQuery);
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -6406,7 +6361,7 @@ export async function GET(request: NextRequest) {
             "valuation_response"
           );
         } catch (e) {
-          console.log("[FR_HARD] postcode_only_fallback_error", (e as Error)?.message);
+          _frLog("[FR_HARD] postcode_only_fallback_error", (e as Error)?.message);
           return null;
         }
       };
@@ -6422,7 +6377,7 @@ export async function GET(request: NextRequest) {
       if (communeUsableAvgRowsCount <= 0) noDataReasonParts.push("no_usable_commune_avg_price");
 
       const exactHouseCandidates = Number(frRuntimeDebug.exact_house_row_count) || 0;
-      console.log("[FR_LADDER] exact=" + String(exactHouseCandidates || exactApartmentRowsCount) + " building=" + String(sameBuildingUsableRowsCount) + " street=" + String(streetUsableAvgRowsCount) + " commune=" + String(communeUsableAvgRowsCount));
+      _frLog("[FR_LADDER] exact=" + String(exactHouseCandidates || exactApartmentRowsCount) + " building=" + String(sameBuildingUsableRowsCount) + " street=" + String(streetUsableAvgRowsCount) + " commune=" + String(communeUsableAvgRowsCount));
       const buildingCandidates = frRuntimeDebug.building_similar_unit_candidates_count ?? sameBuildingRowsCount;
       const streetCandidates = streetFallbackRowsCount;
       const communeCandidates = communeFallbackRowsCount;
@@ -6448,16 +6403,16 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_sql_filter_summary =
         "France layers: price_per_m2>0 required; surface_m2/recency/lot/streetNormForExactMatch NOT hard-required";
 
-      console.log("[FR_COVERAGE] address=" + addrStr);
-      console.log("[FR_COVERAGE] detect_class=" + String(frDetectToUse));
-      console.log("[FR_COVERAGE] exact_house_candidates=" + String(exactHouseCandidates));
-      console.log("[FR_COVERAGE] building_candidates=" + String(buildingCandidates));
-      console.log("[FR_COVERAGE] street_candidates=" + String(streetCandidates));
-      console.log("[FR_COVERAGE] commune_candidates=" + String(communeCandidates));
-      console.log("[FR_COVERAGE] no_reliable_reason=" + noReliableReason);
-      console.log("[FR_COVERAGE] reject_reason=" + String(rejectReason));
+      _frLog("[FR_COVERAGE] address=" + addrStr);
+      _frLog("[FR_COVERAGE] detect_class=" + String(frDetectToUse));
+      _frLog("[FR_COVERAGE] exact_house_candidates=" + String(exactHouseCandidates));
+      _frLog("[FR_COVERAGE] building_candidates=" + String(buildingCandidates));
+      _frLog("[FR_COVERAGE] street_candidates=" + String(streetCandidates));
+      _frLog("[FR_COVERAGE] commune_candidates=" + String(communeCandidates));
+      _frLog("[FR_COVERAGE] no_reliable_reason=" + noReliableReason);
+      _frLog("[FR_COVERAGE] reject_reason=" + String(rejectReason));
 
-      console.log("[FR_DEBUG] no_data_why", {
+      _frLog("[FR_DEBUG] no_data_why", {
         exactApartmentRowsCount,
         exactUsableRowsCount,
         sameBuildingUsableRowsCount,
@@ -6477,7 +6432,7 @@ export async function GET(request: NextRequest) {
         streetUsableAvgRowsCount > 0 ||
         communeUsableAvgRowsCount > 0;
       if (anyUsableRowSignal) {
-        console.error("[FR_FLOW] unexpected_no_data_despite_usable_rows", {
+        _frErr("[FR_FLOW] unexpected_no_data_despite_usable_rows", {
           exactUsableRowsCount,
           sameBuildingUsableRowsCount,
           streetUsableAvgRowsCount,
@@ -6510,8 +6465,8 @@ export async function GET(request: NextRequest) {
           : exactHouseCandidates <= 0 && exactApartmentRowsCount <= 0 && sameBuildingUsableRowsCount <= 0 ? "source_lookup"
           : "valuation";
         frRuntimeDebug.fr_failed_stage = failedStage;
-        console.log("[FR_FAIL] no_data_reason=" + (noDataReasonParts.join(" | ") || "unknown"));
-        console.log("[FR_FAIL] failed_stage=" + failedStage);
+        _frLog("[FR_FAIL] no_data_reason=" + (noDataReasonParts.join(" | ") || "unknown"));
+        _frLog("[FR_FAIL] failed_stage=" + failedStage);
       }
       frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
       frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
@@ -6537,7 +6492,7 @@ export async function GET(request: NextRequest) {
           buildingCandidatesCount > 0);
       if (shouldPromptLotFromBuilding) {
         frRuntimeDebug.fr_should_prompt_lot = true;
-        console.log("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
+        _frLog("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
         return frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -6605,9 +6560,9 @@ export async function GET(request: NextRequest) {
         }),
       }, terminalNoDataTag);
     } catch (err) {
-      console.log("[FR_STEP] returning_error");
-      console.error("[FR_FATAL]", err);
-      console.log("[FR_GOLD] catch_error", { message: err instanceof Error ? err.message : "Unknown error" });
+      _frLog("[FR_STEP] returning_error");
+      _frErr("[FR_FATAL]", err);
+      _frLog("[FR_GOLD] catch_error", { message: err instanceof Error ? err.message : "Unknown error" });
       const fatalMessage = err instanceof Error ? err.message : "Unknown error";
       const fatalStackFirstLine =
         err instanceof Error && typeof err.stack === "string"
@@ -6668,7 +6623,7 @@ export async function GET(request: NextRequest) {
           matchExplanation: "No reliable data found",
         }),
       };
-      console.log("[FR_GOLD] return", { tag: "error", status: 500 });
+      _frLog("[FR_GOLD] return", { tag: "error", status: 500 });
       return NextResponse.json(payload, { status: 500 });
     }
 
@@ -6703,7 +6658,7 @@ export async function GET(request: NextRequest) {
 
     try {
       if (!isBigQueryConfigured()) {
-        console.log("BIGQUERY_FETCH_FAILED: [France] Missing BigQuery credentials");
+        if (process.env.NODE_ENV === "development") console.log("[France] Missing BigQuery credentials");
         return NextResponse.json({
           message: "No government data for this address",
           data_source: "properties_france",
@@ -6799,14 +6754,16 @@ export async function GET(request: NextRequest) {
       const requestedLot = aptTrimmed || null;
       const exactLotRowCount = result.exactLotRowCount ?? 0;
       const exactLotMatched = !!(requestedLot && exactLotRowCount > 0);
-      console.log("[property-value] France lot decision:", JSON.stringify({
-        requestedLot: requestedLot ?? "(none)",
-        exactLotMatched,
-        exactLotRowCount,
-        matchStage: result.matchStage,
-        rowsAtStage: result.rowsAtStage,
-        serviceResultLevel: result.resultLevel,
-      }));
+      if (process.env.NODE_ENV === "development") {
+        console.log("[property-value] France lot decision:", JSON.stringify({
+          requestedLot: requestedLot ?? "(none)",
+          exactLotMatched,
+          exactLotRowCount,
+          matchStage: result.matchStage,
+          rowsAtStage: result.rowsAtStage,
+          serviceResultLevel: result.resultLevel,
+        }));
+      }
 
       if (result.multipleUnits) {
         const scaledBuildingSales = mapFranceBuildingSalesPricesToEuros(result.buildingSales ?? []);
@@ -6833,7 +6790,7 @@ export async function GET(request: NextRequest) {
             livability_rating: livabilityRating,
           },
         };
-        console.log("[property-value] France final payload (multiple_units):", JSON.stringify({ result_level: payload.result_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, average_building_value: payload.average_building_value, building_sales_count: payload.building_sales?.length ?? 0 }));
+        if (process.env.NODE_ENV === "development") console.log("[property-value] France final payload (multiple_units):", JSON.stringify({ result_level: payload.result_level, multiple_units: payload.multiple_units }));
         const requestedLot = aptTrimmed || null;
         const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
         const fr: FrancePropertyResponse = emptyFranceResponse({
@@ -6907,7 +6864,7 @@ export async function GET(request: NextRequest) {
             livability_rating: livabilityRating,
           },
         };
-        console.log("[property-value] France final payload (exact_property):", JSON.stringify({
+        if (process.env.NODE_ENV === "development") console.log("[property-value] France final payload (exact_property):", JSON.stringify({
           requestedLot: requestedLot ?? "(none)",
           exactLotRowCount,
           result_level: payload.result_level,
@@ -6981,7 +6938,7 @@ export async function GET(request: NextRequest) {
             livability_rating: livabilityRating,
           },
         };
-        console.log("[FR_DEBUG] final France payload", JSON.stringify({
+        _frLog("[FR_DEBUG] final France payload", JSON.stringify({
           path: "apartment_not_matched",
           rawParams: {
             city: city.trim(),
@@ -7116,7 +7073,7 @@ export async function GET(request: NextRequest) {
         // If result is explicitly "no_result" / "no_reliable_data", never return any price fields.
         const isNoData = resultType === "no_result" || resultType === "no_reliable_data";
 
-        // Sanity check: extremely high price/m² is suspicious (e.g. bad valeur_fonciere/surface pairing).
+        // Sanity check: extremely high price/mֲ² is suspicious (e.g. bad valeur_fonciere/surface pairing).
         let finalResultType: FrancePropertyResponse["resultType"] = resultType;
         let finalConfidence: FrancePropertyResponse["confidence"] = confidence;
         const suspiciousPricePerSqm = (frProperty?.pricePerSqm ?? 0) > 50000;
@@ -7153,7 +7110,7 @@ export async function GET(request: NextRequest) {
                   ? "nearby_comparable"
                   : "none",
           fallbackReason: buildingRejectedAsWeak && resultType === "nearby_comparable"
-            ? "Building data too weak — using nearby comparable"
+            ? "Building data too weak ג€” using nearby comparable"
             : "exact_lot_not_found",
           comparableAddress: resultType === "nearby_comparable" ? nearby?.address ?? null : null,
           comparableDistanceMeters: null,
@@ -7161,17 +7118,17 @@ export async function GET(request: NextRequest) {
           selectedNearbyStrategy: resultType === "nearby_comparable" ? nearby?.selectedNearbyStrategy : undefined,
           matchExplanation:
             suppressForSuspiciousExact
-              ? "Result suppressed due to suspiciously high price per m²."
+              ? "Result suppressed due to suspiciously high price per mֲ²."
               : warnForSuspiciousNonExact
-                ? "This result was found, but the price per m² is unusually high and should be treated with caution."
+                ? "This result was found, but the price per mֲ² is unusually high and should be treated with caution."
               : resultType === "similar_apartment_same_building"
-              ? `No exact apartment match for lot ${requestedLot ?? ""} — showing the most similar apartment in this building.`
+              ? `No exact apartment match for lot ${requestedLot ?? ""} ג€” showing the most similar apartment in this building.`
               : resultType === "building_level"
-                ? `No exact apartment match for lot ${requestedLot ?? ""} — showing building transaction data.`
+                ? `No exact apartment match for lot ${requestedLot ?? ""} ג€” showing building transaction data.`
                 : resultType === "nearby_comparable"
                   ? (buildingRejectedAsWeak
-                      ? `Building data was insufficient for this address — showing a nearby comparable instead.`
-                      : `No exact apartment match for lot ${requestedLot ?? ""} — showing a similar nearby apartment.`)
+                      ? `Building data was insufficient for this address ג€” showing a nearby comparable instead.`
+                      : `No exact apartment match for lot ${requestedLot ?? ""} ג€” showing a similar nearby apartment.`)
                   : null,
           property: (suppressForSuspiciousExact || isNoData) ? null : frProperty,
           buildingStats: hasBuilding
@@ -7207,7 +7164,7 @@ export async function GET(request: NextRequest) {
               : warnForSuspiciousNonExact
                 ? "suspicious_price_per_m2_warning"
               : buildingRejectedAsWeak && resultType === "nearby_comparable"
-                ? "Building data too weak — using nearby comparable"
+                ? "Building data too weak ג€” using nearby comparable"
                 : "exact_lot_not_found",
             comparableAddress: resultType === "nearby_comparable" ? nearby?.address ?? null : null,
             comparableDistanceMeters: null,
@@ -7216,13 +7173,13 @@ export async function GET(request: NextRequest) {
             nearbyStageCounts: result.debug?.nearbyStageCounts,
             matchExplanation:
               resultType === "similar_apartment_same_building"
-                ? `No exact apartment match for lot ${requestedLot ?? ""} — showing the most similar apartment in this building.`
+                ? `No exact apartment match for lot ${requestedLot ?? ""} ג€” showing the most similar apartment in this building.`
                 : resultType === "building_level"
-                  ? `No exact apartment match for lot ${requestedLot ?? ""} — showing building transaction data.`
+                  ? `No exact apartment match for lot ${requestedLot ?? ""} ג€” showing building transaction data.`
                   : resultType === "nearby_comparable"
                     ? (buildingRejectedAsWeak
-                        ? `Building data too weak — using nearby comparable`
-                        : `No exact apartment match for lot ${requestedLot ?? ""} — showing a similar nearby apartment.`)
+                        ? `Building data too weak ג€” using nearby comparable`
+                        : `No exact apartment match for lot ${requestedLot ?? ""} ג€” showing a similar nearby apartment.`)
                     : null,
             similarityScore: result.debug?.similarityScore ?? null,
             ...(suppressForSuspiciousExact || warnForSuspiciousNonExact
@@ -7247,7 +7204,7 @@ export async function GET(request: NextRequest) {
             queryDurationMs: Date.now() - frRequestStartedAt,
           },
         });
-        console.log("[FR_DEBUG] final France payload", JSON.stringify({
+        _frLog("[FR_DEBUG] final France payload", JSON.stringify({
           path: "apartment_not_matched",
           rawParams: {
             city: city.trim(),
@@ -7324,7 +7281,7 @@ export async function GET(request: NextRequest) {
           livability_rating: livabilityRating,
         },
       };
-      console.log("[property-value] France final payload (single/building/area):", JSON.stringify({ result_level: payload.result_level, value_level: payload.property_result.value_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, building_sales_count: payload.building_sales?.length ?? 0 }));
+      if (process.env.NODE_ENV === "development") console.log("[property-value] France final payload (single/building/area):", JSON.stringify({ result_level: payload.result_level, value_level: payload.property_result.value_level, multiple_units: payload.multiple_units, match_stage: payload.match_stage, rows_at_stage: payload.rows_at_stage, building_sales_count: payload.building_sales?.length ?? 0 }));
       const normalizedLot = requestedLot ? (String(requestedLot).replace(/^0+/, "") || String(requestedLot)) : null;
       const fr: FrancePropertyResponse = emptyFranceResponse({
         success: valueLevel !== "no_match" || coerceToBuilding,
@@ -7384,7 +7341,7 @@ export async function GET(request: NextRequest) {
     } catch (err) {
       const searchTerm = [houseNumber, street, city].filter(Boolean).join(", ");
       const e = err as Error & { code?: number; errors?: unknown[]; response?: { data?: unknown }; stack?: string };
-      console.error("[BigQuery ERROR] France fetch failed:", searchTerm, {
+      if (process.env.NODE_ENV === "development") console.error("[BigQuery ERROR] France fetch failed:", searchTerm, {
         message: e?.message,
         code: e?.code,
         errors: e?.errors,
@@ -7397,7 +7354,7 @@ export async function GET(request: NextRequest) {
       try {
         const aptTrimmed = normalizeLot(aptNumber);
         if (aptTrimmed) {
-          console.log("[property-value] France retry without lot due to failure:", { aptTrimmed });
+          if (process.env.NODE_ENV === "development") console.log("[property-value] France retry without lot due to failure:", { aptTrimmed });
           const fullAddress = (addressParam && addressParam.trim()) || [houseNumber, street, city].filter(Boolean).join(", ");
           const parsedFR = parseFRAddressFromFullString(fullAddress);
           const voie = (parsedFR.street || street || "").trim() || null;
@@ -7443,7 +7400,7 @@ export async function GET(request: NextRequest) {
                   livability_rating: livabilityRating,
                 },
               };
-              console.log("[FR_DEBUG] final France payload", JSON.stringify({
+              _frLog("[FR_DEBUG] final France payload", JSON.stringify({
                 path: "retry_building_fallback",
                 rawParams: {
                   city: city.trim(),
@@ -7505,7 +7462,7 @@ export async function GET(request: NextRequest) {
       } catch (retryErr) {
         const retryErrAny = retryErr as { message?: string } | undefined;
         const retryErrMessage = retryErrAny?.message ?? "Unknown error";
-        console.error("[property-value] France retry without lot failed:", retryErrMessage);
+        if (process.env.NODE_ENV === "development") console.error("[property-value] France retry without lot failed:", retryErrMessage);
       }
 
       return cacheAndReturn(frEmptyResponse());

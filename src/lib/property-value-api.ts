@@ -198,10 +198,6 @@ export async function fetchPropertyValueInsights(
   const bypassCache = frRawPresent && frCachedNoData;
   let didBypassCache = false;
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    if (isFR && process.env.NODE_ENV !== "production") {
-      console.log("[FR_CACHE] cache_hit=" + (bypassCache ? "false" : "true"));
-      if (bypassCache) console.log("[FR_CACHE] bypass_reason=typed_address_no_data_bypass");
-    }
     if (!bypassCache) {
       const cachedData = cached.data as Record<string, unknown>;
       if (isFR && cachedData && typeof cachedData === "object") {
@@ -298,16 +294,6 @@ export async function fetchPropertyValueInsights(
     if (isFR && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
-    if (isFR) {
-      const requestUrl = `/api/property-value?${params.toString()}`;
-      console.log("[FR_LOT_REQUEST_URL]", {
-        address: address?.trim() || "(empty)",
-        rawInputAddress: options?.rawInputAddress?.trim() || "(empty)",
-        apt_from_options: options?.aptNumber ?? null,
-        apt_trimmed: apt || null,
-        final_url: requestUrl,
-      });
-    }
     const res = await fetch(`/api/property-value?${params.toString()}`, {
       signal: options?.signal ?? AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });
