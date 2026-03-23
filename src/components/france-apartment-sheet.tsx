@@ -1735,6 +1735,22 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
+          {/* FR_PROPERTY_PROMPT_DEBUG — temporary visible debug for property-type prompt root cause */}
+          <div className="mt-2 rounded-lg border border-rose-400/40 bg-rose-950/30 px-2 py-1.5 font-mono text-[9px] text-rose-200/90">
+            <div className="mb-1 font-semibold">FR_PROPERTY_PROMPT_DEBUG</div>
+            <div>property_type_final = {String(parsed?.property_type_final ?? "—")}</div>
+            <div>property_type_source = {String(parsed?.property_type_source ?? "—")}</div>
+            <div>property_type_confidence = {String(parsed?.property_type_confidence ?? "—")}</div>
+            <div>prompt_for_apartment = {String(parsed?.prompt_for_apartment ?? "—")}</div>
+            <div>multiple_units = {String(parsed?.multiple_units ?? "—")}</div>
+            <div>shouldPromptLotCanonical = {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
+            <div>submittedLotPresent = {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
+            <div>phase = {String(phase)}</div>
+            <div>isHouseLikeUI = {String(isHouseLikeUI)}</div>
+            <div>isPropertyTypeUnknown = {String(isPropertyTypeUnknown)}</div>
+            <div className="mt-1 pt-1 border-t border-rose-400/20">→ lotPromptVisible = {String(lotPromptVisible)} (triggers prompt)</div>
+          </div>
+
           {isDev && lotPromptVisible ? (
             <div className="mt-2 rounded-lg border border-amber-400/20 bg-black/20 px-2 py-1.5 font-mono text-[9px] text-zinc-400">
               <div>fr_should_prompt_lot: {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
