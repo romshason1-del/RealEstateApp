@@ -746,6 +746,7 @@ export async function GET(request: NextRequest) {
         debug_street: null as string | null,
         debug_house_number: null as string | null,
         debug_match_key: null as string | null,
+        matched_flags_key: null as string | null,
         debug_unit_flags_row: null as Record<string, unknown> | null,
         no_data_reason: null,
         submitted_lot_present: null,
@@ -2262,51 +2263,37 @@ export async function GET(request: NextRequest) {
         `
         : null;
 
-      // france_building_unit_flags: use SAME normalization as property_latest_facts / france_dvf_rich_source
-      // Strict: postcode + city (strip arrondissement) + street_norm + house_number
+      // france_building_unit_flags: join on precomputed normalized columns (no runtime normalization)
       const unitFlagsStrictQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
         ? `
-        WITH normalized AS (
-          SELECT *,
-            LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') AS postcode_norm,
-            ${frBqStreetNormalizedEarly} AS street_norm
-          FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
-        )
-        SELECT postcode, city, street, house_number, distinct_unit_count, rows_count, has_unit_level_differentiation
-        FROM normalized
-        WHERE postcode_norm = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
-          AND ${frBqHouseMatchEarly}
-          AND ${frBqCityMatchSql}
-          AND ${frBqStreetMatchSqlEarly}
-        ORDER BY distinct_unit_count DESC
+        SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm,
+               distinct_unit_count, rows_count, has_unit_level_differentiation
+        FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
+        WHERE postcode_norm = @postcode_norm
+          AND city_norm = @city_norm
+          AND street_norm_clean = @street_norm_clean
+          AND house_number_norm = @house_number_norm
         LIMIT 1
         `
         : null;
-      // Relaxed: postcode + street only (for debug when strict fails)
+      // Relaxed: postcode + city + street only (for debug when strict fails)
       const unitFlagsRelaxedQuery = postcodeNormForSource && streetNormForSource
         ? `
-        WITH normalized AS (
-          SELECT *,
-            LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') AS postcode_norm,
-            ${frBqStreetNormalizedEarly} AS street_norm
-          FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
-        )
-        SELECT postcode, city, street, house_number, distinct_unit_count, rows_count, has_unit_level_differentiation
-        FROM normalized
-        WHERE postcode_norm = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
-          AND ${frBqCityMatchSql}
-          AND ${frBqStreetMatchSqlEarly}
+        SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm,
+               distinct_unit_count, rows_count, has_unit_level_differentiation
+        FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
+        WHERE postcode_norm = @postcode_norm
+          AND city_norm = @city_norm
+          AND street_norm_clean = @street_norm_clean
         ORDER BY distinct_unit_count DESC
         LIMIT 5
         `
         : null;
       const unitFlagsParams = {
-        city: cityNormForSource || cityNorm || "",
-        city_main: cityNormForSource || cityNorm || "",
-        postcode: postcodeNormForSource || "",
-        street_normalized: streetNormForExactMatch || streetNormForSource || "",
-        house_number: houseNumberNormForSource || "",
-        house_number_norm: normHn(houseNumberNormForSource || ""),
+        postcode_norm: postcodeNormForSource || "",
+        city_norm: cityNormForSource || cityNorm || "",
+        street_norm_clean: streetNormForExactMatch || streetNormForSource || "",
+        house_number_norm: normHn(houseNumberNormForSource || "") || houseNumberNormForSource || "",
       };
 
       const detectParams = {
@@ -2414,8 +2401,9 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.debug_city = cityNormForSource || cityNorm || null;
       frRuntimeDebug.debug_street = streetNormForExactMatch || streetNormForSource || streetNorm || null;
       frRuntimeDebug.debug_house_number = houseNumberNormForSource || houseNumberNorm || null;
-      frRuntimeDebug.debug_match_key = [postcodeNormForSource, cityNormForSource, streetNormForExactMatch || streetNormForSource, houseNumberNormForSource].filter(Boolean).join("|") || null;
-      frRuntimeDebug.debug_unit_flags_row = unitFlagsRow ? { postcode: unitFlagsRow.postcode, city: unitFlagsRow.city, street: unitFlagsRow.street, house_number: unitFlagsRow.house_number, distinct_unit_count: unitFlagsRow.distinct_unit_count, has_unit_level_differentiation: unitFlagsRow.has_unit_level_differentiation } : null;
+      frRuntimeDebug.debug_match_key = [postcodeNormForSource, cityNormForSource, streetNormForExactMatch || streetNormForSource, normHn(houseNumberNormForSource || "") || houseNumberNormForSource].filter(Boolean).join("|") || null;
+      frRuntimeDebug.matched_flags_key = unitFlagsRow ? [unitFlagsRow.postcode_norm, unitFlagsRow.city_norm, unitFlagsRow.street_norm_clean, unitFlagsRow.house_number_norm].filter((v) => v != null && String(v).trim() !== "").join("|") || null : null;
+      frRuntimeDebug.debug_unit_flags_row = unitFlagsRow ? { postcode: unitFlagsRow.postcode, city: unitFlagsRow.city, street: unitFlagsRow.street, house_number: unitFlagsRow.house_number, postcode_norm: unitFlagsRow.postcode_norm, city_norm: unitFlagsRow.city_norm, street_norm_clean: unitFlagsRow.street_norm_clean, house_number_norm: unitFlagsRow.house_number_norm, distinct_unit_count: unitFlagsRow.distinct_unit_count, has_unit_level_differentiation: unitFlagsRow.has_unit_level_differentiation } : null;
       frRuntimeDebug.distinct_unit_count = distinctUnitCountFromTable;
       const profileBuildingClass = getString(profileRow, ["building_class"])?.toLowerCase() ?? "";
       const profileSaysApartment = profileBuildingClass === "apartment_building";

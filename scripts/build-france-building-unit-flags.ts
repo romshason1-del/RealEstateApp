@@ -30,27 +30,18 @@ function loadDotEnvLocal(): void {
   }
 }
 
-const CREATE_TABLE_SQL = `
-CREATE OR REPLACE TABLE \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\` AS
-SELECT
-  postcode,
-  city,
-  street,
-  house_number,
-  COUNT(DISTINCT unit_number) AS distinct_unit_count,
-  COUNT(*) AS rows_count,
-  COUNT(DISTINCT unit_number) > 1 AS has_unit_level_differentiation
-FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
-WHERE
-  property_type = 'Appartement'
-  AND unit_number IS NOT NULL
-  AND TRIM(CAST(unit_number AS STRING)) != ''
-GROUP BY
-  postcode,
-  city,
-  street,
-  house_number
-`;
+// Load SQL from create-france-building-unit-flags.sql (with normalized columns)
+const sqlPath = path.join(process.cwd(), "scripts", "create-france-building-unit-flags.sql");
+const CREATE_TABLE_SQL = fs.existsSync(sqlPath)
+  ? fs
+      .readFileSync(sqlPath, "utf8")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n")
+      .trim()
+  : (() => {
+      throw new Error("create-france-building-unit-flags.sql not found");
+    })();
 
 async function main() {
   loadDotEnvLocal();
@@ -80,7 +71,7 @@ async function main() {
 
   const countQuery = `SELECT COUNT(*) AS n FROM \`${tableRef}\``;
   const sampleQuery = `
-    SELECT postcode, city, street, house_number, distinct_unit_count, rows_count, has_unit_level_differentiation
+    SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm, distinct_unit_count, rows_count, has_unit_level_differentiation
     FROM \`${tableRef}\`
     ORDER BY distinct_unit_count DESC
     LIMIT 10

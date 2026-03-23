@@ -1594,6 +1594,7 @@ export function FranceApartmentSheet({
             <div>debug_street = {String(rdForLot?.debug_street ?? "—")}</div>
             <div>debug_house_number = {String(rdForLot?.debug_house_number ?? "—")}</div>
             <div>debug_match_key = {String(rdForLot?.debug_match_key ?? "—")}</div>
+            <div>matched_flags_key = {String(rdForLot?.matched_flags_key ?? "—")}</div>
             {rdForLot?.debug_unit_flags_row && (
               <div>debug_unit_flags_row = {JSON.stringify(rdForLot.debug_unit_flags_row)}</div>
             )}
