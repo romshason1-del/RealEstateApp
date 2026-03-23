@@ -2047,6 +2047,20 @@ export async function GET(request: NextRequest) {
           candidateLotsFromFacts = earlyStrictRows.length > 0 ? Array.from(strictLots).filter(Boolean) : Array.from(lots).filter(Boolean);
           console.log("[FR_SOURCE] source_path=facts");
           console.log("[FR_SOURCE] candidate_rows_found=" + String(earlyCandidateRows.length));
+          console.log("[FR_STRICT_DVF_ROWS] count=" + String(earlyStrictRows.length) + " maison=" + String(strictMaisonCount) + " appart=" + String(strictAppartCount) + " lots=" + String(strictLots.size));
+          for (let i = 0; i < earlyStrictRows.length; i++) {
+            const r = earlyStrictRows[i] as Record<string, unknown>;
+            console.log("[FR_STRICT_DVF_ROW " + (i + 1) + "]", JSON.stringify({
+              type_local: String(r?.property_type ?? ""),
+              house_number: String(r?.house_number ?? ""),
+              street: String(r?.street ?? ""),
+              postcode: String(r?.postcode ?? ""),
+              city: String(r?.city ?? ""),
+              unit_number: String(r?.unit_number ?? ""),
+              last_sale_date: r?.last_sale_date != null ? String(r.last_sale_date) : null,
+              last_sale_price: typeof r?.last_sale_price === "number" ? r.last_sale_price : null,
+            }));
+          }
           console.log("[FR_CLASSIFY] apartment_evidence=" + (apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts" : "none_from_facts"));
           console.log("[FR_CLASSIFY] house_evidence_from_facts=" + (houseEvidenceFromFacts ? "maison_dominates" : "false"));
         } catch (e) {

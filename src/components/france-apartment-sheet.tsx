@@ -1749,6 +1749,26 @@ export function FranceApartmentSheet({
             <div>isHouseLikeUI = {String(isHouseLikeUI)}</div>
             <div>isPropertyTypeUnknown = {String(isPropertyTypeUnknown)}</div>
             <div className="mt-1 pt-1 border-t border-rose-400/20">→ lotPromptVisible = {String(lotPromptVisible)} (triggers prompt)</div>
+            <div className="mt-2 pt-2 border-t border-rose-400/30 font-semibold">STRICT DVF ROWS (used for classification)</div>
+            <div>strict_maison_count = {String(rdForLot?.fr_strict_maison_count ?? "—")}</div>
+            <div>strict_appartement_count = {String(rdForLot?.fr_strict_appartement_count ?? "—")}</div>
+            <div>strict_lot_distinct_count = {String(rdForLot?.fr_strict_lot_distinct_count ?? "—")}</div>
+            {(Array.isArray(rdForLot?.fr_strict_dvf_rows) ? rdForLot.fr_strict_dvf_rows : []).map((row: any, i: number) => (
+              <div key={i} className="mt-1.5 rounded border border-rose-500/20 bg-black/20 p-1.5">
+                <div className="font-semibold">Row {i + 1}</div>
+                <div>type_local / property_type = {String(row?.property_type ?? "—")}</div>
+                <div>numero / house_number = {String(row?.house_number ?? "—")}</div>
+                <div>normalized street = {String(row?.street ?? "—")}</div>
+                <div>postcode = {String(row?.postcode ?? "—")}</div>
+                <div>city = {String(row?.city ?? "—")}</div>
+                <div>lot / unit_number = {String(row?.unit_number ?? "—")}</div>
+                <div>date_mutation / last_sale_date = {String(row?.last_sale_date ?? "—")}</div>
+                <div>valeur_fonciere / last_sale_price = {String(row?.last_sale_price ?? "—")}</div>
+              </div>
+            ))}
+            {(!Array.isArray(rdForLot?.fr_strict_dvf_rows) || rdForLot.fr_strict_dvf_rows.length === 0) ? (
+              <div className="mt-1 text-rose-300/70">(no strict rows — empty or not yet loaded)</div>
+            ) : null}
           </div>
 
           {isDev && lotPromptVisible ? (
