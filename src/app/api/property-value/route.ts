@@ -738,6 +738,8 @@ export async function GET(request: NextRequest) {
         surface_source: null as "exact_property" | "same_building" | "same_street_similar" | "nearby_fallback" | null,
         surface_source_sample_size: null as number | null,
         has_unit_level_differentiation: null as boolean | null,
+        building_unit_flags_match_found: null as boolean | null,
+        distinct_unit_count: null as number | null,
         no_data_reason: null,
         submitted_lot_present: null,
         exact_match_reason: null,
@@ -818,17 +820,10 @@ export async function GET(request: NextRequest) {
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
-        // Single source of truth for lot prompt: house ALWAYS suppresses. Ask only when unit-level differentiation exists.
+        // Source of truth: france_building_unit_flags table. House ALWAYS suppresses.
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
-        const buildingAfterFiltersCount = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
-        const exactUnitRowCount = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
-        const strictLotCount = (frRuntimeDebug.fr_strict_lot_distinct_count as number) ?? 0;
-        const hasUnitLevelDiff =
-          strictLotCount >= 2 ||
-          exactUnitRowCount >= 2 ||
-          buildingAfterFiltersCount >= 2 ||
-          buildingCandidatesCount >= 2;
+        const hasUnitLevelDiff = frRuntimeDebug.has_unit_level_differentiation === true;
         frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiff;
         const payloadAsksForLot =
           payload.multiple_units === true || payload.prompt_for_apartment === true;
@@ -1061,6 +1056,9 @@ export async function GET(request: NextRequest) {
         outPayload.property_type_final = propertyTypeFinal;
         outPayload.property_type_source = propertyTypeSource;
         outPayload.property_type_confidence = propertyTypeConfidence;
+        outPayload.has_unit_level_differentiation = hasUnitLevelDiff;
+        outPayload.distinct_unit_count = frRuntimeDebug.distinct_unit_count ?? null;
+        outPayload.building_unit_flags_match_found = frRuntimeDebug.building_unit_flags_match_found ?? null;
         if (propertyTypeFinal === "house") {
           outPayload.multiple_units = false;
           outPayload.prompt_for_apartment = false;
@@ -2236,6 +2234,7 @@ export async function GET(request: NextRequest) {
       let detectRows: Array<Record<string, unknown>> = [];
       let strictDetectRowsArr: Array<Record<string, unknown>> = [];
       let profileRows: Array<Record<string, unknown>> = [];
+      let unitFlagsRows: Array<Record<string, unknown>> = [];
 
       const frBqPostcodeMatchSqlProfile = `LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')`;
       const profileQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
@@ -2251,6 +2250,28 @@ export async function GET(request: NextRequest) {
             OR TRIM(@normalizedStreet) LIKE CONCAT('%', normalized_street, '%')
           )
         ORDER BY total_transactions DESC
+        LIMIT 1
+        `
+        : null;
+
+      // france_building_unit_flags: precomputed source of truth for has_unit_level_differentiation
+      const frBqUnitFlagsStreetNorm = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(street AS STRING)), NFD)), r'\\p{M}', ''), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', ''), r'\\s+DU\\s+', ' '), r'\\s+DE\\s+', ' '), r'\\s+DES\\s+', ' '), r'\\s+LA\\s+', ' '), r'\\s+LE\\s+', ' '), r'^DU\\s+', ''), r'^DE\\s+', ''), r'^DES\\s+', ''), r'^LA\\s+', ''), r'^LE\\s+', ''), r'\\s+', ' '))`;
+      const frBqUnitFlagsStreetMatch = `(${frBqUnitFlagsStreetNorm} = TRIM(@normalizedStreet) OR ${frBqUnitFlagsStreetNorm} LIKE CONCAT('%', TRIM(@normalizedStreet), '%') OR TRIM(@normalizedStreet) LIKE CONCAT('%', ${frBqUnitFlagsStreetNorm}, '%'))`;
+      const unitFlagsQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
+        ? `
+        WITH normalized AS (
+          SELECT *,
+            LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') AS postcode_norm,
+            ${frBqUnitFlagsStreetNorm} AS street_norm
+          FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
+        )
+        SELECT postcode, city, street, house_number, distinct_unit_count, rows_count, has_unit_level_differentiation
+        FROM normalized
+        WHERE postcode_norm = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
+          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND ${detCityMatchSql}
+          AND ${frBqUnitFlagsStreetMatch}
+        ORDER BY distinct_unit_count DESC
         LIMIT 1
         `
         : null;
@@ -2283,6 +2304,14 @@ export async function GET(request: NextRequest) {
             )
           );
         }
+        if (unitFlagsQuery) {
+          queries.push(
+            queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: unitFlagsQuery, params: detectParams },
+              "france_building_unit_flags"
+            )
+          );
+        }
         const results = await Promise.all(queries);
         const looseResult = results[0] as [Array<Record<string, unknown>>];
         const strictResult = results[1] as [Array<Record<string, unknown>>];
@@ -2292,13 +2321,19 @@ export async function GET(request: NextRequest) {
           const profileResult = results[2] as [Array<Record<string, unknown>>];
           profileRows = (Array.isArray(profileResult?.[0]) ? profileResult[0] : []) as Array<Record<string, unknown>>;
         }
+        if (results.length > 3) {
+          const unitFlagsResult = results[3] as [Array<Record<string, unknown>>];
+          unitFlagsRows = (Array.isArray(unitFlagsResult?.[0]) ? unitFlagsResult[0] : []) as Array<Record<string, unknown>>;
+        }
         console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
         if (profileRows?.length) console.log("[FR_GOLD] france_building_profile", { rows: profileRows.length });
+        if (unitFlagsRows?.length) console.log("[FR_GOLD] france_building_unit_flags", { rows: unitFlagsRows.length });
       } catch (err) {
         console.error("[FR_ERROR] intelligence_profile_query_failed_continuing_with_valutation", err);
         detectRows = [];
         strictDetectRowsArr = [];
         profileRows = [];
+        unitFlagsRows = [];
       }
 
       // Debug: log exact query params + raw row result (do not change logic).
@@ -2315,6 +2350,15 @@ export async function GET(request: NextRequest) {
       const detectRow = (detectRows?.[0] ?? {}) as Record<string, unknown>;
       const strictDetectRow = (strictDetectRowsArr?.[0] ?? null) as Record<string, unknown> | null;
       const profileRow = (profileRows?.[0] ?? {}) as Record<string, unknown>;
+      const unitFlagsRow = (unitFlagsRows?.[0] ?? null) as Record<string, unknown> | null;
+      const buildingUnitFlagsMatchFound = unitFlagsRow != null;
+      const hasUnitLevelDiffFromTable = buildingUnitFlagsMatchFound && (unitFlagsRow!.has_unit_level_differentiation === true || unitFlagsRow!.has_unit_level_differentiation === "true");
+      const distinctUnitCountFromTable = buildingUnitFlagsMatchFound
+        ? (Number(unitFlagsRow!.distinct_unit_count) || null)
+        : null;
+      frRuntimeDebug.building_unit_flags_match_found = buildingUnitFlagsMatchFound;
+      frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffFromTable;
+      frRuntimeDebug.distinct_unit_count = distinctUnitCountFromTable;
       const profileBuildingClass = getString(profileRow, ["building_class"])?.toLowerCase() ?? "";
       const profileSaysApartment = profileBuildingClass === "apartment_building";
       const profileSaysHouse = profileBuildingClass === "likely_house";
@@ -2640,14 +2684,12 @@ export async function GET(request: NextRequest) {
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
       const flowAsApartment = detectClass === "apartment";
-      const hasUnitLevelDiffAtClassify =
-        strictLots.size >= 2;
-      frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffAtClassify;
+      // Source of truth: france_building_unit_flags table. No heuristic overrides.
       const shouldPromptLotInitial =
         (flowAsApartment || isLikelyBuilding) &&
         !submittedLotPresent &&
         (allowMultiUnitFromQueries || isLikelyBuilding) &&
-        hasUnitLevelDiffAtClassify;
+        hasUnitLevelDiffFromTable;
       let shouldPromptLot = detectClass !== "house" && shouldPromptLotInitial;
       // Low-confidence heuristic apartment with no strict DVF must never trigger apartment prompt
       if (lowConfHeuristicApartmentNoStrict) shouldPromptLot = false;
@@ -6416,14 +6458,8 @@ export async function GET(request: NextRequest) {
 
       const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
       const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
-      const buildingAfterFiltersCountNoData = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
-      const exactUnitRowCountNoData = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
-      const strictLotCountNoData = (frRuntimeDebug.fr_strict_lot_distinct_count as number) ?? 0;
-      const hasUnitLevelDiffNoData =
-        strictLotCountNoData >= 2 ||
-        exactUnitRowCountNoData >= 2 ||
-        buildingAfterFiltersCountNoData >= 2 ||
-        buildingCandidatesCount >= 2;
+      // Source of truth: france_building_unit_flags (set earlier from lookup)
+      const hasUnitLevelDiffNoData = frRuntimeDebug.has_unit_level_differentiation === true;
       frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffNoData;
       const lowConfHeuristicNoPromptHere =
         propertyTypeFinal === "apartment" &&

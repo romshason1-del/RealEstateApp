@@ -1585,7 +1585,9 @@ export function FranceApartmentSheet({
             <div>property_type_confidence = {String(parsed?.property_type_confidence ?? "—")}</div>
             <div>prompt_for_apartment = {String(parsed?.prompt_for_apartment ?? "—")}</div>
             <div>multiple_units = {String(parsed?.multiple_units ?? "—")}</div>
+            <div>building_unit_flags_match_found = {String(rdForLot?.building_unit_flags_match_found ?? "—")}</div>
             <div>has_unit_level_differentiation = {String(rdForLot?.has_unit_level_differentiation ?? "—")}</div>
+            <div>distinct_unit_count = {String(rdForLot?.distinct_unit_count ?? "—")}</div>
             <div>shouldPromptLotCanonical = {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
             <div>submittedLotPresent = {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
             <div>phase = {String(phase)}</div>
