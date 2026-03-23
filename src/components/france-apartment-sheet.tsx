@@ -51,6 +51,10 @@ export type FranceValuationDisplay = {
   last_transaction_source_address?: string | null;
   /** Human-readable disclosure text. */
   last_transaction_disclosure?: string | null;
+  /** Surface source for total estimate: "exact property" | "building median" | "street similar" | "nearby (n=N)" */
+  surface_source_label?: string | null;
+  /** Surface m² used when displaying total estimated value */
+  surface_m2_used?: number | null;
 };
 
 export function FranceApartmentSheet({
@@ -1283,6 +1287,11 @@ export function FranceApartmentSheet({
                 {valueRange != null && !isLoadingNow && !isNoResult ? (
                   <div className="mt-1.5 text-xs font-medium text-zinc-400/90">
                     Market range: {formatFranceEuroTotal(valueRange.min)} – {formatFranceEuroTotal(valueRange.max)}
+                  </div>
+                ) : null}
+                {!isLoadingNow && !isNoResult && hasValue && fv?.surface_source_label && fv?.surface_m2_used != null ? (
+                  <div className="mt-1 text-[10px] text-zinc-400/80">
+                    Based on ~{Math.round(fv.surface_m2_used)} m² ({fv.surface_source_label})
                   </div>
                 ) : null}
               </div>

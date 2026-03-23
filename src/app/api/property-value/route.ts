@@ -735,6 +735,8 @@ export async function GET(request: NextRequest) {
         winning_source_label: null,
         has_surface_for_estimate: null,
         chosen_surface_value: null,
+        surface_source: null as "exact_property" | "same_building" | "same_street_similar" | "nearby_fallback" | null,
+        surface_source_sample_size: null as number | null,
         no_data_reason: null,
         submitted_lot_present: null,
         exact_match_reason: null,
@@ -1099,14 +1101,43 @@ export async function GET(request: NextRequest) {
             price_per_m2 > 0;
 
           const noSurfaceForDisplay = !Boolean(frRuntimeDebug.has_surface_for_estimate);
+          const surfaceM2 = typeof frRuntimeDebug.chosen_surface_value === "number" && Number.isFinite(frRuntimeDebug.chosen_surface_value) ? frRuntimeDebug.chosen_surface_value : null;
+          const surfaceSource = (frRuntimeDebug.surface_source as "exact_property" | "same_building" | "same_street_similar" | "nearby_fallback" | null) ?? null;
+          const surfaceSampleSize = (frRuntimeDebug.surface_source_sample_size as number | null) ?? null;
+          const surfaceReliable =
+            surfaceM2 != null &&
+            surfaceM2 > 15 &&
+            (surfaceSource === "exact_property" ||
+              surfaceSource === "same_building" ||
+              surfaceSource === "same_street_similar" ||
+              (surfaceSource === "nearby_fallback" && surfaceSampleSize != null && surfaceSampleSize >= 3));
           let display_value: number | null = evPos ? estimated_value : ppmPos ? price_per_m2 : null;
           let display_value_type: "estimated_total" | "price_per_m2" | null = evPos
             ? "estimated_total"
             : ppmPos
               ? "price_per_m2"
               : null;
-          // No surface: UI must still show median €/m² (not blank).
-          if (noSurfaceForDisplay && hasWinningStep && ppmPos && !evPos) {
+          let effectiveEstimatedValue = evPos ? estimated_value : null;
+          if (surfaceReliable && ppmPos && !evPos && surfaceM2 != null) {
+            effectiveEstimatedValue = Math.round((price_per_m2 as number) * surfaceM2 / 1000) * 1000;
+            display_value = effectiveEstimatedValue;
+            display_value_type = "estimated_total";
+          } else if (evPos && !surfaceReliable) {
+            display_value = price_per_m2;
+            display_value_type = "price_per_m2";
+            effectiveEstimatedValue = null;
+          }
+          const surfaceSourceLabel =
+            surfaceSource === "exact_property"
+              ? "exact property"
+              : surfaceSource === "same_building"
+                ? "building median"
+                : surfaceSource === "same_street_similar"
+                  ? "street similar"
+                  : surfaceSource === "nearby_fallback" && surfaceSampleSize != null
+                    ? `nearby (n=${surfaceSampleSize})`
+                    : null;
+          if (noSurfaceForDisplay && hasWinningStep && ppmPos && !effectiveEstimatedValue) {
             display_value = price_per_m2;
             display_value_type = "price_per_m2";
           }
@@ -1146,13 +1177,15 @@ export async function GET(request: NextRequest) {
             source_label: winning_source_label,
             winning_step: frRuntimeDebug.winning_step,
             confidence,
-            estimated_value: evPos ? estimated_value : null,
+            estimated_value: effectiveEstimatedValue ?? (evPos ? estimated_value : null),
             price_per_m2: ppmPos ? price_per_m2 : null,
             display_value,
             display_value_type,
+            surface_source_label: surfaceSourceLabel,
+            surface_m2_used: surfaceM2,
             last_sale_price,
             last_sale_date,
-            has_display_value,
+            has_display_value: Boolean(effectiveEstimatedValue || display_value),
             has_current_valuation,
             last_transaction_match_type: ltMatchType ?? derivedMatchType,
             last_transaction_source_address: ltSourceAddr ?? null,
@@ -1169,16 +1202,21 @@ export async function GET(request: NextRequest) {
           // Stable top-level fields for UI/clients (France valuation only).
           outPayload.winning_source_label = winning_source_label;
           outPayload.confidence = confidence;
-          outPayload.estimated_value = evPos ? estimated_value : null;
+          outPayload.estimated_value = effectiveEstimatedValue ?? (surfaceReliable && evPos ? estimated_value : null);
           outPayload.price_per_m2 = ppmPos ? price_per_m2 : null;
           outPayload.display_value = display_value;
           outPayload.display_value_type = display_value_type;
+          outPayload.surface_source_label = surfaceSourceLabel;
+          outPayload.surface_m2_used = surfaceM2;
         }
 
-        if (tag === "valuation_response" && estimated_value != null && typeof estimated_value === "number" && estimated_value > 0) {
-          const low = Math.round(estimated_value * 0.88);
-          const high = Math.round(estimated_value * 1.12);
-          outPayload.value_range = { low_estimate: low, estimated_value: estimated_value, high_estimate: high };
+        const finalEstimatedForRange = (outPayload.display_value_type as string) === "estimated_total" && typeof outPayload.display_value === "number" && outPayload.display_value > 0
+          ? outPayload.display_value
+          : null;
+        if (tag === "valuation_response" && finalEstimatedForRange != null && finalEstimatedForRange > 0) {
+          const low = Math.round(finalEstimatedForRange * 0.88);
+          const high = Math.round(finalEstimatedForRange * 1.12);
+          outPayload.value_range = { low_estimate: low, estimated_value: finalEstimatedForRange, high_estimate: high };
         }
 
         const estimated_value_present =
@@ -3287,9 +3325,8 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_step = "exact_house";
             frRuntimeDebug.winning_source_label = "Exact house match";
             frRuntimeDebug.has_surface_for_estimate = surface != null && surface > 0;
+            frRuntimeDebug.surface_source = "exact_property";
             frRuntimeDebug.chosen_surface_value = surface;
-            frRuntimeDebug.winning_median_price_per_m2 =
-              Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null;
             const exactHousePpmValues = (exactHouseUsable.length > 0 ? exactHouseUsable : exactHouseRows)
               .map((r) => frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2))
               .filter((v): v is number => v != null && v > 0);
@@ -3835,6 +3872,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "building_similar_unit";
           frRuntimeDebug.winning_source_label = FR_LABEL_BUILDING_SIMILAR_UNIT;
           frRuntimeDebug.has_surface_for_estimate = estSurf != null && estSurf > 0;
+          frRuntimeDebug.surface_source = "same_building";
           frRuntimeDebug.chosen_surface_value = estSurf;
           frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
           frRuntimeDebug.property_latest_facts_money_divisor = 1000;
@@ -4180,6 +4218,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "post_lot_relaxed";
           frRuntimeDebug.winning_source_label = "Post-lot relaxed (similar apartments)";
           frRuntimeDebug.has_surface_for_estimate = estSurf != null && estSurf > 0;
+          frRuntimeDebug.surface_source = "same_building";
           frRuntimeDebug.chosen_surface_value = estSurf;
           frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
           return frReturn(
@@ -4326,6 +4365,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = winningStep;
           frRuntimeDebug.winning_source_label = winningSourceLabel;
           frRuntimeDebug.has_surface_for_estimate = surface != null && surface > 0;
+          frRuntimeDebug.surface_source = "exact_property";
           frRuntimeDebug.chosen_surface_value = surface;
           frRuntimeDebug.winning_median_price_per_m2 =
             Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null;
@@ -4627,6 +4667,7 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building";
             frRuntimeDebug.has_surface_for_estimate = medianSurfaceM2ForFallback != null;
+            frRuntimeDebug.surface_source = "same_building";
             frRuntimeDebug.fr_building_value_reliable = true;
             frRuntimeDebug.fr_selected_layer_quality = "reliable";
             frRuntimeDebug.fr_selected_reason = "same_address_sufficient_rows";
@@ -4718,6 +4759,7 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building (from DVF rich source)";
             frRuntimeDebug.has_surface_for_estimate = true;
+            frRuntimeDebug.surface_source = "same_building";
             frRuntimeDebug.fr_building_value_reliable = true;
             frRuntimeDebug.fr_selected_layer_quality = "reliable";
             frRuntimeDebug.fr_selected_reason = "rich_source_sufficient_rows";
@@ -4871,6 +4913,7 @@ export async function GET(request: NextRequest) {
               frRuntimeDebug.winning_step = "street_fallback";
               frRuntimeDebug.winning_source_label = fallbackSourceSameStreetHouse;
               frRuntimeDebug.has_surface_for_estimate = surfaceForEst != null;
+              frRuntimeDebug.surface_source = "same_street_similar";
               frRuntimeDebug.chosen_surface_value = surfaceForEst;
               console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=SAME_STREET_HOUSE_FROM_FACTS");
               return frReturn(
@@ -4991,6 +5034,9 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
         frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+        frRuntimeDebug.has_surface_for_estimate = surfaceForEst != null && surfaceForEst > 0;
+        frRuntimeDebug.surface_source = "same_building";
+        frRuntimeDebug.chosen_surface_value = surfaceForEst ?? null;
         frRuntimeDebug.fr_building_value_reliable = estimated != null && estimated > 0;
         frRuntimeDebug.fr_selected_layer_quality = estimated != null && estimated > 0 ? "reliable" : "low";
         frRuntimeDebug.fr_selected_reason = estimated != null ? "building_profile_has_estimate" : "building_profile_price_only_no_surface";
@@ -5335,6 +5381,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_selected_layer_quality = streetConfidence;
           frRuntimeDebug.fr_selected_reason = buildingHadNoReliableValue ? "street_preferred_over_weak_building" : "street_fallback";
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
+          frRuntimeDebug.surface_source = "same_street_similar";
+          frRuntimeDebug.surface_source_sample_size = streetFallbackRowsCount ?? null;
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
           frRuntimeDebug.fr_fallback_level_used = "street_fallback";
           frRuntimeDebug.fr_total_rows_used = streetFallbackRowsCount;
@@ -5605,6 +5653,8 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = fallbackSourceCommune;
           frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null;
+          frRuntimeDebug.surface_source = "nearby_fallback";
+          frRuntimeDebug.surface_source_sample_size = communeFilteredCount ?? null;
           frRuntimeDebug.fr_selected_layer_quality = frConfidence;
           frRuntimeDebug.fr_selected_reason = "commune_fallback";
           frRuntimeDebug.chosen_surface_value = surfaceForEstimation;
@@ -5839,6 +5889,10 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "nearby_fallback";
           frRuntimeDebug.winning_source_label = label;
           frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.has_surface_for_estimate = surfaceForEst != null && surfaceForEst > 0;
+          frRuntimeDebug.surface_source = "nearby_fallback";
+          frRuntimeDebug.surface_source_sample_size = pool.length;
+          frRuntimeDebug.chosen_surface_value = surfaceForEst ?? null;
           frRuntimeDebug.fr_selected_layer_quality = conf;
           frRuntimeDebug.fr_selected_reason = "nearby_fallback";
           frRuntimeDebug.fr_fallback_level_used = "nearby_fallback";
@@ -5963,6 +6017,10 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "commune_emergency";
           frRuntimeDebug.winning_source_label = label;
           frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null && surfaceForEstimation > 0;
+          frRuntimeDebug.surface_source = "nearby_fallback";
+          frRuntimeDebug.surface_source_sample_size = ppmAndTxRows.length;
+          frRuntimeDebug.chosen_surface_value = surfaceForEstimation ?? null;
           frRuntimeDebug.fr_selected_layer_quality = "low";
           frRuntimeDebug.fr_selected_reason = "commune_emergency_safety_net";
           frRuntimeDebug.fr_fallback_level_used = "commune_emergency";
@@ -6066,6 +6124,10 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = label;
           frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null && surfaceForEstimation > 0;
+          frRuntimeDebug.surface_source = "nearby_fallback";
+          frRuntimeDebug.surface_source_sample_size = safetyNetRows.length;
+          frRuntimeDebug.chosen_surface_value = surfaceForEstimation ?? null;
           frRuntimeDebug.fr_selected_layer_quality = "low";
           frRuntimeDebug.fr_selected_reason = "commune_safety_net";
           frRuntimeDebug.fr_fallback_level_used = "commune_fallback";
@@ -6167,6 +6229,10 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = label;
           frRuntimeDebug.winning_median_price_per_m2 = medianPpm;
+          frRuntimeDebug.has_surface_for_estimate = surfaceForEstimation != null && surfaceForEstimation > 0;
+          frRuntimeDebug.surface_source = "nearby_fallback";
+          frRuntimeDebug.surface_source_sample_size = postcodeRows.length;
+          frRuntimeDebug.chosen_surface_value = surfaceForEstimation ?? null;
           frRuntimeDebug.fr_selected_layer_quality = "low";
           frRuntimeDebug.fr_selected_reason = "postcode_only_fallback";
           frRuntimeDebug.fr_fallback_level_used = "commune_fallback";
