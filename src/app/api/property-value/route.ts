@@ -2263,37 +2263,41 @@ export async function GET(request: NextRequest) {
         `
         : null;
 
-      // france_building_unit_flags: join on precomputed normalized columns (no runtime normalization)
-      const unitFlagsStrictQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
+      // france_building_unit_flags: strict normalized-key lookup (CAST+TRIM both sides for consistent string comparison)
+      const unitFlagsPostcodeNorm = String(postcodeNormForSource ?? "").trim();
+      const unitFlagsCityNorm = String(cityNormForSource || cityNorm || "").trim().toUpperCase();
+      const unitFlagsStreetNorm = String(streetNormForExactMatch || streetNormForSource || "").trim().toUpperCase();
+      const unitFlagsHouseNorm = String(normHn(houseNumberNormForSource || "") || houseNumberNormForSource || "").trim().toUpperCase();
+      const unitFlagsStrictQuery = unitFlagsPostcodeNorm && unitFlagsStreetNorm && unitFlagsHouseNorm
         ? `
         SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm,
                distinct_unit_count, rows_count, has_unit_level_differentiation
         FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
-        WHERE postcode_norm = @postcode_norm
-          AND city_norm = @city_norm
-          AND street_norm_clean = @street_norm_clean
-          AND house_number_norm = @house_number_norm
+        WHERE TRIM(CAST(postcode_norm AS STRING)) = @postcode_norm
+          AND TRIM(UPPER(CAST(city_norm AS STRING))) = @city_norm
+          AND TRIM(UPPER(CAST(street_norm_clean AS STRING))) = @street_norm_clean
+          AND TRIM(UPPER(CAST(house_number_norm AS STRING))) = @house_number_norm
         LIMIT 1
         `
         : null;
       // Relaxed: postcode + city + street only (for debug when strict fails)
-      const unitFlagsRelaxedQuery = postcodeNormForSource && streetNormForSource
+      const unitFlagsRelaxedQuery = unitFlagsPostcodeNorm && unitFlagsStreetNorm
         ? `
         SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm,
                distinct_unit_count, rows_count, has_unit_level_differentiation
         FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
-        WHERE postcode_norm = @postcode_norm
-          AND city_norm = @city_norm
-          AND street_norm_clean = @street_norm_clean
+        WHERE TRIM(CAST(postcode_norm AS STRING)) = @postcode_norm
+          AND TRIM(UPPER(CAST(city_norm AS STRING))) = @city_norm
+          AND TRIM(UPPER(CAST(street_norm_clean AS STRING))) = @street_norm_clean
         ORDER BY distinct_unit_count DESC
         LIMIT 5
         `
         : null;
       const unitFlagsParams = {
-        postcode_norm: postcodeNormForSource || "",
-        city_norm: cityNormForSource || cityNorm || "",
-        street_norm_clean: streetNormForExactMatch || streetNormForSource || "",
-        house_number_norm: normHn(houseNumberNormForSource || "") || houseNumberNormForSource || "",
+        postcode_norm: unitFlagsPostcodeNorm,
+        city_norm: unitFlagsCityNorm,
+        street_norm_clean: unitFlagsStreetNorm,
+        house_number_norm: unitFlagsHouseNorm,
       };
 
       const detectParams = {
@@ -2325,9 +2329,10 @@ export async function GET(request: NextRequest) {
           );
         }
         if (unitFlagsStrictQuery) {
+          console.log("[FR_UNIT_FLAGS] strict_query_params", unitFlagsParams);
           queries.push(
             queryWithTimeout<[Array<Record<string, unknown>>]>(
-              { query: unitFlagsStrictQuery, params: unitFlagsParams },
+              { query: unitFlagsStrictQuery, params: unitFlagsParams, location: "EU" },
               "france_building_unit_flags_strict"
             )
           );
@@ -2349,7 +2354,7 @@ export async function GET(request: NextRequest) {
         if (unitFlagsRows.length === 0 && unitFlagsRelaxedQuery) {
           try {
             const [relaxedResult] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-              { query: unitFlagsRelaxedQuery, params: unitFlagsParams },
+              { query: unitFlagsRelaxedQuery, params: unitFlagsParams, location: "EU" },
               "france_building_unit_flags_relaxed"
             );
             const relaxedRows = (Array.isArray(relaxedResult) ? relaxedResult : []) as Array<Record<string, unknown>>;
@@ -2401,7 +2406,7 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.debug_city = cityNormForSource || cityNorm || null;
       frRuntimeDebug.debug_street = streetNormForExactMatch || streetNormForSource || streetNorm || null;
       frRuntimeDebug.debug_house_number = houseNumberNormForSource || houseNumberNorm || null;
-      frRuntimeDebug.debug_match_key = [postcodeNormForSource, cityNormForSource, streetNormForExactMatch || streetNormForSource, normHn(houseNumberNormForSource || "") || houseNumberNormForSource].filter(Boolean).join("|") || null;
+      frRuntimeDebug.debug_match_key = [unitFlagsPostcodeNorm, unitFlagsCityNorm, unitFlagsStreetNorm, unitFlagsHouseNorm].filter(Boolean).join("|") || null;
       frRuntimeDebug.matched_flags_key = unitFlagsRow ? [unitFlagsRow.postcode_norm, unitFlagsRow.city_norm, unitFlagsRow.street_norm_clean, unitFlagsRow.house_number_norm].filter((v) => v != null && String(v).trim() !== "").join("|") || null : null;
       frRuntimeDebug.debug_unit_flags_row = unitFlagsRow ? { postcode: unitFlagsRow.postcode, city: unitFlagsRow.city, street: unitFlagsRow.street, house_number: unitFlagsRow.house_number, postcode_norm: unitFlagsRow.postcode_norm, city_norm: unitFlagsRow.city_norm, street_norm_clean: unitFlagsRow.street_norm_clean, house_number_norm: unitFlagsRow.house_number_norm, distinct_unit_count: unitFlagsRow.distinct_unit_count, has_unit_level_differentiation: unitFlagsRow.has_unit_level_differentiation } : null;
       frRuntimeDebug.distinct_unit_count = distinctUnitCountFromTable;
