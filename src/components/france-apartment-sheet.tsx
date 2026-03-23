@@ -1586,8 +1586,17 @@ export function FranceApartmentSheet({
             <div>prompt_for_apartment = {String(parsed?.prompt_for_apartment ?? "—")}</div>
             <div>multiple_units = {String(parsed?.multiple_units ?? "—")}</div>
             <div>building_unit_flags_match_found = {String(rdForLot?.building_unit_flags_match_found ?? "—")}</div>
+            <div>building_unit_flags_match_type = {String(rdForLot?.building_unit_flags_match_type ?? "—")}</div>
             <div>has_unit_level_differentiation = {String(rdForLot?.has_unit_level_differentiation ?? "—")}</div>
             <div>distinct_unit_count = {String(rdForLot?.distinct_unit_count ?? "—")}</div>
+            <div>debug_postcode = {String(rdForLot?.debug_postcode ?? "—")}</div>
+            <div>debug_city = {String(rdForLot?.debug_city ?? "—")}</div>
+            <div>debug_street = {String(rdForLot?.debug_street ?? "—")}</div>
+            <div>debug_house_number = {String(rdForLot?.debug_house_number ?? "—")}</div>
+            <div>debug_match_key = {String(rdForLot?.debug_match_key ?? "—")}</div>
+            {rdForLot?.debug_unit_flags_row && (
+              <div>debug_unit_flags_row = {JSON.stringify(rdForLot.debug_unit_flags_row)}</div>
+            )}
             <div>shouldPromptLotCanonical = {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
             <div>submittedLotPresent = {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
             <div>phase = {String(phase)}</div>

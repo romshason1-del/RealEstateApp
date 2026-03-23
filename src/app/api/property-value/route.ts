@@ -739,7 +739,14 @@ export async function GET(request: NextRequest) {
         surface_source_sample_size: null as number | null,
         has_unit_level_differentiation: null as boolean | null,
         building_unit_flags_match_found: null as boolean | null,
+        building_unit_flags_match_type: null as "strict" | "relaxed" | "none" | null,
         distinct_unit_count: null as number | null,
+        debug_postcode: null as string | null,
+        debug_city: null as string | null,
+        debug_street: null as string | null,
+        debug_house_number: null as string | null,
+        debug_match_key: null as string | null,
+        debug_unit_flags_row: null as Record<string, unknown> | null,
         no_data_reason: null,
         submitted_lot_present: null,
         exact_match_reason: null,
@@ -2235,6 +2242,7 @@ export async function GET(request: NextRequest) {
       let strictDetectRowsArr: Array<Record<string, unknown>> = [];
       let profileRows: Array<Record<string, unknown>> = [];
       let unitFlagsRows: Array<Record<string, unknown>> = [];
+      let unitFlagsMatchType: "strict" | "relaxed" | "none" = "none";
 
       const frBqPostcodeMatchSqlProfile = `LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')`;
       const profileQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
@@ -2254,27 +2262,52 @@ export async function GET(request: NextRequest) {
         `
         : null;
 
-      // france_building_unit_flags: precomputed source of truth for has_unit_level_differentiation
-      const frBqUnitFlagsStreetNorm = `TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(NORMALIZE(TRIM(CAST(street AS STRING)), NFD)), r'\\p{M}', ''), r'[^A-Z0-9 ]+', ' '), r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', ''), r'\\s+DU\\s+', ' '), r'\\s+DE\\s+', ' '), r'\\s+DES\\s+', ' '), r'\\s+LA\\s+', ' '), r'\\s+LE\\s+', ' '), r'^DU\\s+', ''), r'^DE\\s+', ''), r'^DES\\s+', ''), r'^LA\\s+', ''), r'^LE\\s+', ''), r'\\s+', ' '))`;
-      const frBqUnitFlagsStreetMatch = `(${frBqUnitFlagsStreetNorm} = TRIM(@normalizedStreet) OR ${frBqUnitFlagsStreetNorm} LIKE CONCAT('%', TRIM(@normalizedStreet), '%') OR TRIM(@normalizedStreet) LIKE CONCAT('%', ${frBqUnitFlagsStreetNorm}, '%'))`;
-      const unitFlagsQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
+      // france_building_unit_flags: use SAME normalization as property_latest_facts / france_dvf_rich_source
+      // Strict: postcode + city (strip arrondissement) + street_norm + house_number
+      const unitFlagsStrictQuery = postcodeNormForSource && houseNumberNormForSource && streetNormForSource
         ? `
         WITH normalized AS (
           SELECT *,
             LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') AS postcode_norm,
-            ${frBqUnitFlagsStreetNorm} AS street_norm
+            ${frBqStreetNormalizedEarly} AS street_norm
           FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
         )
         SELECT postcode, city, street, house_number, distinct_unit_count, rows_count, has_unit_level_differentiation
         FROM normalized
         WHERE postcode_norm = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
-          AND TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
-          AND ${detCityMatchSql}
-          AND ${frBqUnitFlagsStreetMatch}
+          AND ${frBqHouseMatchEarly}
+          AND ${frBqCityMatchSql}
+          AND ${frBqStreetMatchSqlEarly}
         ORDER BY distinct_unit_count DESC
         LIMIT 1
         `
         : null;
+      // Relaxed: postcode + street only (for debug when strict fails)
+      const unitFlagsRelaxedQuery = postcodeNormForSource && streetNormForSource
+        ? `
+        WITH normalized AS (
+          SELECT *,
+            LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') AS postcode_norm,
+            ${frBqStreetNormalizedEarly} AS street_norm
+          FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
+        )
+        SELECT postcode, city, street, house_number, distinct_unit_count, rows_count, has_unit_level_differentiation
+        FROM normalized
+        WHERE postcode_norm = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')
+          AND ${frBqCityMatchSql}
+          AND ${frBqStreetMatchSqlEarly}
+        ORDER BY distinct_unit_count DESC
+        LIMIT 5
+        `
+        : null;
+      const unitFlagsParams = {
+        city: cityNormForSource || cityNorm || "",
+        city_main: cityNormForSource || cityNorm || "",
+        postcode: postcodeNormForSource || "",
+        street_normalized: streetNormForExactMatch || streetNormForSource || "",
+        house_number: houseNumberNormForSource || "",
+        house_number_norm: normHn(houseNumberNormForSource || ""),
+      };
 
       const detectParams = {
         city: cityNormForSource || cityNorm || "",
@@ -2304,11 +2337,11 @@ export async function GET(request: NextRequest) {
             )
           );
         }
-        if (unitFlagsQuery) {
+        if (unitFlagsStrictQuery) {
           queries.push(
             queryWithTimeout<[Array<Record<string, unknown>>]>(
-              { query: unitFlagsQuery, params: detectParams },
-              "france_building_unit_flags"
+              { query: unitFlagsStrictQuery, params: unitFlagsParams },
+              "france_building_unit_flags_strict"
             )
           );
         }
@@ -2325,15 +2358,33 @@ export async function GET(request: NextRequest) {
           const unitFlagsResult = results[3] as [Array<Record<string, unknown>>];
           unitFlagsRows = (Array.isArray(unitFlagsResult?.[0]) ? unitFlagsResult[0] : []) as Array<Record<string, unknown>>;
         }
+        unitFlagsMatchType = unitFlagsRows.length > 0 ? "strict" : "none";
+        if (unitFlagsRows.length === 0 && unitFlagsRelaxedQuery) {
+          try {
+            const [relaxedResult] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              { query: unitFlagsRelaxedQuery, params: unitFlagsParams },
+              "france_building_unit_flags_relaxed"
+            );
+            const relaxedRows = (Array.isArray(relaxedResult) ? relaxedResult : []) as Array<Record<string, unknown>>;
+            if (relaxedRows.length > 0) {
+              unitFlagsRows = [relaxedRows[0]];
+              unitFlagsMatchType = "relaxed";
+              console.log("[FR_GOLD] france_building_unit_flags relaxed match", { rows: relaxedRows.length, closest: relaxedRows[0] });
+            }
+          } catch (e) {
+            console.log("[FR_GOLD] france_building_unit_flags relaxed query failed", (e as Error)?.message);
+          }
+        }
         console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
         if (profileRows?.length) console.log("[FR_GOLD] france_building_profile", { rows: profileRows.length });
-        if (unitFlagsRows?.length) console.log("[FR_GOLD] france_building_unit_flags", { rows: unitFlagsRows.length });
+        if (unitFlagsRows?.length) console.log("[FR_GOLD] france_building_unit_flags", { rows: unitFlagsRows.length, matchType: unitFlagsMatchType });
       } catch (err) {
         console.error("[FR_ERROR] intelligence_profile_query_failed_continuing_with_valutation", err);
         detectRows = [];
         strictDetectRowsArr = [];
         profileRows = [];
         unitFlagsRows = [];
+        unitFlagsMatchType = "none";
       }
 
       // Debug: log exact query params + raw row result (do not change logic).
@@ -2357,7 +2408,14 @@ export async function GET(request: NextRequest) {
         ? (Number(unitFlagsRow!.distinct_unit_count) || null)
         : null;
       frRuntimeDebug.building_unit_flags_match_found = buildingUnitFlagsMatchFound;
+      frRuntimeDebug.building_unit_flags_match_type = unitFlagsMatchType;
       frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffFromTable;
+      frRuntimeDebug.debug_postcode = postcodeNormForSource || postcodeNorm || null;
+      frRuntimeDebug.debug_city = cityNormForSource || cityNorm || null;
+      frRuntimeDebug.debug_street = streetNormForExactMatch || streetNormForSource || streetNorm || null;
+      frRuntimeDebug.debug_house_number = houseNumberNormForSource || houseNumberNorm || null;
+      frRuntimeDebug.debug_match_key = [postcodeNormForSource, cityNormForSource, streetNormForExactMatch || streetNormForSource, houseNumberNormForSource].filter(Boolean).join("|") || null;
+      frRuntimeDebug.debug_unit_flags_row = unitFlagsRow ? { postcode: unitFlagsRow.postcode, city: unitFlagsRow.city, street: unitFlagsRow.street, house_number: unitFlagsRow.house_number, distinct_unit_count: unitFlagsRow.distinct_unit_count, has_unit_level_differentiation: unitFlagsRow.has_unit_level_differentiation } : null;
       frRuntimeDebug.distinct_unit_count = distinctUnitCountFromTable;
       const profileBuildingClass = getString(profileRow, ["building_class"])?.toLowerCase() ?? "";
       const profileSaysApartment = profileBuildingClass === "apartment_building";
