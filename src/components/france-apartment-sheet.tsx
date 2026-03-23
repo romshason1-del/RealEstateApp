@@ -252,86 +252,28 @@ export function FranceApartmentSheet({
   const pr = parsed?.property_result as any | undefined;
   const legacyLivability = (pr?.livability_rating ?? null) as string | null;
 
-  // Infer whether this FR property is a single-unit house ("maison") or a multi-unit building ("appartement"-like).
-  // Used only for the France input UX (hide apartment/lot input for houses).
-  const buildingTypeStrings: string[] = buildingSales
-    .map((s: any) => String(s?.type ?? "").trim().toLowerCase())
-    .filter((v: string) => Boolean(v));
-  const hasMaisonType = buildingTypeStrings.some((t: string) => t.includes("maison"));
-  const hasAppartementType = buildingTypeStrings.some((t: string) => t.includes("appartement"));
-  const hasNoLots = availableLots.length === 0;
-  const lowMultiUnitHeuristic = buildingSales.length <= 1;
-  // UI-only inference:
-  // If we have no lot inventory, no explicit "appartement" type, and the address doesn't look like
-  // a dense multi-unit pattern (low result count / single transaction), treat it as a private house.
-  const frDetect = typeof parsed?.fr_detect === "string" ? (parsed?.fr_detect as string) : undefined;
-  const isHouseInferredByHeuristic = frDetect === "house" && hasNoLots && !hasAppartementType && lowMultiUnitHeuristic;
-
-  const isHouseDetected =
-    (frDetect === "house" && parsed?.multiple_units === false && availableLots.length === 0) ||
-    (hasMaisonType && !hasAppartementType) ||
-    isHouseInferredByHeuristic;
-  const isApartmentLikely = parsed?.multiple_units === true || availableLots.length > 0 || hasAppartementType;
-  const isPropertyTypeUnknown = !isHouseDetected && !isApartmentLikely;
-  const propertyTypeHint = String((normalized?.property?.propertyType ?? pr?.property_type ?? "")).toLowerCase();
-  const isApartmentTypeHint = propertyTypeHint.includes("appart");
-  const backendMultiUnitFlag = parsed?.multiple_units === true || parsed?.prompt_for_apartment === true;
-  const hasMultiUnitEvidence =
-    availableLots.length > 0 ||
-    hasAppartementType ||
-    backendMultiUnitFlag ||
-    isApartmentTypeHint;
-
-  // UI-only override: some "house-like" addresses can be classified as multi-unit due to sparse DVF type info.
-  // If the payload looks like a small inventory (low counts), treat as house-like for copy only.
-  const isHouseLikeOverride =
-    frDetect === "house" && buildingSales.length <= 5 && availableLots.length < 20 && !hasMultiUnitEvidence;
-  const isApartmentLikeForLotFirst = hasMultiUnitEvidence;
-  const isHouseLikeUI = isHouseDetected || (isHouseLikeOverride && !isApartmentLikeForLotFirst);
-  const shouldForceLotFirstFlow = isApartmentLikeForLotFirst && !isHouseLikeUI;
-  const shouldShowApartmentInput = !isHouseLikeUI && hasMultiUnitEvidence;
-
-  // Effective detect class as seen by the UI (uses the same fallback logic as the debug marker).
-  const effectiveDetectClass: "apartment" | "house" | "unclear" =
-    backendMultiUnitFlag
-      ? "apartment"
-      : frDetect === "apartment" || frDetect === "house" || frDetect === "unclear"
-        ? frDetect
-        : shouldForceLotFirstFlow
-          ? "apartment"
-          : isHouseLikeUI
-            ? "house"
-            : "unclear";
-
-  // Address-based house pattern: Chemin/Route/Impasse/etc with no apartment evidence => always house flow.
-  const addressForPattern = (addressForApi || address || "").trim();
-  const addressMatchesHouseStreetPattern = /\b(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(addressForPattern);
-  const forceHouseFromAddress =
-    addressMatchesHouseStreetPattern &&
-    availableLots.length === 0 &&
-    !hasAppartementType &&
-    !backendMultiUnitFlag;
-
-  // Apartment evidence wins over house: availableLots, backendMultiUnitFlag, hasAppartementType, isApartmentTypeHint
-  // must restore lot prompt for true multi-unit buildings even when API detect_class is "house".
-  const detectClassFromApi = (parsed as any)?.fr_runtime_debug?.detect_class ?? (data as any)?.fr_runtime_debug?.detect_class;
+  // property_type_final: backend DVF-only decision. UI uses ONLY this — no heuristics, no overrides.
+  const propertyTypeFinal = (parsed?.property_type_final ?? parsed?.fr_detect ?? "apartment") as string;
+  const propertyTypeFinalNorm =
+    propertyTypeFinal === "house"
+      ? "house"
+      : propertyTypeFinal === "apartment" || propertyTypeFinal === "unclear"
+        ? "apartment"
+        : "apartment";
+  const detectClassIsHouseFromApi = propertyTypeFinalNorm === "house";
   const frDetectFinalClass: "apartment" | "house" | "unclear" =
-    hasMultiUnitEvidence
-      ? "apartment"
-      : detectClassFromApi === "house" ||
-        forceHouseFromAddress ||
-        (frDetect === "house" && !backendMultiUnitFlag && availableLots.length === 0)
-        ? "house"
-        : detectClassFromApi === "apartment" || detectClassFromApi === "unclear"
-          ? detectClassFromApi
-          : effectiveDetectClass;
+    detectClassIsHouseFromApi ? "house" : (propertyTypeFinalNorm === "apartment" ? "apartment" : "unclear");
+  const isHouseLikeUI = detectClassIsHouseFromApi;
+  const shouldShowApartmentInput = !detectClassIsHouseFromApi && (parsed?.prompt_for_apartment === true || parsed?.multiple_units === true);
+  const shouldForceLotFirstFlow = shouldShowApartmentInput;
+  const effectiveDetectClass = frDetectFinalClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
 
   // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. House classification ALWAYS suppresses.
   const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
   const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
   const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
-  const detectClassIsHouse = frDetectFinalClass === "house";
+  const detectClassIsHouse = detectClassIsHouseFromApi;
   const lotPromptGenuinelyRequired =
     backendShouldPromptLot && !detectClassIsHouse && !(requestedLot ?? "").trim();
 
@@ -367,19 +309,14 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
-      isHouseDetected,
+      property_type_final: propertyTypeFinalNorm,
+      detectClassIsHouseFromApi,
       isHouseLikeUI,
       shouldForceLotFirstFlow,
-      isApartmentLikely,
-      isApartmentLikeForLotFirst,
-      hasMultiUnitEvidence,
-      backendMultiUnitFlag,
       multipleUnits: parsed?.multiple_units === true,
-      availableLots: availableLots.length,
-      hasAppartementType,
-      isApartmentTypeHint,
+      prompt_for_apartment: parsed?.prompt_for_apartment === true,
     });
-  }, [isDev, isHouseDetected, isHouseLikeUI, shouldForceLotFirstFlow, isApartmentLikely, isApartmentLikeForLotFirst, hasMultiUnitEvidence, backendMultiUnitFlag, parsed?.multiple_units, availableLots.length, hasAppartementType, isApartmentTypeHint]);
+  }, [isDev, propertyTypeFinalNorm, detectClassIsHouseFromApi, isHouseLikeUI, shouldForceLotFirstFlow, parsed?.multiple_units, parsed?.prompt_for_apartment]);
 
   const uiState = isResultCardOpen
     ? "result-visible"
@@ -1247,7 +1184,7 @@ export function FranceApartmentSheet({
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow ? "—" : coerceDisplayString(legacy?.livabilityRating as unknown, "—");
     const flowMarker = shouldForceLotFirstFlow ? "FR Flow: apartment-first" : isHouseLikeUI ? "FR Flow: house-direct" : "FR Flow: fallback";
-    const detectMarker = `FR Detect: ${String(parsed?.fr_detect ?? (shouldForceLotFirstFlow ? "apartment" : isHouseLikeUI ? "house" : "unclear"))}`;
+    const detectMarker = `FR Detect: ${String(parsed?.property_type_final ?? parsed?.fr_detect ?? "unclear")}`;
     // Reuse the exact gold token used by the Search button and active Explore icon.
     const goldTextClass = "text-amber-400";
     const frConfNorm = String(unwrapScalar(fr?.confidence as unknown) ?? "")
@@ -1361,7 +1298,7 @@ export function FranceApartmentSheet({
                 ) : null}
               </div>
 
-              {/* 2) Last transaction – bordered row (truthful disclosure by match_type) */}
+              {/* 2) Last transaction – minimal: title, amount•date, source only when not exact */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                 <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
                   {lastTransactionRowTitle}
@@ -1369,7 +1306,7 @@ export function FranceApartmentSheet({
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
                 </div>
-                {txSourceAddress && txSourceAddress.trim() ? (
+                {txMatchType !== "exact" && txSourceAddress && txSourceAddress.trim() ? (
                   <div className="mt-0.5 text-[11px] text-zinc-400/90">
                     Source: {txSourceAddress}
                   </div>
