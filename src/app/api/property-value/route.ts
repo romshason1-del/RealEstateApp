@@ -737,6 +737,7 @@ export async function GET(request: NextRequest) {
         chosen_surface_value: null,
         surface_source: null as "exact_property" | "same_building" | "same_street_similar" | "nearby_fallback" | null,
         surface_source_sample_size: null as number | null,
+        has_unit_level_differentiation: null as boolean | null,
         no_data_reason: null,
         submitted_lot_present: null,
         exact_match_reason: null,
@@ -817,9 +818,18 @@ export async function GET(request: NextRequest) {
       const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
-        // Single source of truth for lot prompt: house (DVF Maison) ALWAYS suppresses. No overrides.
+        // Single source of truth for lot prompt: house ALWAYS suppresses. Ask only when unit-level differentiation exists.
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
+        const buildingAfterFiltersCount = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
+        const exactUnitRowCount = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
+        const strictLotCount = (frRuntimeDebug.fr_strict_lot_distinct_count as number) ?? 0;
+        const hasUnitLevelDiff =
+          strictLotCount >= 2 ||
+          exactUnitRowCount >= 2 ||
+          buildingAfterFiltersCount >= 2 ||
+          buildingCandidatesCount >= 2;
+        frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiff;
         const payloadAsksForLot =
           payload.multiple_units === true || payload.prompt_for_apartment === true;
         const lowConfHeuristicNoPrompt =
@@ -831,11 +841,13 @@ export async function GET(request: NextRequest) {
             ? false
             : lowConfHeuristicNoPrompt
               ? false
-              : !submittedLotPresent &&
-                (payloadAsksForLot ||
-                  flowAsApartment ||
-                  buildingRowsCount > 0 ||
-                  buildingCandidatesCount > 0);
+              : !hasUnitLevelDiff
+                ? false
+                : !submittedLotPresent &&
+                  (payloadAsksForLot ||
+                    flowAsApartment ||
+                    buildingRowsCount > 0 ||
+                    buildingCandidatesCount > 0);
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
@@ -1053,8 +1065,13 @@ export async function GET(request: NextRequest) {
           outPayload.multiple_units = false;
           outPayload.prompt_for_apartment = false;
         } else if (propertyTypeFinal === "unknown") {
-          outPayload.prompt_for_apartment = shouldPromptLot && !submittedLotPresent;
+          outPayload.prompt_for_apartment = shouldPromptLotCanonical && !submittedLotPresent;
         } else if (lowConfHeuristicNoPrompt) {
+          outPayload.prompt_for_apartment = false;
+          outPayload.multiple_units = false;
+        }
+        // Unit prompt rule: never ask for apartment when no unit-level differentiation exists
+        if (!hasUnitLevelDiff) {
           outPayload.prompt_for_apartment = false;
           outPayload.multiple_units = false;
         }
@@ -2623,10 +2640,14 @@ export async function GET(request: NextRequest) {
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
       const flowAsApartment = detectClass === "apartment";
+      const hasUnitLevelDiffAtClassify =
+        strictLots.size >= 2;
+      frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffAtClassify;
       const shouldPromptLotInitial =
         (flowAsApartment || isLikelyBuilding) &&
         !submittedLotPresent &&
-        (allowMultiUnitFromQueries || isLikelyBuilding);
+        (allowMultiUnitFromQueries || isLikelyBuilding) &&
+        hasUnitLevelDiffAtClassify;
       let shouldPromptLot = detectClass !== "house" && shouldPromptLotInitial;
       // Low-confidence heuristic apartment with no strict DVF must never trigger apartment prompt
       if (lowConfHeuristicApartmentNoStrict) shouldPromptLot = false;
@@ -6395,11 +6416,21 @@ export async function GET(request: NextRequest) {
 
       const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
       const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
+      const buildingAfterFiltersCountNoData = (frRuntimeDebug.building_similar_unit_after_filters_count as number) ?? 0;
+      const exactUnitRowCountNoData = (frRuntimeDebug.exact_unit_row_count as number) ?? 0;
+      const strictLotCountNoData = (frRuntimeDebug.fr_strict_lot_distinct_count as number) ?? 0;
+      const hasUnitLevelDiffNoData =
+        strictLotCountNoData >= 2 ||
+        exactUnitRowCountNoData >= 2 ||
+        buildingAfterFiltersCountNoData >= 2 ||
+        buildingCandidatesCount >= 2;
+      frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffNoData;
       const lowConfHeuristicNoPromptHere =
         propertyTypeFinal === "apartment" &&
         propertyTypeSource === "heuristic_fallback" &&
         propertyTypeConfidence === "low";
       const shouldPromptLotFromBuilding =
+        hasUnitLevelDiffNoData &&
         !lowConfHeuristicNoPromptHere &&
         detectClass !== "house" &&
         !submittedLotPresent &&

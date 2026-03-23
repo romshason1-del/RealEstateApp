@@ -267,17 +267,18 @@ export function FranceApartmentSheet({
       : propertyTypeFinal === "unknown" || propertyTypeFinal === "unclear" ? "unclear"
       : "apartment";
   const isHouseLikeUI = detectClassIsHouseFromApi;
-  const shouldShowApartmentInput = !detectClassIsHouseFromApi && (parsed?.prompt_for_apartment === true || parsed?.multiple_units === true);
+
+  // Single source of truth: backend fr_should_prompt_lot (gated on has_unit_level_differentiation). House ALWAYS suppresses.
+  const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
+  const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
+  const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
+  // Apartment prompt only when: property_type != house AND backend has real unit-level differentiation
+  const shouldShowApartmentInput = !detectClassIsHouseFromApi && (backendLotPromptVisible || backendShouldPromptLot);
   const shouldForceLotFirstFlow = shouldShowApartmentInput;
   const isPropertyTypeUnknown = frDetectFinalClass === "unclear";
   const effectiveDetectClass = frDetectFinalClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
   const frDetect = propertyTypeFinal;
-
-  // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. House classification ALWAYS suppresses.
-  const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
-  const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
-  const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
   const detectClassIsHouse = detectClassIsHouseFromApi;
   const lotPromptGenuinelyRequired =
     backendShouldPromptLot && !detectClassIsHouse && !(requestedLot ?? "").trim();
@@ -1584,6 +1585,7 @@ export function FranceApartmentSheet({
             <div>property_type_confidence = {String(parsed?.property_type_confidence ?? "—")}</div>
             <div>prompt_for_apartment = {String(parsed?.prompt_for_apartment ?? "—")}</div>
             <div>multiple_units = {String(parsed?.multiple_units ?? "—")}</div>
+            <div>has_unit_level_differentiation = {String(rdForLot?.has_unit_level_differentiation ?? "—")}</div>
             <div>shouldPromptLotCanonical = {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
             <div>submittedLotPresent = {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
             <div>phase = {String(phase)}</div>
