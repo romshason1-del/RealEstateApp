@@ -1900,7 +1900,7 @@ export async function GET(request: NextRequest) {
             street_normalized: streetNormForExactMatch || streetNormForSource || "",
           };
           const earlyStrictQuery = `
-            SELECT unit_number, property_type
+            SELECT postcode, city, street, house_number, unit_number, property_type, last_sale_date, last_sale_price
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
               AND ${frBqPostcodeMatchSql}
@@ -1957,7 +1957,7 @@ export async function GET(request: NextRequest) {
           const earlyRows = (earlyResult as [unknown])?.[0];
           earlyCandidateRows = (Array.isArray(earlyRows) ? earlyRows : []) as Array<Record<string, unknown>>;
           const earlyStrictRowsRaw = (earlyStrictResult as [unknown])?.[0];
-          const earlyStrictRows = (Array.isArray(earlyStrictRowsRaw) ? earlyStrictRowsRaw : []) as Array<Record<string, unknown>>;
+          earlyStrictRows = (Array.isArray(earlyStrictRowsRaw) ? earlyStrictRowsRaw : []) as Array<Record<string, unknown>>;
           const densityRows = (densityResult as [unknown[]])?.[0];
           const densityRow = Array.isArray(densityRows) ? densityRows[0] : null;
           streetTransactionDensity = densityRow && typeof (densityRow as any).cnt === "number" ? (densityRow as any).cnt : null;
@@ -2254,8 +2254,15 @@ export async function GET(request: NextRequest) {
       const veryLowStreetDensity = streetTransactionDensity != null && streetTransactionDensity < 20;
       const areaLiquidityLow = frRuntimeDebug.fr_area_liquidity === "low";
       const lowDensitySignal = veryLowStreetDensity || areaLiquidityLow;
-      const maisonDominant = strictMaisonCount >= 1 && (strictAppartCount === 0 || strictMaisonCount > strictAppartCount);
-      const appartementDominant = strictAppartCount >= 1 && (strictMaisonCount === 0 || strictAppartCount >= strictMaisonCount);
+      // When Maison exists at strict address: prefer house unless CLEAR apartment-building evidence.
+      // Clear apartment = (no Maison) OR (Appartement dominant AND 2+ distinct lots).
+      // Prevents private-house misclassification from mixed/contaminated DVF rows.
+      const hasClearApartmentEvidence =
+        (strictAppartCount >= 1 && strictMaisonCount === 0) ||
+        (strictAppartCount > strictMaisonCount && strictLots.size >= 2);
+      const maisonDominant =
+        strictMaisonCount >= 1 && !hasClearApartmentEvidence;
+      const appartementDominant = hasClearApartmentEvidence;
       const buildingCount = getNumber(detectRow, ["row_count", "unit_count", "building_count"]) ?? 1;
       const singleBuilding = buildingCount <= 1;
       const highTxSameAddress = sameAddressTxCount >= 5;
@@ -2533,6 +2540,19 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_strict_maison_count = strictMaisonCount;
       frRuntimeDebug.fr_strict_appartement_count = strictAppartCount;
       frRuntimeDebug.fr_strict_lot_distinct_count = strictLots.size;
+      frRuntimeDebug.fr_strict_dvf_rows = earlyStrictRows.slice(0, 25).map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          property_type: String(row?.property_type ?? ""),
+          house_number: String(row?.house_number ?? ""),
+          street: String(row?.street ?? ""),
+          postcode: String(row?.postcode ?? ""),
+          city: String(row?.city ?? ""),
+          unit_number: String(row?.unit_number ?? ""),
+          last_sale_date: row?.last_sale_date != null ? String(row.last_sale_date) : null,
+          last_sale_price: typeof row?.last_sale_price === "number" ? row.last_sale_price : null,
+        };
+      });
       frRuntimeDebug.fr_maison_count = maisonCount;
       frRuntimeDebug.fr_appartement_count = appartCount;
       frRuntimeDebug.fr_lot_distinct_count = lots.size;
