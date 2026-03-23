@@ -306,16 +306,19 @@ export function FranceApartmentSheet({
     !hasAppartementType &&
     !backendMultiUnitFlag;
 
-  // Single source of truth: API detect_class (fr_runtime_debug) overrides local heuristics. House wins over backend lot prompt.
+  // Apartment evidence wins over house: availableLots, backendMultiUnitFlag, hasAppartementType, isApartmentTypeHint
+  // must restore lot prompt for true multi-unit buildings even when API detect_class is "house".
   const detectClassFromApi = (parsed as any)?.fr_runtime_debug?.detect_class ?? (data as any)?.fr_runtime_debug?.detect_class;
   const frDetectFinalClass: "apartment" | "house" | "unclear" =
-    detectClassFromApi === "house" ||
-    forceHouseFromAddress ||
-    (frDetect === "house" && !backendMultiUnitFlag && availableLots.length === 0)
-      ? "house"
-      : detectClassFromApi === "apartment" || detectClassFromApi === "unclear"
-        ? detectClassFromApi
-        : effectiveDetectClass;
+    hasMultiUnitEvidence
+      ? "apartment"
+      : detectClassFromApi === "house" ||
+        forceHouseFromAddress ||
+        (frDetect === "house" && !backendMultiUnitFlag && availableLots.length === 0)
+        ? "house"
+        : detectClassFromApi === "apartment" || detectClassFromApi === "unclear"
+          ? detectClassFromApi
+          : effectiveDetectClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
 
   // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. House classification ALWAYS suppresses.
