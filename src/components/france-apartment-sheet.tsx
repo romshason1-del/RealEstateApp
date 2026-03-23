@@ -45,6 +45,12 @@ export type FranceValuationDisplay = {
   last_sale_price?: number | null;
   /** valuation_response path: last recorded sale date (from pr.last_transaction.date). */
   last_sale_date?: string | null;
+  /** Truthful disclosure: exact | same_building_similar_unit | same_street_similar_house | nearby_similar_house | area_fallback */
+  last_transaction_match_type?: string | null;
+  /** Source address for comparable/area transactions (e.g. "8 Rue X, 06400 Cannes"). */
+  last_transaction_source_address?: string | null;
+  /** Human-readable disclosure text. */
+  last_transaction_disclosure?: string | null;
 };
 
 export function FranceApartmentSheet({
@@ -1201,6 +1207,14 @@ export function FranceApartmentSheet({
 
     const dateText = isLoadingNow ? "—" : referenceSaleValue ?? "—";
 
+    const txMatchType = (fv?.last_transaction_match_type ?? (pr as any)?.last_transaction?.match_type ?? "exact") as string;
+    const txSourceAddress = fv?.last_transaction_source_address ?? (pr as any)?.last_transaction?.source_address;
+    const lastTransactionRowTitle =
+      txMatchType === "exact"
+        ? "Last transaction"
+        : txMatchType === "area_fallback"
+          ? "Last area transaction"
+          : "Last comparable transaction";
     const lastTransactionSummaryLine = (() => {
       if (isLoadingNow) return "—";
       const amt = lastTxAmountPositive;
@@ -1208,20 +1222,10 @@ export function FranceApartmentSheet({
       const hasUsableDate = referenceSaleValue != null && referenceSaleValue.trim().length > 0;
       if (fr?.resultType === "building_similar_unit" && !isNoResult && hasUsableAmount) {
         return hasUsableDate
-          ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue} reference sale`
-          : `${formatFranceEuroTotal(amt)} • reference sale`;
+          ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`
+          : `${formatFranceEuroTotal(amt)}`;
       }
       if (hasUsableAmount && hasUsableDate) {
-        if (
-          fr?.resultType === "exact_apartment" ||
-          fr?.resultType === "exact_address" ||
-          fr?.resultType === "exact_house"
-        ) {
-          return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
-        }
-        if (!hasCurrentValuation) {
-          return `Last recorded transaction: ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
-        }
         return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
       }
       if (hasUsableAmount) {
@@ -1357,14 +1361,19 @@ export function FranceApartmentSheet({
                 ) : null}
               </div>
 
-              {/* 2) Last transaction – bordered row (same container style as Price per m², Livability) */}
+              {/* 2) Last transaction – bordered row (truthful disclosure by match_type) */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                 <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                  Last transaction
+                  {lastTransactionRowTitle}
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
                 </div>
+                {txSourceAddress && txSourceAddress.trim() ? (
+                  <div className="mt-0.5 text-[11px] text-zinc-400/90">
+                    Source: {txSourceAddress}
+                  </div>
+                ) : null}
               </div>
 
               {/* 3) Price per m² (boxed) */}

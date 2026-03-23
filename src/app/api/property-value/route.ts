@@ -59,6 +59,42 @@ function frPropertyLatestFactsMoneyToEuros(raw: unknown): number | null {
   return n == null ? null : n / 1000;
 }
 
+/** Format source address for Last transaction disclosure (e.g. "8 Rue X, 06400 Cannes"). */
+function frFormatSourceAddress(hn: string | null, street: string | null, postcode: string | null, city: string | null): string | null {
+  const parts: string[] = [];
+  if (hn && String(hn).trim()) parts.push(String(hn).trim());
+  if (street && String(street).trim()) parts.push(String(street).trim());
+  const loc = [postcode, city].filter(Boolean).map(String).join(" ").trim();
+  if (loc) parts.push(loc);
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** Build last_transaction payload with match_type/disclosure for truthful UI disclosure. */
+function frLastTransactionPayload(
+  amount: number,
+  date: string | null,
+  matchType: "exact" | "same_building_similar_unit" | "same_street_similar_house" | "nearby_similar_house" | "area_fallback",
+  sourceAddress?: string | null,
+  messageOverride?: string | null
+): { amount: number; date: string | null; message?: string | null; match_type: string; disclosure: string; source_address?: string | null } {
+  const disclosures: Record<string, string> = {
+    exact: "Exact transaction for this property",
+    same_building_similar_unit: "Latest similar apartment transaction in the same building",
+    same_street_similar_house: "Latest similar house transaction on same street",
+    nearby_similar_house: "Latest similar house transaction nearby",
+    area_fallback: "Latest official area transaction used as fallback",
+  };
+  const message = messageOverride ?? (amount > 0 ? undefined : "No recorded transaction found");
+  return {
+    amount,
+    date,
+    message: message ?? undefined,
+    match_type: matchType,
+    disclosure: disclosures[matchType] ?? "Official DVF transaction",
+    source_address: sourceAddress ?? null,
+  };
+}
+
 /** Extract ISO-style date string from raw (BigQuery { value }, Date, string, etc.). */
 function frExtractDateStringFromRaw(raw: unknown): string | null {
   if (raw === null || raw === undefined) return null;
@@ -1076,6 +1112,18 @@ export async function GET(request: NextRequest) {
           }
 
           const has_current_valuation = Boolean(evPos || ppmPos);
+          const wsTx = String(frRuntimeDebug.winning_step ?? "");
+          const ltMatchType = (lt as Record<string, unknown>)?.match_type as string | undefined;
+          const ltSourceAddr = (lt as Record<string, unknown>)?.source_address as string | null | undefined;
+          const ltDisclosure = (lt as Record<string, unknown>)?.disclosure as string | undefined;
+          const derivedMatchType =
+            ltMatchType ??
+            (/^exact_/.test(wsTx) ? "exact" : null) ??
+            (wsTx === "building_level" || wsTx === "building_similar_unit" || wsTx === "building_profile" ? "same_building_similar_unit" : null) ??
+            (wsTx === "street_fallback" ? "same_street_similar_house" : null) ??
+            (wsTx === "nearby_fallback" ? "nearby_similar_house" : null) ??
+            (["commune_fallback", "commune_emergency", "postcode_only"].includes(wsTx) ? "area_fallback" : null) ??
+            "exact";
           outPayload.fr_valuation_display = {
             winning_source_label,
             source_label: winning_source_label,
@@ -1089,6 +1137,9 @@ export async function GET(request: NextRequest) {
             last_sale_date,
             has_display_value,
             has_current_valuation,
+            last_transaction_match_type: ltMatchType ?? derivedMatchType,
+            last_transaction_source_address: ltSourceAddr ?? null,
+            last_transaction_disclosure: ltDisclosure ?? (derivedMatchType === "exact" ? "Exact transaction for this property" : derivedMatchType === "same_building_similar_unit" ? "Latest similar apartment transaction in the same building" : derivedMatchType === "area_fallback" ? "Latest official area transaction used as fallback" : "Latest similar transaction nearby"),
           };
           if (String(frRuntimeDebug.winning_step) === "exact_unit" || String(frRuntimeDebug.winning_step) === "exact_address") {
             console.log(
@@ -2918,11 +2969,11 @@ export async function GET(request: NextRequest) {
                   exact_value: estimated,
                   exact_value_message: null,
                   value_level: "property-level",
-                  last_transaction: {
-                    amount: lastSaleEuro,
-                    date: (houseBest as any).last_sale_date ?? null,
-                    message: lastSaleEuro > 0 ? undefined : "No recent transaction available",
-                  },
+                  last_transaction: frLastTransactionPayload(
+                    lastSaleEuro,
+                    (houseBest as any).last_sale_date ?? null,
+                    "exact"
+                  ),
                   street_average: null,
                   street_average_message: "Exact house match",
                   livability_rating: "FAIR",
@@ -3471,12 +3522,18 @@ export async function GET(request: NextRequest) {
                     ? `${FR_LABEL_BUILDING_SIMILAR_UNIT} — total estimate needs surface where available.`
                     : null,
                 value_level: "building-level",
-                last_transaction: {
-                  amount: best.lastSaleEuro,
-                  date: best.dateStr,
-                  message:
-                    best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row",
-                },
+                last_transaction: frLastTransactionPayload(
+                  best.lastSaleEuro,
+                  best.dateStr,
+                  "same_building_similar_unit",
+                  frFormatSourceAddress(
+                    (best.raw as any)?.house_number ?? houseNumberNorm,
+                    streetNorm,
+                    postcodeNormForSource,
+                    cityNorm
+                  ),
+                  best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row"
+                ),
                 street_average: ppmForEstimate > 0 ? ppmForEstimate : null,
                 street_average_message: FR_LABEL_BUILDING_SIMILAR_UNIT,
                 livability_rating: "FAIR",
@@ -3946,11 +4003,13 @@ export async function GET(request: NextRequest) {
               exact_value: estimated,
               exact_value_message: null,
               value_level: "property-level",
-              last_transaction: {
-                amount: lastSaleEuro,
-                date: (exactBest as any).last_sale_date ?? null,
-                message: lastSaleEuro > 0 ? undefined : "No recent transaction available",
-              },
+              last_transaction: frLastTransactionPayload(
+                lastSaleEuro,
+                (exactBest as any).last_sale_date ?? null,
+                "exact",
+                null,
+                lastSaleEuro > 0 ? undefined : "No recent transaction available"
+              ),
               street_average: null,
               street_average_message: winningSourceLabel,
               livability_rating: "FAIR",
@@ -4223,9 +4282,10 @@ export async function GET(request: NextRequest) {
               ? { amount: buildingLevelTxRows[0]!.amount, date: buildingLevelTxRows[0]!.date }
               : null;
             const hasBuildingLevelTx = buildingLevelBestTx != null && buildingLevelBestTx.amount > 0;
+            const buildingLevelSourceAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
             const buildingLevelLastTxPayload = hasBuildingLevelTx
-              ? { amount: buildingLevelBestTx!.amount, date: buildingLevelBestTx!.date, message: null as string | null }
-              : { amount: 0, date: null, message: "No exact recent transaction available" };
+              ? frLastTransactionPayload(buildingLevelBestTx!.amount, buildingLevelBestTx!.date, "same_building_similar_unit", buildingLevelSourceAddr)
+              : frLastTransactionPayload(0, null, "same_building_similar_unit", buildingLevelSourceAddr, "No exact recent transaction available");
             console.log("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
               winningSourceLabel: "Similar properties in this building",
@@ -4316,9 +4376,10 @@ export async function GET(request: NextRequest) {
               ? { amount: richBuildingLevelTxRows[0]!.amount, date: richBuildingLevelTxRows[0]!.date }
               : null;
             const hasRichBuildingLevelTx = richBuildingLevelBestTx != null && richBuildingLevelBestTx.amount > 0;
+            const richBuildingLevelSourceAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
             const richBuildingLevelLastTxPayload = hasRichBuildingLevelTx
-              ? { amount: richBuildingLevelBestTx!.amount, date: richBuildingLevelBestTx!.date, message: null as string | null }
-              : { amount: 0, date: null, message: "No exact recent transaction available" };
+              ? frLastTransactionPayload(richBuildingLevelBestTx!.amount, richBuildingLevelBestTx!.date, "same_building_similar_unit", richBuildingLevelSourceAddr)
+              : frLastTransactionPayload(0, null, "same_building_similar_unit", richBuildingLevelSourceAddr, "No exact recent transaction available");
             frRuntimeDebug.property_latest_facts_money_divisor = 1000;
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building (from DVF rich source)";
@@ -4445,8 +4506,8 @@ export async function GET(request: NextRequest) {
                 : 0;
             const amount = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
             const date = r.last_sale_date != null && String(r.last_sale_date).trim() ? String(r.last_sale_date) : null;
-            return { ppm, dist, amount, date };
-          }).filter((x): x is { ppm: number; dist: number; amount: number | null; date: string | null } => x.ppm != null && x.ppm > 0);
+            return { ppm, dist, amount, date, hn };
+          }).filter((x): x is { ppm: number; dist: number; amount: number | null; date: string | null; hn: unknown } => x.ppm != null && x.ppm > 0);
           if (withPpmAndDist.length >= 1) {
             withPpmAndDist.sort((a, b) => a.dist - b.dist);
             let pool = withPpmAndDist.filter((x) => x.dist <= 0);
@@ -4459,9 +4520,12 @@ export async function GET(request: NextRequest) {
               const tb = b.date ? new Date(b.date).getTime() : 0;
               return tb - ta;
             })[0] ?? pool.find((x) => (x.amount ?? 0) > 0);
+            const sameStreetSourceAddr = bestSameStreet?.hn != null
+              ? frFormatSourceAddress(String(bestSameStreet.hn), streetNorm, postcodeNormForSource, cityNorm)
+              : null;
             const sameStreetHouseLastTx = bestSameStreet && (bestSameStreet.amount ?? 0) > 0
-              ? { amount: bestSameStreet.amount!, date: bestSameStreet.date }
-              : pool[0]?.date ? { amount: 0, date: pool[0].date } : null;
+              ? { amount: bestSameStreet.amount!, date: bestSameStreet.date, sourceAddress: sameStreetSourceAddr }
+              : pool[0]?.date ? { amount: 0, date: pool[0].date, sourceAddress: null as string | null } : null;
             const ppmValues = pool.map((x) => x.ppm);
             const trimmedPpm = ppmValues.length >= 5 ? frTrimFractionExtremes(ppmValues.map((p) => ({ p })), (x) => x.p, 0.1).map((x) => x.p) : ppmValues;
             const medianPpm = medianNumber(trimmedPpm);
@@ -4485,8 +4549,14 @@ export async function GET(request: NextRequest) {
                     exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                     value_level: "street-level",
                     last_transaction: sameStreetHouseLastTx
-                      ? { amount: sameStreetHouseLastTx.amount, date: sameStreetHouseLastTx.date, message: sameStreetHouseLastTx.amount > 0 ? undefined : "Representative sale date from street" }
-                      : { amount: 0, date: null, message: "No exact recent transaction available" },
+                      ? frLastTransactionPayload(
+                          sameStreetHouseLastTx.amount,
+                          sameStreetHouseLastTx.date,
+                          "same_street_similar_house",
+                          sameStreetHouseLastTx.sourceAddress ?? undefined,
+                          sameStreetHouseLastTx.amount > 0 ? undefined : "Representative sale date from street"
+                        )
+                      : frLastTransactionPayload(0, null, "same_street_similar_house", null, "No exact recent transaction available"),
                     street_average: medianPpm,
                     street_average_message: fallbackSourceSameStreetHouse,
                     livability_rating: "FAIR",
@@ -4579,9 +4649,10 @@ export async function GET(request: NextRequest) {
         const fallbackSource = "Similar properties in this building";
         const lastTx = buildingProfile.last_transaction;
         const hasRealTx = lastTx != null && lastTx.amount != null && lastTx.amount > 0;
+        const buildingProfileSourceAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
         const lastTransactionPayload = hasRealTx
-          ? { amount: lastTx!.amount, date: lastTx!.date, message: null as string | null }
-          : { amount: 0, date: null, message: "No exact recent transaction available" };
+          ? frLastTransactionPayload(lastTx!.amount, lastTx!.date, "same_building_similar_unit", buildingProfileSourceAddr)
+          : frLastTransactionPayload(0, null, "same_building_similar_unit", buildingProfileSourceAddr, "No exact recent transaction available");
         console.log("[FR_BUILDING_PROFILE] used_in=fallback");
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
@@ -4652,7 +4723,7 @@ export async function GET(request: NextRequest) {
       console.log("[FR_STEP] street_lookup_start");
       console.log("[FR_GOLD] before_fallback_query", { level: "same_street" });
       /** When street fallback uses property_latest_facts, best row's sale (amount+date) for last_transaction. */
-      let streetFactsBestSale: { amount: number; date: string | null } | null = null;
+      let streetFactsBestSale: { amount: number; date: string | null; sourceAddress?: string | null; matchType?: "same_street_similar_house" | "area_fallback" } | null = null;
       const effectivePropertyType =
         flowAsApartment && !propertyType ? "Appartement" : (propertyType || "");
       const streetParams = {
@@ -4731,8 +4802,9 @@ export async function GET(request: NextRequest) {
                 ? Math.abs((extractHouseNumberNumeric(String(hn)) ?? 999999) - houseNumberNumericTarget)
                 : 0;
             const amount = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
-            return { ppm, dist, date: r.last_sale_date, amount };
-          }).filter((x): x is { ppm: number; dist: number; date: string | null | undefined; amount: number | null } => x.ppm != null && x.ppm > 0);
+            const sourceAddr = frFormatSourceAddress(String(hn ?? "").trim() || null, streetNorm, postcodeNormForSource || postcodeNorm, cityNormForSource || cityNorm);
+            return { ppm, dist, date: r.last_sale_date, amount, hn, sourceAddr };
+          }).filter((x): x is { ppm: number; dist: number; date: string | null | undefined; amount: number | null; hn: unknown; sourceAddr: string | null } => x.ppm != null && x.ppm > 0);
           if (withPpm.length >= 1) {
             withPpm.sort((a, b) => a.dist - b.dist);
             const closestDist = withPpm[0]?.dist ?? 0;
@@ -4749,7 +4821,12 @@ export async function GET(request: NextRequest) {
               return tb - ta;
             })[0] ?? recencyPreferred.filter((x) => (x.amount ?? 0) > 0)[0];
             if (bestForTx && (bestForTx.amount ?? 0) > 0) {
-              streetFactsBestSale = { amount: bestForTx.amount!, date: bestForTx.date != null && String(bestForTx.date).trim() ? String(bestForTx.date) : null };
+              streetFactsBestSale = {
+                amount: bestForTx.amount!,
+                date: bestForTx.date != null && String(bestForTx.date).trim() ? String(bestForTx.date) : null,
+                sourceAddress: bestForTx.sourceAddr ?? undefined,
+                matchType: "same_street_similar_house",
+              };
             }
             const ppmPool = recencyPreferred.map((x) => x.ppm);
             const trimmedPpm =
@@ -4810,6 +4887,8 @@ export async function GET(request: NextRequest) {
               streetFactsBestSale = {
                 amount: (bestPostcodeCity.amount ?? 0) > 0 ? bestPostcodeCity.amount! : 0,
                 date: bestPostcodeCity.date,
+                sourceAddress: [cityNormForSource || cityNorm, postcodeNormForSource || postcodeNorm].filter(Boolean).join(" ").trim() || null,
+                matchType: "area_fallback",
               };
             }
             console.log("[FR_FLOW] street_from_facts_postcode_city rows=" + String(withPpmPostcodeCity.length) + " median_ppm=" + String(medianPpmEuro));
@@ -4930,8 +5009,17 @@ export async function GET(request: NextRequest) {
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_numeric (EXACT+BUILDING+STREET ran)"
           );
           const lastTxFromStreet = streetFactsBestSale ?? (streetEstimate.newestSaleDate != null && String(streetEstimate.newestSaleDate).trim()
-            ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim() }
+            ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim(), sourceAddress: null as string | null, matchType: undefined as "same_street_similar_house" | "area_fallback" | undefined }
             : null);
+          const streetTxPayload = lastTxFromStreet
+            ? frLastTransactionPayload(
+                lastTxFromStreet.amount,
+                lastTxFromStreet.date,
+                lastTxFromStreet.matchType ?? "same_street_similar_house",
+                lastTxFromStreet.sourceAddress ?? ([streetNorm, postcodeNorm, cityNorm].filter(Boolean).join(", ").trim() || null),
+                lastTxFromStreet.amount > 0 ? undefined : "Representative sale date from street data"
+              )
+            : frLastTransactionPayload(0, null, "same_street_similar_house", null, "No exact recent transaction available");
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -4940,9 +5028,7 @@ export async function GET(request: NextRequest) {
               exact_value: streetEstimate.estimated,
               exact_value_message: null,
               value_level: "street-level",
-              last_transaction: lastTxFromStreet
-                ? { amount: lastTxFromStreet.amount, date: lastTxFromStreet.date, message: lastTxFromStreet.amount > 0 ? undefined : "Representative sale date from street data" }
-                : { amount: 0, date: null, message: "No exact recent transaction available" },
+              last_transaction: streetTxPayload,
               // Median €/m² for UI when headline uses price/m² (same numeric scale as exact_value uses total €).
               street_average: streetEstimate.avgPricePerM2,
               street_average_message: fallbackSourceStreet,
@@ -4957,8 +5043,8 @@ export async function GET(request: NextRequest) {
               normalizedLot: normalizedRequestedLot,
               property: {
                 // Estimated market value must not be treated as an exact recent transaction.
-                transactionDate: lastTxFromStreet?.date ?? null,
-                transactionValue: (lastTxFromStreet?.amount ?? 0) > 0 ? lastTxFromStreet!.amount : streetEstimate.estimated,
+                transactionDate: streetTxPayload.date ?? null,
+                transactionValue: (streetTxPayload.amount ?? 0) > 0 ? streetTxPayload.amount : streetEstimate.estimated,
                 surfaceArea: surfaceForEstimation ?? null,
                 rooms: null,
                 propertyType: propertyType,
@@ -4989,8 +5075,17 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_final_winner_layer = "street_fallback";
         console.log("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=STREET_price_only (prefer street over commune)");
         const lastTxFromStreetPriceOnly = streetFactsBestSale ?? (streetEstimate.newestSaleDate != null && String(streetEstimate.newestSaleDate).trim()
-          ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim() }
+          ? { amount: 0, date: String(streetEstimate.newestSaleDate).trim(), sourceAddress: null as string | null, matchType: undefined as "same_street_similar_house" | "area_fallback" | undefined }
           : null);
+        const streetTxPayloadPriceOnly = lastTxFromStreetPriceOnly
+          ? frLastTransactionPayload(
+              lastTxFromStreetPriceOnly.amount,
+              lastTxFromStreetPriceOnly.date,
+              lastTxFromStreetPriceOnly.matchType ?? "same_street_similar_house",
+              lastTxFromStreetPriceOnly.sourceAddress ?? ([streetNorm, postcodeNorm, cityNorm].filter(Boolean).join(", ").trim() || null),
+              lastTxFromStreetPriceOnly.amount > 0 ? undefined : "Representative sale date from street data"
+            )
+          : frLastTransactionPayload(0, null, "same_street_similar_house", null, "No exact recent transaction available");
         return frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -5000,9 +5095,7 @@ export async function GET(request: NextRequest) {
               exact_value: null,
               exact_value_message: null,
               value_level: "street-level",
-              last_transaction: lastTxFromStreetPriceOnly
-                ? { amount: lastTxFromStreetPriceOnly.amount, date: lastTxFromStreetPriceOnly.date, message: lastTxFromStreetPriceOnly.amount > 0 ? undefined : "Representative sale date from street data" }
-                : { amount: 0, date: null, message: "No exact recent transaction available" },
+              last_transaction: streetTxPayloadPriceOnly,
               street_average: streetEstimate.avgPricePerM2,
               street_average_message: streetOnlyMessage,
               livability_rating: "FAIR",
@@ -5014,8 +5107,8 @@ export async function GET(request: NextRequest) {
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
-                transactionDate: lastTxFromStreetPriceOnly?.date ?? null,
-                transactionValue: (lastTxFromStreetPriceOnly?.amount ?? 0) > 0 ? lastTxFromStreetPriceOnly!.amount : null,
+                transactionDate: streetTxPayloadPriceOnly.date ?? null,
+                transactionValue: (streetTxPayloadPriceOnly.amount ?? 0) > 0 ? streetTxPayloadPriceOnly.amount : null,
                 pricePerSqm: streetEstimate.avgPricePerM2,
                 surfaceArea: null,
                 rooms: null,
@@ -5189,6 +5282,10 @@ export async function GET(request: NextRequest) {
             "[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=COMMUNE (EXACT+BUILDING+STREET+COMMUNE ran)"
           );
           const communeLastTx = communeNewestDate ? { amount: 0, date: communeNewestDate } : null;
+          const communeAreaSource = [cityNorm, postcodeNorm].filter(Boolean).join(" ").trim() || null;
+          const communeTxPayload = communeLastTx
+            ? frLastTransactionPayload(communeLastTx.amount, communeLastTx.date, "area_fallback", communeAreaSource, communeLastTx.amount > 0 ? undefined : "Representative sale date from commune data")
+            : frLastTransactionPayload(0, null, "area_fallback", communeAreaSource, "No exact recent transaction available");
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -5197,9 +5294,7 @@ export async function GET(request: NextRequest) {
               exact_value: estimated,
               exact_value_message: null,
               value_level: "street-level",
-              last_transaction: communeLastTx
-                ? { amount: communeLastTx.amount, date: communeLastTx.date, message: "Representative sale date from commune data" }
-                : { amount: 0, date: null, message: "No exact recent transaction available" },
+              last_transaction: communeTxPayload,
               street_average: medianAvgPricePerM2Euro,
             street_average_message:
               surfaceForEstimation == null
@@ -5214,8 +5309,8 @@ export async function GET(request: NextRequest) {
               requestedLot: requestedLotNorm,
               normalizedLot: normalizedRequestedLot,
               property: {
-                transactionDate: communeLastTx?.date ?? null,
-                transactionValue: estimated,
+                transactionDate: communeTxPayload.date ?? null,
+                transactionValue: (communeTxPayload.amount ?? 0) > 0 ? communeTxPayload.amount : estimated,
                 pricePerSqm: medianAvgPricePerM2Euro,
                 surfaceArea: surfaceForEstimation ?? null,
                 rooms: null,
@@ -5298,9 +5393,12 @@ export async function GET(request: NextRequest) {
               const dateStr = r.last_sale_date != null ? String(r.last_sale_date).trim() || null : null;
               const isRecent = frSaleDateWithinFiveYears(dateStr);
               const amount = frPropertyLatestFactsMoneyToEuros(r.last_sale_price);
-              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent, amount };
+              const hn = hnRaw != null ? String(hnRaw).trim() || null : null;
+              const street = r.street != null ? String(r.street).trim() || null : null;
+              const city = r.city != null ? String(r.city).trim() || null : null;
+              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent, amount, hn, street, city };
             })
-            .filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean; amount: number | null } => x.ppm != null && x.ppm > 0);
+            .filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean; amount: number | null; hn: string | null; street: string | null; city: string | null } => x.ppm != null && x.ppm > 0);
 
           if (withPpm.length < 3) {
             const [anyRows] = await queryWithTimeout<[Array<{ price_per_m2?: unknown; street?: unknown; house_number?: unknown; last_sale_date?: unknown; last_sale_price?: unknown; city?: unknown }>]>({
@@ -5325,8 +5423,11 @@ export async function GET(request: NextRequest) {
               const dateStr = r.last_sale_date != null ? String(r.last_sale_date).trim() || null : null;
               const isRecent = frSaleDateWithinFiveYears(r.last_sale_date);
               const amount = frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price);
-              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent, amount };
-            }).filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean; amount: number | null } => x.ppm != null && x.ppm > 0);
+              const hn = r.house_number != null ? String(r.house_number).trim() || null : null;
+              const street = r.street != null ? String(r.street).trim() || null : null;
+              const city = r.city != null ? String(r.city).trim() || null : null;
+              return { ppm, streetMatch, cityMatch, houseDist, dateStr, isRecent, amount, hn, street, city };
+            }).filter((x): x is { ppm: number; streetMatch: boolean; cityMatch: boolean; houseDist: number; dateStr: string | null; isRecent: boolean; amount: number | null; hn: string | null; street: string | null; city: string | null } => x.ppm != null && x.ppm > 0);
             if (extraRows.length > withPpm.length) {
               withPpm.length = 0;
               withPpm.push(...extraRows);
@@ -5380,6 +5481,19 @@ export async function GET(request: NextRequest) {
                   ? { amount: 0, date: nearbyBestRow.dateStr }
                   : null)
             : null;
+          const nearbySourceAddr = nearbyBestRow
+            ? frFormatSourceAddress(nearbyBestRow.hn, nearbyBestRow.street, postcodeNormForSource || postcodeNorm, nearbyBestRow.city)
+            : null;
+          const nearbyMatchType = nearbyScope === "same_street" ? "same_street_similar_house" : "nearby_similar_house";
+          const nearbyTxPayload = nearbyLastTx
+            ? frLastTransactionPayload(
+                nearbyLastTx.amount,
+                nearbyLastTx.date,
+                nearbyMatchType,
+                nearbySourceAddr,
+                nearbyLastTx.amount > 0 ? undefined : "Representative sale date from nearby"
+              )
+            : frLastTransactionPayload(0, null, nearbyMatchType, null, "No exact recent transaction available");
 
           console.log("[FR_NEARBY] detect_class=" + String(detectClass));
           console.log("[FR_NEARBY] nearby_rows_found=" + String(withPpm.length));
@@ -5407,9 +5521,7 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "street-level",
-                last_transaction: nearbyLastTx
-                  ? { amount: nearbyLastTx.amount, date: nearbyLastTx.date, message: nearbyLastTx.amount > 0 ? undefined : "Representative sale date from nearby" }
-                  : { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: nearbyTxPayload,
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5421,8 +5533,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: nearbyLastTx?.date ?? null,
-                  transactionValue: (nearbyLastTx?.amount ?? 0) > 0 ? nearbyLastTx!.amount : estimated,
+                  transactionDate: nearbyTxPayload.date ?? null,
+                  transactionValue: (nearbyTxPayload.amount ?? 0) > 0 ? nearbyTxPayload.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEst ?? null,
                   rooms: null,
@@ -5509,6 +5621,10 @@ export async function GET(request: NextRequest) {
                 ? { amount: communeEmergencyBest.amount!, date: communeEmergencyBest.date }
                 : communeEmergencyBest.date ? { amount: 0, date: communeEmergencyBest.date } : null)
             : null;
+          const communeEmergencyAreaSource = [cityNorm, postcodeNorm].filter(Boolean).join(" ").trim() || null;
+          const communeEmergencyTxPayload = communeEmergencyLastTx
+            ? frLastTransactionPayload(communeEmergencyLastTx.amount, communeEmergencyLastTx.date, "area_fallback", communeEmergencyAreaSource, communeEmergencyLastTx.amount > 0 ? undefined : "Representative sale date from commune")
+            : frLastTransactionPayload(0, null, "area_fallback", communeEmergencyAreaSource, "No exact recent transaction available");
           const label = "Based on commune-level pricing (limited data)";
           frRuntimeDebug.winning_step = "commune_emergency";
           frRuntimeDebug.winning_source_label = label;
@@ -5532,9 +5648,7 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "commune-level",
-                last_transaction: communeEmergencyLastTx
-                  ? { amount: communeEmergencyLastTx.amount, date: communeEmergencyLastTx.date, message: communeEmergencyLastTx.amount > 0 ? undefined : "Representative sale date from commune" }
-                  : { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: communeEmergencyTxPayload,
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5546,8 +5660,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: communeEmergencyLastTx?.date ?? null,
-                  transactionValue: (communeEmergencyLastTx?.amount ?? 0) > 0 ? communeEmergencyLastTx!.amount : estimated,
+                  transactionDate: communeEmergencyTxPayload.date ?? null,
+                  transactionValue: (communeEmergencyTxPayload.amount ?? 0) > 0 ? communeEmergencyTxPayload.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEstimation ?? null,
                   rooms: null,
@@ -5610,6 +5724,10 @@ export async function GET(request: NextRequest) {
                 ? { amount: safetyNetBest.amount!, date: safetyNetBest.date }
                 : safetyNetBest.date ? { amount: 0, date: safetyNetBest.date } : null)
             : null;
+          const safetyNetAreaSource = [cityNorm, postcodeNorm].filter(Boolean).join(" ").trim() || null;
+          const safetyNetTxPayload = safetyNetLastTx
+            ? frLastTransactionPayload(safetyNetLastTx.amount, safetyNetLastTx.date, "area_fallback", safetyNetAreaSource, safetyNetLastTx.amount > 0 ? undefined : "Representative sale date from commune")
+            : frLastTransactionPayload(0, null, "area_fallback", safetyNetAreaSource, "No exact recent transaction available");
           const label = "Based on commune-level pricing (limited data)";
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = label;
@@ -5633,9 +5751,7 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "commune-level",
-                last_transaction: safetyNetLastTx
-                  ? { amount: safetyNetLastTx.amount, date: safetyNetLastTx.date, message: safetyNetLastTx.amount > 0 ? undefined : "Representative sale date from commune" }
-                  : { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: safetyNetTxPayload,
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5647,8 +5763,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: safetyNetLastTx?.date ?? null,
-                  transactionValue: (safetyNetLastTx?.amount ?? 0) > 0 ? safetyNetLastTx!.amount : estimated,
+                  transactionDate: safetyNetTxPayload.date ?? null,
+                  transactionValue: (safetyNetTxPayload.amount ?? 0) > 0 ? safetyNetTxPayload.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEstimation ?? null,
                   rooms: null,
@@ -5709,6 +5825,10 @@ export async function GET(request: NextRequest) {
                 ? { amount: postcodeBest.amount!, date: postcodeBest.date }
                 : postcodeBest.date ? { amount: 0, date: postcodeBest.date } : null)
             : null;
+          const postcodeAreaSource = [cityNorm, postcodeForQuery].filter(Boolean).join(" ").trim() || postcodeForQuery || null;
+          const postcodeTxPayload = postcodeLastTx
+            ? frLastTransactionPayload(postcodeLastTx.amount, postcodeLastTx.date, "area_fallback", postcodeAreaSource, postcodeLastTx.amount > 0 ? undefined : "Representative sale date from postcode")
+            : frLastTransactionPayload(0, null, "area_fallback", postcodeAreaSource, "No exact recent transaction available");
           const label = "Based on postcode-level pricing (limited data)";
           frRuntimeDebug.winning_step = "commune_fallback";
           frRuntimeDebug.winning_source_label = label;
@@ -5732,9 +5852,7 @@ export async function GET(request: NextRequest) {
                 exact_value: estimated,
                 exact_value_message: estimated == null ? "Surface needed for total estimate" : null,
                 value_level: "commune-level",
-                last_transaction: postcodeLastTx
-                  ? { amount: postcodeLastTx.amount, date: postcodeLastTx.date, message: postcodeLastTx.amount > 0 ? undefined : "Representative sale date from postcode" }
-                  : { amount: 0, date: null, message: "No exact recent transaction available" },
+                last_transaction: postcodeTxPayload,
                 street_average: medianPpm,
                 street_average_message: label,
                 livability_rating: "FAIR",
@@ -5746,8 +5864,8 @@ export async function GET(request: NextRequest) {
                 requestedLot: requestedLotNorm,
                 normalizedLot: normalizedRequestedLot,
                 property: {
-                  transactionDate: postcodeLastTx?.date ?? null,
-                  transactionValue: (postcodeLastTx?.amount ?? 0) > 0 ? postcodeLastTx!.amount : estimated,
+                  transactionDate: postcodeTxPayload.date ?? null,
+                  transactionValue: (postcodeTxPayload.amount ?? 0) > 0 ? postcodeTxPayload.amount : estimated,
                   pricePerSqm: medianPpm,
                   surfaceArea: surfaceForEstimation ?? null,
                   rooms: null,
