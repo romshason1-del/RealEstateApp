@@ -820,14 +820,20 @@ export async function GET(request: NextRequest) {
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
         const payloadAsksForLot =
           payload.multiple_units === true || payload.prompt_for_apartment === true;
+        const lowConfHeuristicNoPrompt =
+          propertyTypeFinal === "apartment" &&
+          propertyTypeSource === "heuristic_fallback" &&
+          propertyTypeConfidence === "low";
         const shouldPromptLotCanonical =
           propertyTypeFinal === "house"
             ? false
-            : !submittedLotPresent &&
-              (payloadAsksForLot ||
-                flowAsApartment ||
-                buildingRowsCount > 0 ||
-                buildingCandidatesCount > 0);
+            : lowConfHeuristicNoPrompt
+              ? false
+              : !submittedLotPresent &&
+                (payloadAsksForLot ||
+                  flowAsApartment ||
+                  buildingRowsCount > 0 ||
+                  buildingCandidatesCount > 0);
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
@@ -1046,6 +1052,9 @@ export async function GET(request: NextRequest) {
           outPayload.prompt_for_apartment = false;
         } else if (propertyTypeFinal === "unknown") {
           outPayload.prompt_for_apartment = shouldPromptLot && !submittedLotPresent;
+        } else if (lowConfHeuristicNoPrompt) {
+          outPayload.prompt_for_apartment = false;
+          outPayload.multiple_units = false;
         }
         if (needsLabelSafetyOverride || needsConfidenceDowngrade) {
           if (outPayload.fr && typeof outPayload.fr === "object") {
@@ -6320,7 +6329,12 @@ export async function GET(request: NextRequest) {
 
       const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
       const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
+      const lowConfHeuristicNoPromptHere =
+        propertyTypeFinal === "apartment" &&
+        propertyTypeSource === "heuristic_fallback" &&
+        propertyTypeConfidence === "low";
       const shouldPromptLotFromBuilding =
+        !lowConfHeuristicNoPromptHere &&
         detectClass !== "house" &&
         !submittedLotPresent &&
         (flowAsApartment ||
