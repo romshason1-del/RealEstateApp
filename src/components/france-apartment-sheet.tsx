@@ -282,9 +282,11 @@ export function FranceApartmentSheet({
   // Apartment block active: backend wants lot + no lot + not yet submitted. Triggers lot prompt UI.
   const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
 
-  // Lot prompt visible: backend fr_lot_prompt_visible (single source of truth), fallback for pre-update responses.
+  // Lot prompt visible: property_type_final === "house" HARD-BLOCKS. No override by backend flags.
   const lotPromptVisible =
-    backendLotPromptVisible ?? (backendShouldPromptLot && !detectClassIsHouse);
+    detectClassIsHouseFromApi
+      ? false
+      : (backendLotPromptVisible ?? (backendShouldPromptLot && !detectClassIsHouse));
 
   const frLotPromptVisibleReason =
     detectClassIsHouse
@@ -1255,6 +1257,11 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
+            </div>
+
+            {/* Temporary: visible proof of property type used */}
+            <div className="mt-0.5 text-[9px] font-mono text-zinc-500">
+              FR_PROPERTY_TYPE_DEBUG: {propertyTypeFinal}
             </div>
 
             {/* Core summary – premium layout */}
