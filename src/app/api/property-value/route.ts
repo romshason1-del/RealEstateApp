@@ -821,7 +821,7 @@ export async function GET(request: NextRequest) {
         const payloadAsksForLot =
           payload.multiple_units === true || payload.prompt_for_apartment === true;
         const shouldPromptLotCanonical =
-          detectClass === "house"
+          propertyTypeFinal === "house"
             ? false
             : !submittedLotPresent &&
               (payloadAsksForLot ||
@@ -1038,13 +1038,14 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_confidence_label = confLabel;
 
         let outPayload: Record<string, unknown> = { ...payload };
-        // property_type_final: DVF-driven, frontend uses ONLY this. House = never prompt for lot.
-        const propertyTypeFinal: "house" | "apartment" =
-          detectClass === "house" ? "house" : "apartment";
         outPayload.property_type_final = propertyTypeFinal;
-        if (detectClass === "house") {
+        outPayload.property_type_source = propertyTypeSource;
+        outPayload.property_type_confidence = propertyTypeConfidence;
+        if (propertyTypeFinal === "house") {
           outPayload.multiple_units = false;
           outPayload.prompt_for_apartment = false;
+        } else if (propertyTypeFinal === "unknown") {
+          outPayload.prompt_for_apartment = shouldPromptLot && !submittedLotPresent;
         }
         if (needsLabelSafetyOverride || needsConfidenceDowngrade) {
           if (outPayload.fr && typeof outPayload.fr === "object") {
@@ -2315,112 +2316,168 @@ export async function GET(request: NextRequest) {
 
       const hasDvfRowsAtAddress = earlyCandidateRows.length > 0;
       const hasDvfTypeLocal = strictMaisonCount > 0 || strictAppartCount > 0;
+      const hasPositiveApartmentEvidence = apartmentEvidenceFromFacts || isMultiUnitDetected;
 
-      // Apartment requires positive evidence. Never classify based only on postcode/city/BAN/department.
-      const hasPositiveApartmentEvidence =
-        apartmentEvidenceFromFacts ||
-        isMultiUnitDetected;
-
-      // 1) DVF/BigQuery ONLY when DVF has type_local at address. Heuristics ONLY when no DVF type data.
-      let detectClass: "apartment" | "house" | "unclear";
+      // Strict property-type resolution: official data first. Decision order A → E.
+      type PropertyTypeSource = "dvf_type_local" | "strict_same_address_lot_evidence" | "official_building_evidence" | "heuristic_fallback";
+      type PropertyTypeFinal = "house" | "apartment" | "unknown";
+      let propertyTypeFinal: PropertyTypeFinal = "unknown";
+      let propertyTypeSource: PropertyTypeSource = "heuristic_fallback";
+      let propertyTypeConfidence: "high" | "medium" | "low" = "low";
+      let detectClass: "apartment" | "house" | "unclear" = "unclear";
       const detectUsedLot = false;
       let detectOverrideReason: string | null = null;
-      let frDetectionReason: string;
+      let frDetectionReason = "unclear_no_evidence";
       let frDetectConfidence: "high" | "medium" | "low" = "low";
-      let frDetectReason: string;
+      let frDetectReason = "No DVF type_local and insufficient evidence";
 
+      // A–B–C: Strict same-address DVF rows with type_local (Maison / Appartement)
       if (hasDvfRowsAtAddress && hasDvfTypeLocal) {
-        // DVF SOURCE OF TRUTH: property_type from property_latest_facts (type_local). NO overrides.
         if (maisonDominant) {
+          propertyTypeFinal = "house";
+          propertyTypeSource = "dvf_type_local";
+          propertyTypeConfidence = "high";
           detectClass = "house";
-          detectOverrideReason = null;
           frDetectionReason = "dvf_maison_dominant";
           frDetectReason = "DVF type_local Maison dominant at address — house, never prompt for lot";
           frDetectConfidence = "high";
         } else if (appartementDominant || strictLots.size >= 2) {
+          propertyTypeFinal = "apartment";
+          propertyTypeSource = strictLots.size >= 2 ? "strict_same_address_lot_evidence" : "dvf_type_local";
+          propertyTypeConfidence = "high";
           detectClass = "apartment";
-          detectOverrideReason = null;
           frDetectionReason = "dvf_appartement_or_multi_lot";
           frDetectReason = appartementDominant
             ? "DVF type_local Appartement at address"
             : "DVF multiple lots at address";
           frDetectConfidence = "high";
         } else {
-          // Tie: maisonCount > 0 and appartCount > 0, equal. Prefer apartment (prompt for lot).
+          propertyTypeFinal = "apartment";
+          propertyTypeSource = "dvf_type_local";
+          propertyTypeConfidence = "medium";
           detectClass = "apartment";
           frDetectionReason = "dvf_mixed_prefer_apartment";
           frDetectReason = "DVF mixed Maison/Appartement at address — prefer apartment for lot prompt";
           frDetectConfidence = "medium";
         }
-      } else {
-        // NO DVF type_local at address — heuristic fallback only.
-        if (strongHouseSignals) {
-          detectClass = "house";
-          detectOverrideReason = strongApartmentSignals ? "conflict_house_wins_over_apartment" : "heuristic_maison";
-          frDetectionReason = "heuristic_strong_house";
-          frDetectReason = "No DVF type_local — heuristic: maison signals from related data";
+      } else if (!hasDvfTypeLocal) {
+        // D: No usable type_local — building-level official evidence (strict same-address only)
+        if (buildingIntelStrictMatch && isMultiUnitDetected) {
+          propertyTypeFinal = "apartment";
+          propertyTypeSource = "official_building_evidence";
+          propertyTypeConfidence = "medium";
+          detectClass = "apartment";
+          frDetectionReason = "official_building_multi_unit";
+          frDetectReason = "No DVF type_local — strict building intelligence multi-unit at address";
           frDetectConfidence = "medium";
-        } else if (hasPositiveApartmentEvidence) {
-          detectClass = "apartment";
-          frDetectionReason = apartmentEvidenceFromFacts ? "heuristic_multi_lot" : "heuristic_building_intel";
-          frDetectReason = apartmentEvidenceFromFacts ? "No DVF type_local — multi-lot at address" : "No DVF type_local — building intelligence multi-unit";
-          frDetectConfidence = apartmentEvidenceFromFacts ? "medium" : "low";
-        } else if (houseFromLowDensityAndMaison && !apartmentFromHighTxCount) {
+        } else if (buildingIntelStrictMatch && isHouseLikeDetected) {
+          propertyTypeFinal = "house";
+          propertyTypeSource = "official_building_evidence";
+          propertyTypeConfidence = "medium";
           detectClass = "house";
-          frDetectionReason = "heuristic_low_density_maison";
-          frDetectReason = "No DVF type_local — low density, maison-related signals";
-          frDetectConfidence = "low";
-        } else if (apartmentFromHighTxCount) {
-          detectClass = "apartment";
-          frDetectionReason = "heuristic_high_tx_count";
-          frDetectReason = `No DVF type_local — 5+ transactions at same address (${sameAddressTxCount})`;
+          frDetectionReason = "official_building_house_like";
+          frDetectReason = "No DVF type_local — strict building intelligence house-like at address";
           frDetectConfidence = "medium";
-        } else if (mediumHouseSignals) {
-          detectClass = "house";
-          detectOverrideReason = "heuristic_intelligence_house";
-          frDetectionReason = "heuristic_intelligence_house";
-          frDetectReason = "No DVF type_local — building intelligence house-like";
-          frDetectConfidence = "low";
-        } else if (lowTxSameAddress && (maisonDominant || isHouseLikeDetected)) {
-          detectClass = "house";
-          frDetectionReason = "heuristic_low_tx_house";
-          frDetectReason = "No DVF type_local — 1-2 transactions with house-like signals";
-          frDetectConfidence = "low";
-        } else if (isLikelyBuilding && /^(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(streetForHeuristic)) {
-          detectClass = "house";
-          detectOverrideReason = "heuristic_street_pattern";
-          frDetectionReason = "heuristic_street_pattern";
-          frDetectReason = "No DVF type_local — street pattern (chemin/route/etc) fallback";
-          frDetectConfidence = "low";
-        } else if (isLikelyBuilding) {
-          detectClass = "apartment";
-          frDetectionReason = "heuristic_likely_building";
-          frDetectReason = "No DVF type_local — urban address default to building";
-          frDetectConfidence = "low";
         } else {
-          detectClass = "unclear";
-          detectOverrideReason = "no_evidence";
-          frDetectionReason = "unclear_no_evidence";
-          frDetectReason = "No DVF type_local and insufficient heuristic evidence";
-          frDetectConfidence = "low";
+          // E: Heuristic fallback only when official evidence inconclusive
+          if (strongHouseSignals) {
+            propertyTypeFinal = "house";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "medium";
+            detectClass = "house";
+            frDetectionReason = "heuristic_strong_house";
+            frDetectReason = "No DVF type_local — heuristic: maison signals from related data";
+            frDetectConfidence = "medium";
+          } else if (hasPositiveApartmentEvidence && !houseLikeNoStrictEvidence) {
+            propertyTypeFinal = "apartment";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = apartmentEvidenceFromFacts ? "medium" : "low";
+            detectClass = "apartment";
+            frDetectionReason = apartmentEvidenceFromFacts ? "heuristic_multi_lot" : "heuristic_building_intel";
+            frDetectReason = apartmentEvidenceFromFacts ? "No DVF type_local — multi-lot at address" : "No DVF type_local — building intelligence multi-unit";
+            frDetectConfidence = apartmentEvidenceFromFacts ? "medium" : "low";
+          } else if (houseFromLowDensityAndMaison && !apartmentFromHighTxCount) {
+            propertyTypeFinal = "house";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "low";
+            detectClass = "house";
+            frDetectionReason = "heuristic_low_density_maison";
+            frDetectReason = "No DVF type_local — low density, maison-related signals";
+            frDetectConfidence = "low";
+          } else if (apartmentFromHighTxCount && !houseLikeNoStrictEvidence) {
+            propertyTypeFinal = "apartment";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "medium";
+            detectClass = "apartment";
+            frDetectionReason = "heuristic_high_tx_count";
+            frDetectReason = `No DVF type_local — 5+ transactions at same address (${sameAddressTxCount})`;
+            frDetectConfidence = "medium";
+          } else if (mediumHouseSignals) {
+            propertyTypeFinal = "house";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "low";
+            detectClass = "house";
+            frDetectionReason = "heuristic_intelligence_house";
+            frDetectReason = "No DVF type_local — building intelligence house-like";
+            frDetectConfidence = "low";
+          } else if (lowTxSameAddress && (maisonDominant || isHouseLikeDetected)) {
+            propertyTypeFinal = "house";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "low";
+            detectClass = "house";
+            frDetectionReason = "heuristic_low_tx_house";
+            frDetectReason = "No DVF type_local — 1-2 transactions with house-like signals";
+            frDetectConfidence = "low";
+          } else if (isLikelyBuilding && /^(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(streetForHeuristic)) {
+            propertyTypeFinal = "house";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "low";
+            detectClass = "house";
+            frDetectionReason = "heuristic_street_pattern";
+            frDetectReason = "No DVF type_local — street pattern (chemin/route/etc) fallback";
+            frDetectConfidence = "low";
+          } else if (isLikelyBuilding) {
+            propertyTypeFinal = "apartment";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "low";
+            detectClass = "apartment";
+            frDetectionReason = "heuristic_likely_building";
+            frDetectReason = "No DVF type_local — urban address default to building";
+            frDetectConfidence = "low";
+          } else {
+            propertyTypeFinal = "unknown";
+            propertyTypeSource = "heuristic_fallback";
+            propertyTypeConfidence = "low";
+            detectClass = "unclear";
+            detectOverrideReason = "no_evidence";
+            frDetectionReason = "unclear_no_evidence";
+            frDetectReason = "No DVF type_local and insufficient heuristic evidence";
+            frDetectConfidence = "low";
+          }
         }
       }
 
-      // Only override heuristic apartment when BAN match weak — never override DVF-driven result.
+      // BAN weak match: do not use apartment evidence when BAN match weak
       if (
         !(hasDvfRowsAtAddress && hasDvfTypeLocal) &&
         !allowMultiUnitFromQueries &&
         detectClass === "apartment" &&
         (apartmentEvidenceFromFacts || isMultiUnitDetected)
       ) {
+        propertyTypeFinal = "unknown";
+        propertyTypeSource = "heuristic_fallback";
+        propertyTypeConfidence = "low";
         detectClass = "unclear";
         detectOverrideReason = "ban_weak_match_ignored_multi_unit_evidence";
         frDetectionReason = "ban_weak_unclear";
         frDetectReason = "BAN match weak, multi-unit evidence ignored";
       }
 
-      // HARD LOCK: strict same-address Maison must never be overridden by heuristics or loose evidence
-      if (houseEvidenceFromFacts && detectClass === "apartment") {
+      // HARD LOCK: strict same-address Maison must never be overridden
+      if (houseEvidenceFromFacts && (detectClass === "apartment" || propertyTypeFinal === "apartment")) {
+        propertyTypeFinal = "house";
+        propertyTypeSource = "dvf_type_local";
+        propertyTypeConfidence = "high";
         detectClass = "house";
         detectOverrideReason = "hard_lock_maison_overrides";
         frDetectionReason = "dvf_maison_hard_lock";
@@ -2458,7 +2515,9 @@ export async function GET(request: NextRequest) {
 
       frRuntimeDebug.detect_class = detectClass;
       frRuntimeDebug.fr_property_type_detected = detectClass;
-      frRuntimeDebug.fr_property_type_final = detectClass === "house" ? "house" : "apartment";
+      frRuntimeDebug.fr_property_type_final = propertyTypeFinal;
+      frRuntimeDebug.fr_property_type_source = propertyTypeSource;
+      frRuntimeDebug.fr_property_type_confidence = propertyTypeConfidence;
       frRuntimeDebug.fr_house_flow_used = detectClass === "house";
       frRuntimeDebug.fr_lot_applied = shouldPromptLot && submittedLotPresent;
       frRuntimeDebug.fr_detect_signals_summary = signalsSummary;

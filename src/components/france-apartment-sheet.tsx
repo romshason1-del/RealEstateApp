@@ -252,17 +252,20 @@ export function FranceApartmentSheet({
   const pr = parsed?.property_result as any | undefined;
   const legacyLivability = (pr?.livability_rating ?? null) as string | null;
 
-  // property_type_final: backend DVF-only decision. UI uses ONLY this — no heuristics, no overrides.
-  const propertyTypeFinal = (parsed?.property_type_final ?? parsed?.fr_detect ?? "apartment") as string;
+  // property_type_final: backend official-data-first decision. UI uses ONLY this.
+  // house => never ask for apartment/unit; apartment => ask when needed; unknown => fallback decides.
+  const propertyTypeFinal = (parsed?.property_type_final ?? parsed?.fr_detect ?? "unknown") as string;
+  const propertyTypeSource = (parsed?.property_type_source ?? null) as string | null;
+  const propertyTypeConfidence = (parsed?.property_type_confidence ?? null) as string | null;
   const propertyTypeFinalNorm =
-    propertyTypeFinal === "house"
-      ? "house"
-      : propertyTypeFinal === "apartment" || propertyTypeFinal === "unclear"
-        ? "apartment"
-        : "apartment";
+    propertyTypeFinal === "house" ? "house"
+      : propertyTypeFinal === "apartment" ? "apartment"
+      : "unknown";
   const detectClassIsHouseFromApi = propertyTypeFinalNorm === "house";
   const frDetectFinalClass: "apartment" | "house" | "unclear" =
-    propertyTypeFinal === "house" ? "house" : propertyTypeFinal === "unclear" ? "unclear" : "apartment";
+    propertyTypeFinal === "house" ? "house"
+      : propertyTypeFinal === "unknown" || propertyTypeFinal === "unclear" ? "unclear"
+      : "apartment";
   const isHouseLikeUI = detectClassIsHouseFromApi;
   const shouldShowApartmentInput = !detectClassIsHouseFromApi && (parsed?.prompt_for_apartment === true || parsed?.multiple_units === true);
   const shouldForceLotFirstFlow = shouldShowApartmentInput;
@@ -314,6 +317,8 @@ export function FranceApartmentSheet({
     if (!isDev) return;
     console.log("[FR_UI] apartment_vs_house_decision", {
       property_type_final: propertyTypeFinalNorm,
+      property_type_source: propertyTypeSource,
+      property_type_confidence: propertyTypeConfidence,
       detectClassIsHouseFromApi,
       isHouseLikeUI,
       shouldForceLotFirstFlow,
