@@ -1957,7 +1957,42 @@ export async function GET(request: NextRequest) {
           const earlyRows = (earlyResult as [unknown])?.[0];
           earlyCandidateRows = (Array.isArray(earlyRows) ? earlyRows : []) as Array<Record<string, unknown>>;
           const earlyStrictRowsRaw = (earlyStrictResult as [unknown])?.[0];
-          earlyStrictRows = (Array.isArray(earlyStrictRowsRaw) ? earlyStrictRowsRaw : []) as Array<Record<string, unknown>>;
+          let strictRowsFromQuery = (Array.isArray(earlyStrictRowsRaw) ? earlyStrictRowsRaw : []) as Array<Record<string, unknown>>;
+          // TRUE STRICT SAME-ADDRESS FILTER: classification counts only rows matching exact address
+          // (house number, street type+name, postcode, city). Prevents e.g. 270 DES OLIVIERS from
+          // counting for 18 Chemin des Oliviers.
+          {
+            const userHnNorm = normHn(houseNumberNormForSource);
+            const userStreetParsed = streetParsedForSource;
+            const userPostcodeNorm = (postcodeNormForSource ?? "").trim();
+            const userCityNorm = cityNormForSource || "";
+            earlyStrictRows = strictRowsFromQuery.filter((r) => {
+              const row = r as Record<string, unknown>;
+              if (userHnNorm) {
+                const rowHnNorm = normHn(String(row?.house_number ?? ""));
+                if (!rowHnNorm || rowHnNorm !== userHnNorm) return false;
+              } else {
+                return false;
+              }
+              const rowStreet = String(row?.street ?? "").trim();
+              if (userStreetParsed.core && userStreetParsed.core.length >= 2) {
+                const rowParsed = parseStreetForComparison(rowStreet);
+                if ((rowParsed.core || "") !== (userStreetParsed.core || "")) return false;
+                if (userStreetParsed.type) {
+                  if ((rowParsed.type || "") !== (userStreetParsed.type || "")) return false;
+                }
+              }
+              const rowPostcode = String(row?.postcode ?? "").trim().padStart(5, "0");
+              const userPostcodePadded = userPostcodeNorm.padStart(5, "0");
+              if (userPostcodeNorm && rowPostcode !== userPostcodePadded) return false;
+              const rowCityNorm = normalizeCityForFranceSource(String(row?.city ?? ""));
+              if (userCityNorm && rowCityNorm && rowCityNorm !== userCityNorm && !rowCityNorm.startsWith(userCityNorm + " ") && !userCityNorm.startsWith(rowCityNorm + " ")) return false;
+              return true;
+            });
+            if (strictRowsFromQuery.length !== earlyStrictRows.length) {
+              console.log("[FR_STRICT] true_same_address_filter: pre=" + strictRowsFromQuery.length + " post=" + earlyStrictRows.length);
+            }
+          }
           const densityRows = (densityResult as [unknown[]])?.[0];
           const densityRow = Array.isArray(densityRows) ? densityRows[0] : null;
           streetTransactionDensity = densityRow && typeof (densityRow as any).cnt === "number" ? (densityRow as any).cnt : null;
