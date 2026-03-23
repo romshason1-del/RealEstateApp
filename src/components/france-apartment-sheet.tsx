@@ -1576,6 +1576,26 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
+          {/* FR_PROPERTY_PROMPT_DEBUG — diagnosis for apartment/unit prompt regression */}
+          <div className="mt-3 rounded-lg border border-rose-400/40 bg-rose-950/30 px-2 py-1.5 font-mono text-[9px] text-rose-200/90">
+            <div className="mb-1 font-semibold">FR_PROPERTY_PROMPT_DEBUG</div>
+            <div>property_type_final = {String(parsed?.property_type_final ?? "—")}</div>
+            <div>property_type_source = {String(parsed?.property_type_source ?? "—")}</div>
+            <div>property_type_confidence = {String(parsed?.property_type_confidence ?? "—")}</div>
+            <div>prompt_for_apartment = {String(parsed?.prompt_for_apartment ?? "—")}</div>
+            <div>multiple_units = {String(parsed?.multiple_units ?? "—")}</div>
+            <div>shouldPromptLotCanonical = {String(rdForLot?.fr_should_prompt_lot ?? "—")}</div>
+            <div>submittedLotPresent = {String(rdForLot?.fr_lot_submitted ?? "—")}</div>
+            <div>phase = {String(phase)}</div>
+            <div>isHouseLikeUI = {String(isHouseLikeUI)}</div>
+            <div>isPropertyTypeUnknown = {String(isPropertyTypeUnknown)}</div>
+            <div className="mt-1 pt-1 border-t border-rose-400/20">→ lotPromptVisible = {String(lotPromptVisible)}</div>
+            <div className="mt-2 pt-2 border-t border-rose-400/30 font-semibold">FR_STRICT_DVF_ROWS_DEBUG</div>
+            <div>strict_maison_count = {String(rdForLot?.fr_strict_maison_count ?? "—")}</div>
+            <div>strict_appartement_count = {String(rdForLot?.fr_strict_appartement_count ?? "—")}</div>
+            <div>strict_lot_distinct_count = {String(rdForLot?.fr_strict_lot_distinct_count ?? "—")}</div>
+          </div>
+
         </div>
 
         {/* Scrollable body: results only (no intermediate popup; result card shows Searching/result directly) */}
