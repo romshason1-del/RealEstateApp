@@ -2066,10 +2066,18 @@ export async function GET(request: NextRequest) {
               ' '
             ) AS street_norm_clean
           FROM \`streetiq-bigquery.streetiq_gold.france_building_intelligence_v2\`
+        ),
+        with_strict_norm AS (
+          SELECT *,
+            TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(
+              REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street_norm)), r'[^A-Z0-9 ]+', ' '), r'\\s+', ' '),
+              r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', ''),
+              r'\\s+DU\\s+', ' '), r'\\s+DE\\s+', ' '), r'\\s+DES\\s+', ' '), r'\\s+LA\\s+', ' '), r'\\s+LE\\s+', ' '),
+              r'^DU\\s+', ''), r'^DE\\s+', ''), r'^DES\\s+', ''), r'^LA\\s+', ''), r'^LE\\s+', ''), r'\\s+', ' ')
+            ) AS street_strict_norm
+          FROM candidates
         )
-        SELECT
-          *
-        FROM candidates
+        SELECT * FROM with_strict_norm
         WHERE ${frBqPostcodeMatchSql}
           AND ${detCityMatchSql}
           AND TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number AS STRING))
@@ -2080,9 +2088,39 @@ export async function GET(request: NextRequest) {
         ORDER BY unit_signal_count DESC, row_count DESC
         LIMIT 1
       `;
+      const detectionQueryStrict = `
+        WITH candidates AS (
+          SELECT
+            *,
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(UPPER(TRIM(street_norm)), r'[^A-Z0-9 ]+', ' '),
+              r'\\s+',
+              ' '
+            ) AS street_norm_clean
+          FROM \`streetiq-bigquery.streetiq_gold.france_building_intelligence_v2\`
+        ),
+        with_strict_norm AS (
+          SELECT *,
+            TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(
+              REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(street_norm)), r'[^A-Z0-9 ]+', ' '), r'\\s+', ' '),
+              r'^(RUE|AVENUE|AV|BD|BOULEVARD|CHEMIN|CHE|ROUTE|IMPASSE|IMP|ALLEE|ALL|PLACE|PL|SQUARE|SQ|SENTE|COURS|PROMENADE|PROM)\\.?\\s+', ''),
+              r'\\s+DU\\s+', ' '), r'\\s+DE\\s+', ' '), r'\\s+DES\\s+', ' '), r'\\s+LA\\s+', ' '), r'\\s+LE\\s+', ' '),
+              r'^DU\\s+', ''), r'^DE\\s+', ''), r'^DES\\s+', ''), r'^LA\\s+', ''), r'^LE\\s+', ''), r'\\s+', ' ')
+            ) AS street_strict_norm
+          FROM candidates
+        )
+        SELECT * FROM with_strict_norm
+        WHERE ${frBqPostcodeMatchSql}
+          AND ${detCityMatchSql}
+          AND TRIM(CAST(house_number_norm AS STRING)) = TRIM(CAST(@house_number AS STRING))
+          AND TRIM(street_strict_norm) = TRIM(@normalizedStreet)
+        ORDER BY unit_signal_count DESC, row_count DESC
+        LIMIT 1
+      `;
 
       console.log("[FR_INIT] about to run first query");
       let detectRows: Array<Record<string, unknown>> = [];
+      let strictDetectRowsArr: Array<Record<string, unknown>> = [];
       let profileRows: Array<Record<string, unknown>> = [];
 
       const frBqPostcodeMatchSqlProfile = `LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode AS STRING)), 5, '0')`;
@@ -2118,6 +2156,10 @@ export async function GET(request: NextRequest) {
             { query: detectionQuery, params: detectParams },
             "intelligence_detection_query"
           ),
+          queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: detectionQueryStrict, params: detectParams },
+            "intelligence_detection_strict"
+          ),
         ];
         if (profileQuery) {
           queries.push(
@@ -2128,15 +2170,20 @@ export async function GET(request: NextRequest) {
           );
         }
         const results = await Promise.all(queries);
-        [detectRows] = results[0] as [Array<Record<string, unknown>>];
-        if (results.length > 1) {
-          [profileRows] = results[1] as [Array<Record<string, unknown>>];
+        const looseResult = results[0] as [Array<Record<string, unknown>>];
+        const strictResult = results[1] as [Array<Record<string, unknown>>];
+        detectRows = (Array.isArray(looseResult?.[0]) ? looseResult[0] : []) as Array<Record<string, unknown>>;
+        strictDetectRowsArr = (Array.isArray(strictResult?.[0]) ? strictResult[0] : []) as Array<Record<string, unknown>>;
+        if (results.length > 2) {
+          const profileResult = results[2] as [Array<Record<string, unknown>>];
+          profileRows = (Array.isArray(profileResult?.[0]) ? profileResult[0] : []) as Array<Record<string, unknown>>;
         }
         console.log("[FR_GOLD] after_intelligence_detection_query", { rows: detectRows?.length ?? 0 });
         if (profileRows?.length) console.log("[FR_GOLD] france_building_profile", { rows: profileRows.length });
       } catch (err) {
         console.error("[FR_ERROR] intelligence_profile_query_failed_continuing_with_valutation", err);
         detectRows = [];
+        strictDetectRowsArr = [];
         profileRows = [];
       }
 
@@ -2152,6 +2199,7 @@ export async function GET(request: NextRequest) {
       });
 
       const detectRow = (detectRows?.[0] ?? {}) as Record<string, unknown>;
+      const strictDetectRow = (strictDetectRowsArr?.[0] ?? null) as Record<string, unknown> | null;
       const profileRow = (profileRows?.[0] ?? {}) as Record<string, unknown>;
       const profileBuildingClass = getString(profileRow, ["building_class"])?.toLowerCase() ?? "";
       const profileSaysApartment = profileBuildingClass === "apartment_building";
@@ -2159,9 +2207,21 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_building_profile_class = profileBuildingClass || null;
       frRuntimeDebug.fr_building_profile_row_count = profileRow && profileBuildingClass ? (profileRow.total_transactions as number) ?? null : null;
 
-      let isMultiUnitDetected = getBool(detectRow, ["is_multi_unit", "isMultiUnit", "multi_unit", "is_multiunit"]);
-      let isHouseLikeDetected = getBool(detectRow, ["is_house_like", "isHouseLike", "house_like", "is_house_like_flag", "houseLike"]);
-      if (profileSaysApartment) isMultiUnitDetected = true;
+      const buildingIntelStrictMatch = strictDetectRow != null;
+      const buildingIntelLooseMatch = detectRows?.length > 0;
+      frRuntimeDebug.fr_building_intel_strict_match = buildingIntelStrictMatch;
+      frRuntimeDebug.fr_building_intel_loose_match = buildingIntelLooseMatch;
+      frRuntimeDebug.fr_building_intel_match_mode =
+        buildingIntelStrictMatch ? "strict" : (buildingIntelLooseMatch ? "loose" : "none");
+
+      const streetForHouseLikeCheck = (streetNorm || streetNormForSource || "").trim();
+      const isHouseLikeStreet = /^(chemin|route|impasse|allee|sentier|lieu[- ]?dit)\s+/i.test(streetForHouseLikeCheck);
+      const hasStrictSameAddressEvidence = strictMaisonCount > 0 || strictAppartCount > 0 || strictLots.size >= 2;
+      const houseLikeNoStrictEvidence = isHouseLikeStreet && !hasStrictSameAddressEvidence;
+      let isMultiUnitDetected =
+        (buildingIntelStrictMatch && getBool(strictDetectRow!, ["is_multi_unit", "isMultiUnit", "multi_unit", "is_multiunit"])) ||
+        (profileSaysApartment && !houseLikeNoStrictEvidence);
+      let isHouseLikeDetected = getBool(buildingIntelStrictMatch ? strictDetectRow! : detectRow, ["is_house_like", "isHouseLike", "house_like", "is_house_like_flag", "houseLike"]);
       if (profileSaysHouse) isHouseLikeDetected = true;
 
       const detectedTypeStr = (getString(detectRow, [
