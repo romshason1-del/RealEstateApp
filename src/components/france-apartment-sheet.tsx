@@ -55,6 +55,8 @@ export type FranceValuationDisplay = {
   surface_source_label?: string | null;
   /** Surface m² used when displaying total estimated value */
   surface_m2_used?: number | null;
+  /** Source unit for displayed result, e.g. "Apartment 25" or null for building-level */
+  source_unit_display?: string | null;
 };
 
 export function FranceApartmentSheet({
@@ -1080,6 +1082,13 @@ export function FranceApartmentSheet({
                 {!isLoadingNow && !isNoResult && hasValue && fv?.surface_source_label && fv?.surface_m2_used != null ? (
                   <div className="mt-1 text-[10px] text-zinc-400/80">
                     Based on ~{Math.round(fv.surface_m2_used)} m² ({fv.surface_source_label})
+                  </div>
+                ) : null}
+                {!isLoadingNow && !isNoResult && (hasValue || ppm2Display != null) ? (
+                  <div className="mt-1 text-[10px] text-zinc-400/80">
+                    {fv?.source_unit_display?.trim()
+                      ? `Source unit: ${fv.source_unit_display.trim()}`
+                      : "Source: Building-level data"}
                   </div>
                 ) : null}
               </div>

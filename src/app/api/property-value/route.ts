@@ -771,6 +771,7 @@ export async function GET(request: NextRequest) {
         fr_terminal_no_result_reason: null as string | null,
         fr_rich_source_candidate_count: null as number | null,
         fr_sql_filter_summary: null as string | null,
+        fr_source_unit_display: null as string | null,
       };
 
       frRuntimeDebug.fr_input_address_raw = fullRawAddress || (addressParam || rawInputAddress || "").trim() || null;
@@ -1151,10 +1152,13 @@ export async function GET(request: NextRequest) {
             (wsTx === "nearby_fallback" ? "nearby_similar_house" : null) ??
             (["commune_fallback", "commune_emergency", "postcode_only"].includes(wsTx) ? "area_fallback" : null) ??
             "exact";
+          const sourceUnitDisplay =
+            (frRuntimeDebug.fr_source_unit_display as string | null | undefined)?.trim() || null;
           outPayload.fr_valuation_display = {
             winning_source_label,
             source_label: winning_source_label,
             winning_step: frRuntimeDebug.winning_step,
+            source_unit_display: sourceUnitDisplay,
             confidence,
             estimated_value: effectiveEstimatedValue ?? (evPos ? estimated_value : null),
             price_per_m2: ppmPos ? price_per_m2 : null,
@@ -1283,8 +1287,10 @@ export async function GET(request: NextRequest) {
                     : "FAIR"
                 : priceLevel === "affordable"
                   ? liquidity === "high"
-                    ? "FAIR"
-                    : "FAIR"
+                    ? "GOOD"
+                    : liquidity === "medium"
+                      ? "GOOD"
+                      : "FAIR"
                   : (pr.livability_rating as "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT") ?? "FAIR";
           pr.livability_rating = derived;
         }
@@ -3955,6 +3961,9 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.chosen_surface_value = estSurf;
           frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
           frRuntimeDebug.property_latest_facts_money_divisor = 1000;
+          const bsuUnit = (best.raw as any)?.unit_number ?? (best.raw as any)?.lot_col;
+          frRuntimeDebug.fr_source_unit_display =
+            bsuUnit != null && String(bsuUnit).trim() ? `Apartment ${String(bsuUnit).trim()}` : null;
 
           _frLog("[FR_DEBUG] winning_valuation_step", {
             winningValuationStep: "building_similar_unit",
@@ -4300,6 +4309,9 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.surface_source = "same_building";
           frRuntimeDebug.chosen_surface_value = estSurf;
           frRuntimeDebug.winning_median_price_per_m2 = ppmForEstimate;
+          const plrUnit = (best.raw as any)?.unit_number ?? (best.raw as any)?.lot_col;
+          frRuntimeDebug.fr_source_unit_display =
+            plrUnit != null && String(plrUnit).trim() ? `Apartment ${String(plrUnit).trim()}` : null;
           return frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -4448,6 +4460,9 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.chosen_surface_value = surface;
           frRuntimeDebug.winning_median_price_per_m2 =
             Number.isFinite(pricePerM2Euro) && pricePerM2Euro > 0 ? pricePerM2Euro : null;
+          const exactUnitNum = (exactBest as any)?.unit_number;
+          frRuntimeDebug.fr_source_unit_display =
+            exactUnitNum != null && String(exactUnitNum).trim() ? `Apartment ${String(exactUnitNum).trim()}` : null;
           return frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
