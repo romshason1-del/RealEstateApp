@@ -2541,6 +2541,37 @@ export async function GET(request: NextRequest) {
         frDetectConfidence = "high";
       }
 
+      // HARD RULE: low-confidence heuristic fallback apartment with NO strict DVF evidence must NOT
+      // force apartment or trigger unit prompt. Resolve to house (if house-like) or unknown.
+      const lowConfHeuristicApartmentNoStrict =
+        propertyTypeFinal === "apartment" &&
+        propertyTypeSource === "heuristic_fallback" &&
+        propertyTypeConfidence === "low" &&
+        strictMaisonCount === 0 &&
+        strictAppartCount === 0;
+      if (lowConfHeuristicApartmentNoStrict) {
+        const hasHouseLikeEvidence = isHouseLikeStreet || mediumHouseSignals;
+        if (hasHouseLikeEvidence) {
+          propertyTypeFinal = "house";
+          propertyTypeSource = "heuristic_fallback";
+          propertyTypeConfidence = "low";
+          detectClass = "house";
+          detectOverrideReason = "low_conf_heuristic_apartment_no_strict→house";
+          frDetectionReason = "heuristic_house_like_no_strict_dvf";
+          frDetectReason = "No strict DVF — low-confidence heuristic apartment overridden to house (street/intel house-like)";
+          frDetectConfidence = "low";
+        } else {
+          propertyTypeFinal = "unknown";
+          propertyTypeSource = "heuristic_fallback";
+          propertyTypeConfidence = "low";
+          detectClass = "unclear";
+          detectOverrideReason = "low_conf_heuristic_apartment_no_strict→unknown";
+          frDetectionReason = "unclear_no_strict_evidence";
+          frDetectReason = "No strict DVF — low-confidence heuristic apartment overridden to unknown (inconclusive)";
+          frDetectConfidence = "low";
+        }
+      }
+
       if (detectClass === "apartment" && allowMultiUnitFromQueries) {
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
@@ -2550,6 +2581,8 @@ export async function GET(request: NextRequest) {
         !submittedLotPresent &&
         (allowMultiUnitFromQueries || isLikelyBuilding);
       let shouldPromptLot = detectClass !== "house" && shouldPromptLotInitial;
+      // Low-confidence heuristic apartment with no strict DVF must never trigger apartment prompt
+      if (lowConfHeuristicApartmentNoStrict) shouldPromptLot = false;
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
