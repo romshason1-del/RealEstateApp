@@ -1900,7 +1900,7 @@ export async function GET(request: NextRequest) {
             street_normalized: streetNormForExactMatch || streetNormForSource || "",
           };
           const earlyStrictQuery = `
-            SELECT postcode, city, street, house_number, unit_number, property_type, last_sale_date, last_sale_price
+            SELECT postcode, city, street, house_number, unit_number, property_type, surface_m2, last_sale_date, last_sale_price
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = 'fr'
               AND ${frBqPostcodeMatchSql}
@@ -2554,18 +2554,30 @@ export async function GET(request: NextRequest) {
       frRuntimeDebug.fr_strict_maison_count = strictMaisonCount;
       frRuntimeDebug.fr_strict_appartement_count = strictAppartCount;
       frRuntimeDebug.fr_strict_lot_distinct_count = strictLots.size;
-      frRuntimeDebug.fr_strict_dvf_rows = earlyStrictRows.slice(0, 25).map((r) => {
+      frRuntimeDebug.fr_strict_dvf_rows = earlyStrictRows.map((r) => {
         const row = r as Record<string, unknown>;
-        return {
-          property_type: String(row?.property_type ?? ""),
-          house_number: String(row?.house_number ?? ""),
-          street: String(row?.street ?? ""),
-          postcode: String(row?.postcode ?? ""),
-          city: String(row?.city ?? ""),
-          unit_number: String(row?.unit_number ?? ""),
-          last_sale_date: row?.last_sale_date != null ? String(row.last_sale_date) : null,
-          last_sale_price: typeof row?.last_sale_price === "number" ? row.last_sale_price : null,
+        const out: Record<string, unknown> = {
+          type_local: row?.property_type ?? null,
+          property_type: row?.property_type ?? null,
+          numero: row?.house_number ?? null,
+          house_number: row?.house_number ?? null,
+          voie: row?.street ?? null,
+          street: row?.street ?? null,
+          code_postal: row?.postcode ?? null,
+          postcode: row?.postcode ?? null,
+          commune: row?.city ?? null,
+          city: row?.city ?? null,
+          unit_number: row?.unit_number ?? null,
+          surface_m2: row?.surface_m2 ?? null,
+          date_mutation: row?.last_sale_date ?? null,
+          last_sale_date: row?.last_sale_date ?? null,
+          valeur_fonciere: row?.last_sale_price ?? null,
+          last_sale_price: row?.last_sale_price ?? null,
         };
+        for (const k of ["lot1", "lot2", "lot3", "lot4", "lot5", "lot_1", "lot_2", "lot_3", "lot_4", "lot_5"]) {
+          if (row?.[k] != null) out[k] = row[k];
+        }
+        return out;
       });
       frRuntimeDebug.fr_maison_count = maisonCount;
       frRuntimeDebug.fr_appartement_count = appartCount;
