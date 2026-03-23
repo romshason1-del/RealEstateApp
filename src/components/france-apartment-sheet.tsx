@@ -262,12 +262,14 @@ export function FranceApartmentSheet({
         : "apartment";
   const detectClassIsHouseFromApi = propertyTypeFinalNorm === "house";
   const frDetectFinalClass: "apartment" | "house" | "unclear" =
-    detectClassIsHouseFromApi ? "house" : (propertyTypeFinalNorm === "apartment" ? "apartment" : "unclear");
+    propertyTypeFinal === "house" ? "house" : propertyTypeFinal === "unclear" ? "unclear" : "apartment";
   const isHouseLikeUI = detectClassIsHouseFromApi;
   const shouldShowApartmentInput = !detectClassIsHouseFromApi && (parsed?.prompt_for_apartment === true || parsed?.multiple_units === true);
   const shouldForceLotFirstFlow = shouldShowApartmentInput;
+  const isPropertyTypeUnknown = frDetectFinalClass === "unclear";
   const effectiveDetectClass = frDetectFinalClass;
   const frFlowSourceOfTruth = frDetectFinalClass;
+  const frDetect = propertyTypeFinal;
 
   // Single source of truth: backend fr_should_prompt_lot and fr_lot_prompt_visible. House classification ALWAYS suppresses.
   const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
