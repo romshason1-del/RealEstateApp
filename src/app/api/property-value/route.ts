@@ -788,6 +788,8 @@ export async function GET(request: NextRequest) {
         fr_multi_unit_lookup_match_key: null as string | null,
         fr_multi_unit_lookup_matched_key: null as string | null,
         fr_multi_unit_helper_multi_unit: null as boolean | null,
+        /** True when building_level display context and helper row has distinct_unit_count > 1 (read-only disclosure). */
+        fr_multi_unit_building_level_disclosure: null as boolean | null,
         fr_multi_unit_transaction_final: null as boolean | null,
         fr_unit_prompt_reason: null as string | null,
         fr_has_unit_level_differentiation: null as boolean | null,
@@ -1330,13 +1332,14 @@ export async function GET(request: NextRequest) {
           pr.livability_rating = derived;
         }
 
-        /** Read-only disclosure: `france_multi_unit_transactions` exact row; product flag only in `exact_unit` display context. */
+        /** Read-only disclosure: `france_multi_unit_transactions` row keyed by address + sale date + price; exact_unit uses helper boolean; building_level uses distinct_unit_count > 1. */
         let multi_unit_transaction = false;
         let multi_unit_distinct_unit_count: number | null = null;
         frRuntimeDebug.fr_multi_unit_lookup_match_found = false;
         frRuntimeDebug.fr_multi_unit_lookup_match_key = null;
         frRuntimeDebug.fr_multi_unit_lookup_matched_key = null;
         frRuntimeDebug.fr_multi_unit_helper_multi_unit = null;
+        frRuntimeDebug.fr_multi_unit_building_level_disclosure = null;
         frRuntimeDebug.fr_multi_unit_transaction_final = false;
         const frUnwrapBqMu = (v: unknown): unknown =>
           v && typeof v === "object" && !Array.isArray(v) && "value" in (v as object)
@@ -1371,12 +1374,19 @@ export async function GET(request: NextRequest) {
           if (!saleDateIso && ltFinalMu?.date != null) {
             saleDateIso = frExtractDateStringFromRaw(ltFinalMu.date)?.slice(0, 10) ?? null;
           }
+          const normHnForMultiUnit = (hn: string): string => {
+            let s = (hn ?? "").toString().trim().toUpperCase();
+            s = s.replace(/\s+BIS\b/gi, "B").replace(/\s+TER\b/gi, "T").replace(/\s+QUATER\b/gi, "Q");
+            s = s.replace(/[-\u2013\u2014\s]+/g, "").replace(/[^0-9A-Z]/g, "");
+            return s || "";
+          };
+          const muHouseNormForQuery = (houseNumberNormForMatch || normHnForMultiUnit(muHouse)).trim();
           frRuntimeDebug.fr_multi_unit_lookup_match_key = [
             muPostcode,
             muCityMain,
             muStreetNorm,
             muHouse,
-            houseNumberNormForMatch || "",
+            muHouseNormForQuery,
             saleDateIso ?? "",
             rawPricePlf != null ? String(rawPricePlf) : "",
           ].join("|");
@@ -1385,7 +1395,7 @@ export async function GET(request: NextRequest) {
             muCityMain.length > 0 &&
             muStreetNorm.length >= 2 &&
             muHouse.length > 0 &&
-            (houseNumberNormForMatch ?? "").length > 0 &&
+            muHouseNormForQuery.length > 0 &&
             rawPricePlf != null &&
             rawPricePlf > 0 &&
             saleDateIso != null &&
@@ -1415,7 +1425,7 @@ LIMIT 1
                   street: streetNorm || "",
                   street_normalized: muStreetNorm,
                   house_number: muHouse,
-                  house_number_norm: houseNumberNormForMatch || "",
+                  house_number_norm: muHouseNormForQuery,
                   sale_date_iso: saleDateIso,
                   last_sale_price_raw: rawPricePlf,
                 },
@@ -1436,9 +1446,15 @@ LIMIT 1
                   ? ducRaw
                   : frParseNumericLoose(ducRaw);
               const ducFin = duc != null && Number.isFinite(duc) ? Math.trunc(duc) : null;
-              const allowProductDisclosure = frDisplayContext === "exact_unit" && helperMut;
-              multi_unit_transaction = allowProductDisclosure;
-              multi_unit_distinct_unit_count = allowProductDisclosure ? ducFin : null;
+              const exactUnitDisclosure = frDisplayContext === "exact_unit" && helperMut;
+              const buildingLevelMultiUnitDisclosure =
+                frDisplayContext === "building_level" &&
+                ducFin != null &&
+                ducFin > 1;
+              frRuntimeDebug.fr_multi_unit_building_level_disclosure = buildingLevelMultiUnitDisclosure;
+              multi_unit_transaction = exactUnitDisclosure || buildingLevelMultiUnitDisclosure;
+              multi_unit_distinct_unit_count =
+                exactUnitDisclosure || buildingLevelMultiUnitDisclosure ? ducFin : null;
             }
           }
         } catch {
@@ -1446,6 +1462,7 @@ LIMIT 1
           multi_unit_distinct_unit_count = null;
           frRuntimeDebug.fr_multi_unit_lookup_match_found = false;
           frRuntimeDebug.fr_multi_unit_helper_multi_unit = null;
+          frRuntimeDebug.fr_multi_unit_building_level_disclosure = null;
         }
         frRuntimeDebug.fr_multi_unit_transaction_final = multi_unit_transaction;
 
