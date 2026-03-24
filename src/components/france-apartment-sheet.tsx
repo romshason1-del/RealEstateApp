@@ -261,12 +261,14 @@ export function FranceApartmentSheet({
       : "apartment";
   const isHouseLikeUI = detectClassIsHouseFromApi;
 
-  // Single source of truth: backend fr_should_prompt_lot (gated on has_unit_level_differentiation). House ALWAYS suppresses.
+  // Single source of truth: backend fr_should_prompt_lot from BigQuery unit flags. House blocks only when backend does not ask for a lot.
   const rdForLot = (parsed as any)?.fr_runtime_debug ?? (data as any)?.fr_runtime_debug ?? null;
   const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
   const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
-  // Apartment prompt only when: property_type != house AND backend has real unit-level differentiation
-  const shouldShowApartmentInput = !detectClassIsHouseFromApi && (backendLotPromptVisible || backendShouldPromptLot);
+  const backendWantsLotUi =
+    (backendLotPromptVisible || backendShouldPromptLot) &&
+    (!detectClassIsHouseFromApi || backendShouldPromptLot);
+  const shouldShowApartmentInput = backendWantsLotUi;
   const shouldForceLotFirstFlow = shouldShowApartmentInput;
   const isPropertyTypeUnknown = frDetectFinalClass === "unclear";
   const effectiveDetectClass = frDetectFinalClass;
@@ -274,30 +276,25 @@ export function FranceApartmentSheet({
   const frDetect = propertyTypeFinal;
   const detectClassIsHouse = detectClassIsHouseFromApi;
   const lotPromptGenuinelyRequired =
-    backendShouldPromptLot && !detectClassIsHouse && !(requestedLot ?? "").trim();
+    backendShouldPromptLot && !(requestedLot ?? "").trim();
 
   // Apartment block active: backend wants lot + no lot + not yet submitted. Triggers lot prompt UI.
   const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
 
-  // Lot prompt visible: property_type_final === "house" HARD-BLOCKS. No override by backend flags.
-  const lotPromptVisible =
-    detectClassIsHouseFromApi
-      ? false
-      : (backendLotPromptVisible ?? (backendShouldPromptLot && !detectClassIsHouse));
+  const lotPromptVisible = backendWantsLotUi;
 
   const frLotPromptVisibleReason =
-    detectClassIsHouse
+    detectClassIsHouse && !backendShouldPromptLot
       ? "house_blocks_lot_input"
       : backendShouldPromptLot
         ? "fr_should_prompt_lot_true"
         : "fr_should_prompt_lot_false_or_unset";
 
-  // House-direct flow: ONLY when final detect class is house or when we have exact_house result.
-  // If frDetectFinalClass === "apartment", isHouseDirectFlow must be false (no override).
+  // House-direct flow: skip lot UI unless BigQuery-backed prompt says otherwise.
   const isHouseDirectFlow =
-    frDetectFinalClass === "house" ||
+    (frDetectFinalClass === "house" && !backendShouldPromptLot) ||
     (frDetectFinalClass === "unclear" && !shouldShowApartmentInput) ||
-    (normalized?.resultType === "exact_house" && frAddressFetchDone);
+    (normalized?.resultType === "exact_house" && frAddressFetchDone && !backendShouldPromptLot);
 
   // Close result card ONLY when apartment block is active. Never close for house/direct flows.
   React.useEffect(() => {

@@ -788,17 +788,12 @@ export async function GET(request: NextRequest) {
       const frReturn = async (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
-        // Apartment/lot prompt: BigQuery `france_building_unit_flags.has_unit_level_differentiation` only (plus house lock).
+        // Apartment/lot prompt: BigQuery `france_building_unit_flags` only (has_unit_level_differentiation or distinct_unit_count≥2). House does not override when flags say multi-unit.
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
         const hasUnitLevelDiff = frRuntimeDebug.has_unit_level_differentiation === true;
         frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiff;
-        const shouldPromptLotCanonical =
-          propertyTypeFinal === "house"
-            ? false
-            : !hasUnitLevelDiff
-              ? false
-              : !submittedLotPresent;
+        const shouldPromptLotCanonical = hasUnitLevelDiff && !submittedLotPresent;
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
@@ -1015,7 +1010,7 @@ export async function GET(request: NextRequest) {
         outPayload.has_unit_level_differentiation = hasUnitLevelDiff;
         outPayload.distinct_unit_count = frRuntimeDebug.distinct_unit_count ?? null;
         outPayload.building_unit_flags_match_found = frRuntimeDebug.building_unit_flags_match_found ?? null;
-        if (propertyTypeFinal === "house") {
+        if (propertyTypeFinal === "house" && !hasUnitLevelDiff) {
           outPayload.multiple_units = false;
           outPayload.prompt_for_apartment = false;
         } else if (!hasUnitLevelDiff) {
@@ -2019,7 +2014,18 @@ LIMIT 1
               );
               const relaxedRows = Array.isArray(relaxedResult) ? relaxedResult : [];
               if (relaxedRows.length > 0) {
-                unitFlagsRows = [relaxedRows[0]];
+                const hnTarget = normHn(houseNumberNormForSource || "");
+                const hnRaw = String(houseNumberNormForSource ?? "").trim().toUpperCase();
+                const pick =
+                  hnTarget.length > 0
+                    ? relaxedRows.find((row) => normHn(String(row.house_number ?? "")) === hnTarget) ??
+                      (hnRaw.length > 0
+                        ? relaxedRows.find(
+                            (row) => String(row.house_number ?? "").trim().toUpperCase() === hnRaw
+                          )
+                        : undefined)
+                    : undefined;
+                unitFlagsRows = [pick ?? relaxedRows[0]];
                 unitFlagsMatchType = "relaxed";
                 _frLog("[FR_UNIT_FLAGS] relaxed_match", { rows: relaxedRows.length });
               }
@@ -2029,7 +2035,16 @@ LIMIT 1
           }
           const unitFlagsRow = unitFlagsRows?.[0] ?? null;
           const buildingUnitFlagsMatchFound = unitFlagsRow != null;
-          const hasUnitLevelDiffFromTable = buildingUnitFlagsMatchFound && (unitFlagsRow!.has_unit_level_differentiation === true || unitFlagsRow!.has_unit_level_differentiation === "true");
+          const ducRaw = unitFlagsRow?.distinct_unit_count;
+          const ducParsed =
+            typeof ducRaw === "number" && Number.isFinite(ducRaw)
+              ? Math.trunc(ducRaw)
+              : parseInt(String(ducRaw ?? "").trim(), 10);
+          const ducMulti = Number.isFinite(ducParsed) && ducParsed >= 2;
+          const flagColTrue =
+            unitFlagsRow?.has_unit_level_differentiation === true ||
+            unitFlagsRow?.has_unit_level_differentiation === "true";
+          const hasUnitLevelDiffFromTable = buildingUnitFlagsMatchFound && (flagColTrue || ducMulti);
           const distinctUnitCountFromTable = buildingUnitFlagsMatchFound ? (Number(unitFlagsRow!.distinct_unit_count) || null) : null;
           frRuntimeDebug.building_unit_flags_match_found = buildingUnitFlagsMatchFound;
           frRuntimeDebug.building_unit_flags_match_type = unitFlagsMatchType;
@@ -2797,13 +2812,9 @@ LIMIT 1
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
       const flowAsApartment = detectClass === "apartment";
-      // Lot-first flow: only when BigQuery unit flags say this address has unit-level differentiation (house suppressed).
+      // Lot-first flow: BigQuery unit flags only; property_type/detect house do not override confirmed multi-unit.
       const hasUnitLevelDiffFromFlags = frRuntimeDebug.has_unit_level_differentiation === true;
-      let shouldPromptLot =
-        propertyTypeFinal !== "house" &&
-        detectClass !== "house" &&
-        !submittedLotPresent &&
-        hasUnitLevelDiffFromFlags;
+      let shouldPromptLot = !submittedLotPresent && hasUnitLevelDiffFromFlags;
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
@@ -6586,11 +6597,7 @@ LIMIT 1
       // Source of truth: france_building_unit_flags (set earlier from lookup)
       const hasUnitLevelDiffNoData = frRuntimeDebug.has_unit_level_differentiation === true;
       frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffNoData;
-      const shouldPromptLotFromBuilding =
-        hasUnitLevelDiffNoData &&
-        propertyTypeFinal !== "house" &&
-        detectClass !== "house" &&
-        !submittedLotPresent;
+      const shouldPromptLotFromBuilding = hasUnitLevelDiffNoData && !submittedLotPresent;
       if (shouldPromptLotFromBuilding) {
         frRuntimeDebug.fr_should_prompt_lot = true;
         _frLog("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
