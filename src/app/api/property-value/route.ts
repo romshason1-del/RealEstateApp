@@ -775,6 +775,42 @@ export async function GET(request: NextRequest) {
         /** Exact winning facts row (property_latest_facts): raw price/date for france_multi_unit_transactions lookup only. */
         fr_disclosure_anchor_last_sale_price_raw: null as unknown,
         fr_disclosure_anchor_last_sale_date_raw: null as unknown,
+        /** Product display tier derived from winning_step (verification / UI contract). */
+        fr_display_context: null as
+          | "exact_unit"
+          | "exact_address"
+          | "building_level"
+          | "street_level"
+          | "area_level"
+          | "unknown"
+          | null,
+        fr_multi_unit_lookup_match_found: null as boolean | null,
+        fr_multi_unit_lookup_match_key: null as string | null,
+        fr_multi_unit_lookup_matched_key: null as string | null,
+        fr_multi_unit_helper_multi_unit: null as boolean | null,
+        fr_multi_unit_transaction_final: null as boolean | null,
+        fr_unit_prompt_reason: null as string | null,
+        fr_has_unit_level_differentiation: null as boolean | null,
+        fr_distinct_unit_count: null as number | null,
+      };
+
+      const frMapWinningStepToDisplayContext = (
+        ws: string
+      ): "exact_unit" | "exact_address" | "building_level" | "street_level" | "area_level" | "unknown" => {
+        const s = String(ws ?? "").trim();
+        if (s === "exact_unit") return "exact_unit";
+        if (s === "exact_address" || s === "exact_approximate" || s === "exact_house") return "exact_address";
+        if (
+          s === "building_level" ||
+          s === "building_similar_unit" ||
+          s === "building_fallback" ||
+          s === "building_profile" ||
+          s === "post_lot_relaxed"
+        )
+          return "building_level";
+        if (s === "street_fallback") return "street_level";
+        if (s === "commune_fallback" || s === "nearby_fallback" || s === "commune_emergency") return "area_level";
+        return "unknown";
       };
 
       frRuntimeDebug.fr_input_address_raw = fullRawAddress || (addressParam || rawInputAddress || "").trim() || null;
@@ -788,11 +824,27 @@ export async function GET(request: NextRequest) {
       const frReturn = async (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
-        // Apartment/lot prompt: BigQuery `france_building_unit_flags` only (has_unit_level_differentiation or distinct_unit_count≥2). House does not override when flags say multi-unit.
+        const frDisplayContext = frMapWinningStepToDisplayContext(String(frRuntimeDebug.winning_step ?? ""));
+        frRuntimeDebug.fr_display_context = frDisplayContext;
+
+        // Apartment/lot prompt: `france_building_unit_flags.has_unit_level_differentiation` only (strict normalized row). House does not override when flags say multi-unit.
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
         const hasUnitLevelDiff = frRuntimeDebug.has_unit_level_differentiation === true;
         frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiff;
+        frRuntimeDebug.fr_has_unit_level_differentiation = hasUnitLevelDiff;
+        frRuntimeDebug.fr_distinct_unit_count =
+          typeof frRuntimeDebug.distinct_unit_count === "number" && Number.isFinite(frRuntimeDebug.distinct_unit_count)
+            ? frRuntimeDebug.distinct_unit_count
+            : null;
+        frRuntimeDebug.fr_unit_prompt_reason =
+          frRuntimeDebug.building_unit_flags_query_executed !== true
+            ? "france_building_unit_flags:not_executed"
+            : frRuntimeDebug.building_unit_flags_match_found !== true
+              ? "france_building_unit_flags:no_strict_match"
+              : hasUnitLevelDiff
+                ? "france_building_unit_flags:has_unit_level_differentiation_true"
+                : "france_building_unit_flags:has_unit_level_differentiation_false";
         const shouldPromptLotCanonical = hasUnitLevelDiff && !submittedLotPresent;
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
@@ -1010,6 +1062,7 @@ export async function GET(request: NextRequest) {
         outPayload.has_unit_level_differentiation = hasUnitLevelDiff;
         outPayload.distinct_unit_count = frRuntimeDebug.distinct_unit_count ?? null;
         outPayload.building_unit_flags_match_found = frRuntimeDebug.building_unit_flags_match_found ?? null;
+        outPayload.fr_display_context = frDisplayContext;
         if (propertyTypeFinal === "house" && !hasUnitLevelDiff) {
           outPayload.multiple_units = false;
           outPayload.prompt_for_apartment = false;
@@ -1277,9 +1330,14 @@ export async function GET(request: NextRequest) {
           pr.livability_rating = derived;
         }
 
-        /** Read-only disclosure: lookup precomputed row in france_multi_unit_transactions (ETL helper). */
+        /** Read-only disclosure: `france_multi_unit_transactions` exact row; product flag only in `exact_unit` display context. */
         let multi_unit_transaction = false;
         let multi_unit_distinct_unit_count: number | null = null;
+        frRuntimeDebug.fr_multi_unit_lookup_match_found = false;
+        frRuntimeDebug.fr_multi_unit_lookup_match_key = null;
+        frRuntimeDebug.fr_multi_unit_lookup_matched_key = null;
+        frRuntimeDebug.fr_multi_unit_helper_multi_unit = null;
+        frRuntimeDebug.fr_multi_unit_transaction_final = false;
         const frUnwrapBqMu = (v: unknown): unknown =>
           v && typeof v === "object" && !Array.isArray(v) && "value" in (v as object)
             ? (v as { value: unknown }).value
@@ -1288,8 +1346,8 @@ export async function GET(request: NextRequest) {
         const ltFinalMu = prFinalMu?.last_transaction as Record<string, unknown> | undefined;
         try {
           const muPostcode = String(postcodeNormForSource ?? "").trim();
-          const muCityMain = String(cityNormForSource || cityNorm || "").trim();
-          const muStreetNorm = String(streetNormForExactMatch || streetNormForSource || "").trim();
+          const muCityMain = String(cityNormForSource || cityNorm || "").trim().toUpperCase();
+          const muStreetNorm = String(streetNormForExactMatch || streetNormForSource || "").trim().toUpperCase();
           const muHouse = String(houseNumberNormForSource ?? "").trim();
           let rawPricePlf: number | null = null;
           if (frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw != null) {
@@ -1313,6 +1371,15 @@ export async function GET(request: NextRequest) {
           if (!saleDateIso && ltFinalMu?.date != null) {
             saleDateIso = frExtractDateStringFromRaw(ltFinalMu.date)?.slice(0, 10) ?? null;
           }
+          frRuntimeDebug.fr_multi_unit_lookup_match_key = [
+            muPostcode,
+            muCityMain,
+            muStreetNorm,
+            muHouse,
+            houseNumberNormForMatch || "",
+            saleDateIso ?? "",
+            rawPricePlf != null ? String(rawPricePlf) : "",
+          ].join("|");
           if (
             muPostcode.length > 0 &&
             muCityMain.length > 0 &&
@@ -1324,8 +1391,6 @@ export async function GET(request: NextRequest) {
             saleDateIso != null &&
             saleDateIso.length >= 10
           ) {
-            // Exact displayed transaction only: no LIKE / OR (city, street, house) or price tolerance — avoids
-            // matching another sale at the same building or a looser street/city match.
             const frMuHelperSql = `
 SELECT multi_unit_transaction, distinct_unit_count
 FROM \`streetiq-bigquery.streetiq_gold.france_multi_unit_transactions\`
@@ -1359,22 +1424,30 @@ LIMIT 1
               "france_multi_unit_transactions_lookup"
             );
             const muHit = muHelperRows?.[0];
+            frRuntimeDebug.fr_multi_unit_lookup_match_found = muHit != null;
             if (muHit) {
+              frRuntimeDebug.fr_multi_unit_lookup_matched_key = frRuntimeDebug.fr_multi_unit_lookup_match_key;
               const mut = muHit.multi_unit_transaction;
-              multi_unit_transaction = mut === true || mut === "true" || mut === 1;
+              const helperMut = mut === true || mut === "true" || mut === 1;
+              frRuntimeDebug.fr_multi_unit_helper_multi_unit = helperMut;
               const ducRaw = frUnwrapBqMu(muHit.distinct_unit_count);
               const duc =
                 typeof ducRaw === "number" && Number.isFinite(ducRaw)
                   ? ducRaw
                   : frParseNumericLoose(ducRaw);
-              multi_unit_distinct_unit_count =
-                duc != null && Number.isFinite(duc) ? Math.trunc(duc) : null;
+              const ducFin = duc != null && Number.isFinite(duc) ? Math.trunc(duc) : null;
+              const allowProductDisclosure = frDisplayContext === "exact_unit" && helperMut;
+              multi_unit_transaction = allowProductDisclosure;
+              multi_unit_distinct_unit_count = allowProductDisclosure ? ducFin : null;
             }
           }
         } catch {
           multi_unit_transaction = false;
           multi_unit_distinct_unit_count = null;
+          frRuntimeDebug.fr_multi_unit_lookup_match_found = false;
+          frRuntimeDebug.fr_multi_unit_helper_multi_unit = null;
         }
+        frRuntimeDebug.fr_multi_unit_transaction_final = multi_unit_transaction;
 
         return NextResponse.json(
           {
@@ -1958,93 +2031,44 @@ LIMIT 1
       // Independent of valuation, DVF results, or phase. Must run in no_result_state too.
       let unitFlagsRows: Array<Record<string, unknown>> = [];
       let unitFlagsMatchType: "strict" | "relaxed" | "none" = "none";
+      // Unified join keys for france_building_unit_flags (must match france_multi_unit_transactions + facts pipelines).
       const unitFlagsPostcodeNorm = String(postcodeNormForSource ?? "").trim();
       const unitFlagsCityNorm = String(cityNormForSource || cityNorm || "").trim().toUpperCase();
       const unitFlagsStreetNorm = String(streetNormForExactMatch || streetNormForSource || "").trim().toUpperCase();
       const unitFlagsHouseNorm = String(normHn(houseNumberNormForSource || "") || houseNumberNormForSource || "").trim().toUpperCase();
       const canRunUnitFlagsStrict = !!(unitFlagsPostcodeNorm && unitFlagsStreetNorm && unitFlagsHouseNorm);
-      const canRunUnitFlagsRelaxed = !!(unitFlagsPostcodeNorm && unitFlagsStreetNorm);
       const unitFlagsParams = {
         postcode_norm: unitFlagsPostcodeNorm,
         city_norm: unitFlagsCityNorm,
         street_norm_clean: unitFlagsStreetNorm,
         house_number_norm: unitFlagsHouseNorm,
       };
-      if (canRunUnitFlagsStrict || canRunUnitFlagsRelaxed) {
-        const unitFlagsStrictQuerySql = canRunUnitFlagsStrict
-          ? `
+      if (canRunUnitFlagsStrict) {
+        const unitFlagsStrictQuerySql = `
         SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm,
                distinct_unit_count, rows_count, has_unit_level_differentiation
         FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
-        WHERE TRIM(CAST(postcode_norm AS STRING)) = @postcode_norm
+        WHERE LPAD(TRIM(CAST(postcode_norm AS STRING)), 5, '0') = LPAD(TRIM(CAST(@postcode_norm AS STRING)), 5, '0')
           AND TRIM(UPPER(CAST(city_norm AS STRING))) = @city_norm
           AND TRIM(UPPER(CAST(street_norm_clean AS STRING))) = @street_norm_clean
           AND TRIM(UPPER(CAST(house_number_norm AS STRING))) = @house_number_norm
         LIMIT 1
-        `
-          : null;
-        const unitFlagsRelaxedQuerySql = canRunUnitFlagsRelaxed
-          ? `
-        SELECT postcode, city, street, house_number, postcode_norm, city_norm, street_norm_clean, house_number_norm,
-               distinct_unit_count, rows_count, has_unit_level_differentiation
-        FROM \`streetiq-bigquery.streetiq_gold.france_building_unit_flags\`
-        WHERE TRIM(CAST(postcode_norm AS STRING)) = @postcode_norm
-          AND TRIM(UPPER(CAST(city_norm AS STRING))) = @city_norm
-          AND TRIM(UPPER(CAST(street_norm_clean AS STRING))) = @street_norm_clean
-        ORDER BY distinct_unit_count DESC
-        LIMIT 5
-        `
-          : null;
+        `;
         try {
           frRuntimeDebug.building_unit_flags_query_executed = true;
-          if (unitFlagsStrictQuerySql) {
-            _frLog("[FR_UNIT_FLAGS] running_strict_always", unitFlagsParams);
-            const [strictResult] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-              { query: unitFlagsStrictQuerySql, params: unitFlagsParams, location: "EU" },
-              "france_building_unit_flags_strict_always"
-            );
-            unitFlagsRows = Array.isArray(strictResult) ? strictResult : [];
-            unitFlagsMatchType = unitFlagsRows.length > 0 ? "strict" : "none";
-          }
-          if (unitFlagsRows.length === 0 && unitFlagsRelaxedQuerySql) {
-            try {
-              const [relaxedResult] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
-                { query: unitFlagsRelaxedQuerySql, params: unitFlagsParams, location: "EU" },
-                "france_building_unit_flags_relaxed_always"
-              );
-              const relaxedRows = Array.isArray(relaxedResult) ? relaxedResult : [];
-              if (relaxedRows.length > 0) {
-                const hnTarget = normHn(houseNumberNormForSource || "");
-                const hnRaw = String(houseNumberNormForSource ?? "").trim().toUpperCase();
-                const pick =
-                  hnTarget.length > 0
-                    ? relaxedRows.find((row) => normHn(String(row.house_number ?? "")) === hnTarget) ??
-                      (hnRaw.length > 0
-                        ? relaxedRows.find(
-                            (row) => String(row.house_number ?? "").trim().toUpperCase() === hnRaw
-                          )
-                        : undefined)
-                    : undefined;
-                unitFlagsRows = [pick ?? relaxedRows[0]];
-                unitFlagsMatchType = "relaxed";
-                _frLog("[FR_UNIT_FLAGS] relaxed_match", { rows: relaxedRows.length });
-              }
-            } catch (e) {
-              _frLog("[FR_UNIT_FLAGS] relaxed_query_failed", (e as Error)?.message);
-            }
-          }
+          _frLog("[FR_UNIT_FLAGS] running_strict_normalized_keys", unitFlagsParams);
+          const [strictResult] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+            { query: unitFlagsStrictQuerySql, params: unitFlagsParams, location: "EU" },
+            "france_building_unit_flags_strict_always"
+          );
+          unitFlagsRows = Array.isArray(strictResult) ? strictResult : [];
+          unitFlagsMatchType = unitFlagsRows.length > 0 ? "strict" : "none";
           const unitFlagsRow = unitFlagsRows?.[0] ?? null;
           const buildingUnitFlagsMatchFound = unitFlagsRow != null;
-          const ducRaw = unitFlagsRow?.distinct_unit_count;
-          const ducParsed =
-            typeof ducRaw === "number" && Number.isFinite(ducRaw)
-              ? Math.trunc(ducRaw)
-              : parseInt(String(ducRaw ?? "").trim(), 10);
-          const ducMulti = Number.isFinite(ducParsed) && ducParsed >= 2;
           const flagColTrue =
             unitFlagsRow?.has_unit_level_differentiation === true ||
             unitFlagsRow?.has_unit_level_differentiation === "true";
-          const hasUnitLevelDiffFromTable = buildingUnitFlagsMatchFound && (flagColTrue || ducMulti);
+          const hasUnitLevelDiffFromTable = buildingUnitFlagsMatchFound && flagColTrue;
           const distinctUnitCountFromTable = buildingUnitFlagsMatchFound ? (Number(unitFlagsRow!.distinct_unit_count) || null) : null;
           frRuntimeDebug.building_unit_flags_match_found = buildingUnitFlagsMatchFound;
           frRuntimeDebug.building_unit_flags_match_type = unitFlagsMatchType;
@@ -2063,9 +2087,16 @@ LIMIT 1
           frRuntimeDebug.building_unit_flags_query_executed = true; // we attempted it
           unitFlagsRows = [];
           unitFlagsMatchType = "none";
+          frRuntimeDebug.building_unit_flags_match_found = false;
+          frRuntimeDebug.has_unit_level_differentiation = false;
+          frRuntimeDebug.distinct_unit_count = null;
         }
       } else {
         frRuntimeDebug.building_unit_flags_query_executed = false;
+        frRuntimeDebug.building_unit_flags_match_found = false;
+        frRuntimeDebug.building_unit_flags_match_type = "none";
+        frRuntimeDebug.has_unit_level_differentiation = false;
+        frRuntimeDebug.distinct_unit_count = null;
         _frLog("[FR_UNIT_FLAGS] skipped_no_address", { postcode: !!unitFlagsPostcodeNorm, street: !!unitFlagsStreetNorm, house: !!unitFlagsHouseNorm });
       }
 

@@ -97,6 +97,14 @@ export type PropertyValueInsightsResponse = {
   multi_unit_transaction?: boolean;
   /** France: distinct units from helper row (debug / transparency) */
   multi_unit_distinct_unit_count?: number | null;
+  /** France: product display tier from winning_step (exact_unit, exact_address, building_level, street_level, area_level). */
+  fr_display_context?:
+    | "exact_unit"
+    | "exact_address"
+    | "building_level"
+    | "street_level"
+    | "area_level"
+    | "unknown";
   unit_count?: number;
   uk_land_registry?: {
     building_average_price: number | null;
