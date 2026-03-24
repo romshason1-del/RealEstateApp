@@ -12,7 +12,8 @@
  *
  * Schema:
  *   country, city, postcode, street, house_number, unit_number,
- *   property_type, surface_m2, last_sale_price, last_sale_date, price_per_m2
+ *   property_type, surface_m2, last_sale_price, last_sale_date, price_per_m2,
+ *   document_id, mutation_group_key (DVF mutation fingerprint for multi-unit ETL)
  *
  * Money convention: last_sale_price and price_per_m2 in thousandths of euro (N ⇒ N/1000 €).
  * Preserves all rows; does not remove rows with missing surface_m2; does not deduplicate.
@@ -69,6 +70,13 @@ type RichSourceRow = {
   last_sale_price: number;
   last_sale_date: string | null;
   price_per_m2: number | null;
+  /** DVF "Identifiant de document" (col 0) when present. */
+  document_id: string | null;
+  /**
+   * Fingerprint of one DVF mutation: disposition, date, price, locality, parcel id.
+   * Rows sharing this key are the same official mutation (multi-lot sales stay grouped; unrelated sales rarely collide).
+   */
+  mutation_group_key: string;
 };
 
 /**
@@ -131,6 +139,20 @@ function dvfToRichRows(cols: string[]): RichSourceRow[] {
   const pricePerM2 =
     surfaceM2 != null && surfaceM2 > 0 ? Math.round((price / surfaceM2) * 1000) : null;
 
+  const docId = (cols[0] ?? "").trim() || null;
+  const mutationGroupKey = [
+    cols[7] ?? "",
+    cols[8] ?? "",
+    cols[10] ?? "",
+    cols[16] ?? "",
+    cols[17] ?? "",
+    cols[20] ?? "",
+    cols[21] ?? "",
+    cols[22] ?? "",
+  ]
+    .map((s) => String(s).trim())
+    .join("|");
+
   const lots = extractLotValues(cols);
   const base: Omit<RichSourceRow, "unit_number"> = {
     country: "FR",
@@ -143,6 +165,8 @@ function dvfToRichRows(cols: string[]): RichSourceRow[] {
     last_sale_date: dateStr,
     last_sale_price: lastSalePriceThousandths,
     price_per_m2: pricePerM2,
+    document_id: docId,
+    mutation_group_key: mutationGroupKey,
   };
 
   if (lots.length === 0) {
