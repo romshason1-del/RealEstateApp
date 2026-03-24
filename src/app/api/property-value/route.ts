@@ -1354,7 +1354,6 @@ SELECT COUNT(DISTINCT CASE
 
               const useExactWinAnchor =
                 String(frRuntimeDebug.winning_step ?? "") === "exact_unit" &&
-                String(frRuntimeDebug.fr_exact_source_layer ?? "") === "facts" &&
                 frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw != null;
 
               if (useExactWinAnchor) {
@@ -1456,6 +1455,7 @@ ${multiUnitBuildingWhere}
           }
           if (
             !multi_unit_transaction &&
+            String(frRuntimeDebug.winning_step ?? "") !== "exact_unit" &&
             amtFinal != null &&
             dateFinal != null &&
             dateFinal.length >= 10
@@ -4667,7 +4667,8 @@ ${multiUnitBuildingWhere}
           const exactUnitNum = (exactBest as any)?.unit_number;
           frRuntimeDebug.fr_source_unit_display =
             exactUnitNum != null && String(exactUnitNum).trim() ? `Apartment ${String(exactUnitNum).trim()}` : null;
-          if (isExactUnitTier && exactBest && frRuntimeDebug.fr_exact_source_layer === "facts") {
+          // Disclosure only: raw property_latest_facts scalars for multi_unit_transaction COUNT (never derive from last_transaction.amount).
+          if (isExactUnitTier && exactBest) {
             frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw = (exactBest as any).last_sale_price;
             frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw = (exactBest as any).last_sale_date;
           }
