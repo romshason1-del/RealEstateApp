@@ -276,7 +276,7 @@ export function FranceApartmentSheet({
     return s.trim().toUpperCase().replace(/^0+(?=[0-9])/, "") || s.trim().toUpperCase();
   }, []);
 
-  /** Single precision/basis line for France results (mutually exclusive by display_context). */
+  /** Second line only for exact_address (headline is already "Official record — address level"). */
   const standardContextExplanation = React.useMemo(() => {
     const dc = frDisplayContext;
     const fvDisp = (parsed as { fr_valuation_display?: { source_unit_display?: string | null } } | null)
@@ -305,22 +305,12 @@ export function FranceApartmentSheet({
       dc === "street_level" ||
       dc === "area_level";
 
-    if (dc === "exact_unit") return null;
     if (
       isAddressLevelOfficialRecord &&
       !displayContextBlocksAddrExplanation &&
       (noSourceUnitForUser || sourceDiffersFromRequested)
     ) {
       return "This is an address-level official record and may reflect multiple units.";
-    }
-    if (dc === "building_level") {
-      return "This estimate is based on recent sales within this building.";
-    }
-    if (dc === "street_level") {
-      return "This estimate is based on recent sales on this street.";
-    }
-    if (dc === "area_level") {
-      return "This estimate is based on similar properties in the surrounding area.";
     }
     return null;
   }, [
@@ -483,6 +473,7 @@ export function FranceApartmentSheet({
   }, [frDetectFinalClass, lotPromptGenuinelyRequired, shouldShowApartmentInput, hasSubmittedLotSearch, isLoading, frAddressFetchDone, effectiveData, backendShouldPromptLot, detectClassIsHouse]);
 
   const badge = React.useMemo(() => {
+    // building / street / area: primary context is a single headline string (no separate tier badge — avoids mixing labels).
     if (frDisplayContext && phase !== "initial_building_state" && phase !== "no_result_state") {
       if (frDisplayContext === "exact_unit") {
         return { label: "Official record — exact property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
@@ -490,14 +481,12 @@ export function FranceApartmentSheet({
       if (frDisplayContext === "exact_address") {
         return { label: "Official record — address level", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
       }
-      if (frDisplayContext === "building_level") {
-        return { label: "Building-level data", tone: "bg-teal-500/10 border-teal-500/25 text-teal-200" };
-      }
-      if (frDisplayContext === "street_level") {
-        return { label: "Street-level data", tone: "bg-sky-500/10 border-sky-500/25 text-sky-200" };
-      }
-      if (frDisplayContext === "area_level") {
-        return { label: "Area-level data", tone: "bg-sky-500/10 border-sky-500/25 text-sky-200" };
+      if (
+        frDisplayContext === "building_level" ||
+        frDisplayContext === "street_level" ||
+        frDisplayContext === "area_level"
+      ) {
+        return null;
       }
     }
     if (phase === "exact_apartment_match_state") {
@@ -832,9 +821,25 @@ export function FranceApartmentSheet({
         referenceSaleDateLabelFromRaw((pr as any)?.last_transaction?.date as unknown) ??
         referenceSaleDateLabelFromRaw(fvForDate?.last_sale_date as unknown);
 
+    const contextHeadline =
+      frDisplayContext === "building_level"
+        ? "This estimate is based on recent sales within this building."
+        : frDisplayContext === "street_level"
+          ? "This estimate is based on recent sales on this street."
+          : frDisplayContext === "area_level"
+            ? "This estimate is based on similar properties in the surrounding area."
+            : frDisplayContext === "exact_unit"
+              ? "Official record — exact property"
+              : frDisplayContext === "exact_address"
+                ? "Official record — address level"
+                : (frDisplayContext == null || frDisplayContext === "unknown") && normalized?.resultType === "exact_address"
+                  ? "Official record — address level"
+                  : null;
+
     const title = isLoadingNow
       ? "Fetching official records…"
-      : badge?.label ??
+      : contextHeadline ??
+        badge?.label ??
         (!fr
           ? "No result"
           : fr?.success === false
@@ -911,8 +916,15 @@ export function FranceApartmentSheet({
 
     const basedOnExplainer = (() => {
       if (isLoadingNow || isNoResult) return null;
-      if (frDisplayContext === "exact_unit") return null;
-      if (standardContextExplanation) return null;
+      if (
+        frDisplayContext === "exact_unit" ||
+        frDisplayContext === "exact_address" ||
+        frDisplayContext === "building_level" ||
+        frDisplayContext === "street_level" ||
+        frDisplayContext === "area_level"
+      ) {
+        return null;
+      }
       const ws = winningStepStr;
       if (ws === "exact_unit" || ws === "exact_address" || ws === "exact_house") return "Based on this property's recorded sale";
       if (ws === "exact_approximate" || ws === "building_level" || ws === "building_fallback" || ws === "building_similar_unit")
@@ -1176,9 +1188,19 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
-              {!isLoadingNow && !isNoResult && standardContextExplanation ? (
+              {!isLoadingNow &&
+              !isNoResult &&
+              standardContextExplanation &&
+              (frDisplayContext === "exact_address" ||
+                ((frDisplayContext == null || frDisplayContext === "unknown") && normalized?.resultType === "exact_address")) ? (
                 <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{standardContextExplanation}</div>
-              ) : !isLoadingNow && subtitle.trim() ? (
+              ) : !isLoadingNow &&
+                  subtitle.trim() &&
+                  frDisplayContext !== "building_level" &&
+                  frDisplayContext !== "street_level" &&
+                  frDisplayContext !== "area_level" &&
+                  frDisplayContext !== "exact_unit" &&
+                  frDisplayContext !== "exact_address" ? (
                 <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{subtitle}</div>
               ) : null}
             </div>
@@ -1245,12 +1267,8 @@ export function FranceApartmentSheet({
                     Based on ~{Math.round(fv.surface_m2_used)} m² ({fv.surface_source_label})
                   </div>
                 ) : null}
-                {!isLoadingNow && !isNoResult && (hasValue || ppm2Display != null) ? (
-                  <div className="mt-1 text-[10px] text-zinc-400/80">
-                    {fv?.source_unit_display?.trim()
-                      ? `Source unit: ${fv.source_unit_display.trim()}`
-                      : "Source: Building-level data"}
-                  </div>
+                {!isLoadingNow && !isNoResult && (hasValue || ppm2Display != null) && frDisplayContext === "exact_unit" && fv?.source_unit_display?.trim() ? (
+                  <div className="mt-1 text-[10px] text-zinc-400/80">Source unit: {fv.source_unit_display.trim()}</div>
                 ) : null}
                 {dataFreshnessYear != null && !isLoadingNow && !isNoResult ? (
                   <div className="mt-1.5 text-[10px] leading-snug text-zinc-500">
@@ -1272,7 +1290,9 @@ export function FranceApartmentSheet({
                     Transaction includes multiple units
                   </div>
                 ) : null}
-                {txMatchType !== "exact" && txSourceAddress && txSourceAddress.trim() ? (
+                {(frDisplayContext === "exact_unit" || frDisplayContext === "exact_address") &&
+                txSourceAddress &&
+                txSourceAddress.trim() ? (
                   <div className="mt-0.5 text-[11px] text-zinc-400/90">
                     Recorded at: {txSourceAddress}
                   </div>
