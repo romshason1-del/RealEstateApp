@@ -775,6 +775,20 @@ export async function GET(request: NextRequest) {
         /** Exact winning facts row (property_latest_facts): used only for multi_unit_transaction disclosure anchor. */
         fr_disclosure_anchor_last_sale_price_raw: null as unknown,
         fr_disclosure_anchor_last_sale_date_raw: null as unknown,
+        /** TEMP: multi_unit_transaction anchored COUNT path only (remove after diagnosis). */
+        fr_mu_outer_guard_passed: null as boolean | null,
+        fr_mu_inner_guard_passed: null as boolean | null,
+        fr_mu_anchor_last_sale_price_param: null as number | null,
+        fr_mu_anchor_sale_date_param: null as string | null,
+        fr_mu_base_postcode: null as string | null,
+        fr_mu_base_city: null as string | null,
+        fr_mu_base_street: null as string | null,
+        fr_mu_base_house_number: null as string | null,
+        fr_mu_count_query_executed: null as boolean | null,
+        fr_mu_count_query_error: null as string | null,
+        fr_mu_count_query_result_raw: null as unknown,
+        fr_mu_distinct_units_parsed: null as number | null,
+        fr_mu_final_flag: null as boolean | null,
       };
 
       frRuntimeDebug.fr_input_address_raw = fullRawAddress || (addressParam || rawInputAddress || "").trim() || null;
@@ -1336,7 +1350,15 @@ SELECT COUNT(DISTINCT CASE
           const n = frParseNumericLoose(raw);
           return n != null && Number.isFinite(n) ? n : NaN;
         };
-        if (pcForMu.length > 0 && hnForMu.length > 0 && streetNormForMu.length >= 2) {
+        const frMuOuterOk = pcForMu.length > 0 && hnForMu.length > 0 && streetNormForMu.length >= 2;
+        frRuntimeDebug.fr_mu_outer_guard_passed = frMuOuterOk;
+        frRuntimeDebug.fr_mu_base_postcode = pcForMu || null;
+        frRuntimeDebug.fr_mu_base_city = (cityNormForSource || cityNorm || "").trim() || null;
+        frRuntimeDebug.fr_mu_base_street = streetNormForMu || null;
+        frRuntimeDebug.fr_mu_base_house_number = hnForMu || null;
+        frRuntimeDebug.fr_mu_inner_guard_passed = false;
+        frRuntimeDebug.fr_mu_count_query_executed = false;
+        if (frMuOuterOk) {
           const baseParams = {
             country: country || "",
             city_main: cityNormForSource || cityNorm || "",
@@ -1421,6 +1443,9 @@ LIMIT 1
 
               if (ap != null && ap > 0 && anchorDateIso) {
                 const anchorLsp = Math.round(ap);
+                frRuntimeDebug.fr_mu_inner_guard_passed = true;
+                frRuntimeDebug.fr_mu_anchor_last_sale_price_param = anchorLsp;
+                frRuntimeDebug.fr_mu_anchor_sale_date_param = anchorDateIso;
                 const countByAnchorSql = `
 ${multiUnitCountSelect}
 ${multiUnitBuildingWhere}
@@ -1434,6 +1459,7 @@ ${multiUnitBuildingWhere}
     OR REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})') = @anchor_sale_date
   )
 `;
+                frRuntimeDebug.fr_mu_count_query_executed = true;
                 const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
                   {
                     query: countByAnchorSql.trim(),
@@ -1446,11 +1472,18 @@ ${multiUnitBuildingWhere}
                   },
                   "fr_multi_unit_transaction_disclosure_anchored"
                 );
-                const du = frMuReadDistinctUnits(muRows?.[0] as { distinct_units?: unknown });
+                const countRow = muRows?.[0] as { distinct_units?: unknown } | undefined;
+                frRuntimeDebug.fr_mu_count_query_result_raw =
+                  countRow != null ? { distinct_units: countRow.distinct_units } : null;
+                const du = frMuReadDistinctUnits(countRow);
+                frRuntimeDebug.fr_mu_distinct_units_parsed = Number.isFinite(du) ? du : null;
                 multi_unit_transaction = Number.isFinite(du) && du > 1;
+                frRuntimeDebug.fr_mu_final_flag = multi_unit_transaction;
               }
-            } catch {
+            } catch (err) {
               multi_unit_transaction = false;
+              frRuntimeDebug.fr_mu_count_query_error = err instanceof Error ? err.message : String(err);
+              frRuntimeDebug.fr_mu_final_flag = multi_unit_transaction;
             }
           }
           if (
