@@ -9,6 +9,7 @@ import {
   coerceConfidenceLabel,
   coerceDisplayString,
   coerceFiniteNumber,
+  coerceFranceDisplayDateString,
   coerceNullableString,
   coercePositiveNumber,
   formatFranceEuroPerSqmFromUnknown,
@@ -16,6 +17,38 @@ import {
   normalizeFrancePricePerSqmForDisplay,
   unwrapScalar,
 } from "@/lib/fr-display-safe";
+
+/** Map API livability enum to area-demand copy (wording only; logic unchanged). */
+function frAreaDemandLabelFromLivability(rating: string | null | undefined): string {
+  const u = String(rating ?? "").trim().toUpperCase();
+  if (u === "EXCELLENT" || u === "VERY GOOD" || u === "GOOD") return "High-demand area";
+  if (u === "FAIR") return "Medium-demand area";
+  if (u === "POOR") return "Low-demand area";
+  return "—";
+}
+
+function frDataFreshnessYearFromPayload(parsed: unknown, fv: unknown, pr: unknown, fr: unknown): number | null {
+  const p = parsed as Record<string, unknown> | null | undefined;
+  const fvRec = fv as Record<string, unknown> | null | undefined;
+  const prRec = pr as Record<string, unknown> | null | undefined;
+  const frRec = fr as Record<string, unknown> | null | undefined;
+  const lt = prRec?.last_transaction as Record<string, unknown> | undefined;
+  const iso =
+    coerceFranceDisplayDateString(p?.date_mutation) ??
+    coerceFranceDisplayDateString(fvRec?.last_sale_date) ??
+    coerceFranceDisplayDateString(lt?.date) ??
+    coerceFranceDisplayDateString((frRec?.property as Record<string, unknown> | undefined)?.transactionDate);
+  if (iso && /^\d{4}/.test(iso)) return Number.parseInt(iso.slice(0, 4), 10);
+  return null;
+}
+
+function frLastTransactionSuggestsMultiUnit(lt: unknown): boolean {
+  if (lt == null || typeof lt !== "object") return false;
+  const o = lt as Record<string, unknown>;
+  if (o.multi_lot === true || o.is_multi_lot === true || o.includes_multiple_units === true) return true;
+  if (String(o.multi_lot_flag ?? "").toLowerCase() === "true") return true;
+  return false;
+}
 
 type FranceSheetProps = {
   address: string;
@@ -25,6 +58,10 @@ type FranceSheetProps = {
   rawInputAddressForFrance?: string;
   currencySymbol?: string;
   onClose: () => void;
+  /** Optional: e.g. dismiss sheet so the user can pick another pin on the map */
+  onCompareNearby?: () => void;
+  /** Optional: e.g. dismiss sheet and focus address search */
+  onCheckAnotherProperty?: () => void;
 };
 
 /** API `fr_valuation_display` envelope (France property-value route). */
@@ -67,6 +104,8 @@ export function FranceApartmentSheet({
   rawInputAddressForFrance,
   currencySymbol: _currencySymbol = "€",
   onClose,
+  onCompareNearby,
+  onCheckAnotherProperty,
 }: FranceSheetProps) {
   const addressForApi = (typedAddressForFrance?.trim() || address?.trim() || "").trim();
   const rawForApi = (rawInputAddressForFrance?.trim() || typedAddressForFrance?.trim() || addressForApi || address?.trim() || "").trim();
@@ -383,18 +422,18 @@ export function FranceApartmentSheet({
   const badge = React.useMemo(() => {
     if (phase === "exact_apartment_match_state") {
       if (normalized?.resultType === "exact_house") {
-        return { label: "Exact house match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+        return { label: "Official record — this property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
       }
       if (normalized?.resultType === "exact_address") {
-        return { label: "Exact address match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+        return { label: "Official record — this address", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
       }
       return isHouseLikeUI
-        ? { label: "Exact house match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
-        : { label: "Exact apartment match", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+        ? { label: "Official record — this property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
+        : { label: "Official record — this unit", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
     }
     if (phase === "building_similar_match_state") {
       return {
-        label: "Similar apartments in this building",
+        label: "Estimate from this building",
         tone: "bg-teal-500/10 border-teal-500/25 text-teal-200",
       };
     }
@@ -402,42 +441,42 @@ export function FranceApartmentSheet({
       const rt = normalized?.resultType;
       if (rt === "similar_apartment_same_building") {
         return isHouseLikeUI
-          ? { label: "Similar house in this building", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
-          : { label: "Similar apartment in this building", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+          ? { label: "Comparable sale in this building", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
+          : { label: "Comparable sale in this building", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
       }
       if (rt === "nearby_comparable") {
         return isHouseLikeUI
-          ? { label: "Nearby comparable houses", tone: "bg-sky-500/10 border-sky-500/25 text-sky-200" }
-          : { label: "Nearby comparable", tone: "bg-sky-500/10 border-sky-500/25 text-sky-200" };
+          ? { label: "Based on nearby official sales", tone: "bg-sky-500/10 border-sky-500/25 text-sky-200" }
+          : { label: "Based on nearby official sales", tone: "bg-sky-500/10 border-sky-500/25 text-sky-200" };
       }
-      return { label: "Result", tone: "bg-amber-500/10 border-amber-500/25 text-amber-200" };
+      return { label: "Valuation ready", tone: "bg-amber-500/10 border-amber-500/25 text-amber-200" };
     }
     return null;
   }, [phase, normalized?.resultType, isHouseLikeUI]);
 
   const subtitle = React.useMemo(() => {
-    if (isHouseLikeUI) return "Showing the best available value for this single-unit property.";
+    if (isHouseLikeUI) return "Showing the strongest official value we can tie to this address.";
     if (isPropertyTypeUnknown && phase === "initial_building_state") {
-      return "Building data found. Enter a property / lot number (if applicable) for an exact match.";
+      return "We found this building. Add your unit number if you have one.";
     }
     if (phase === "initial_building_state") {
-      return "Building data found. Enter a property / lot number for an exact match.";
+      return "We found this building. Add your unit number for a tighter match.";
     }
     if (phase === "exact_apartment_match_state") {
       const lot = (requestedLot ?? lotInput).trim();
       if (normalized?.resultType === "exact_address") {
         return lot
-          ? `Matched address for lot ${lot}; unit not confirmed in government data — showing address-level record.`
-          : "Matched address; unit not confirmed in government data.";
+          ? `Address matches for unit ${lot}. Official records don’t list every unit separately — showing the address-level record.`
+          : "Address matches. Official records don’t list every unit separately.";
       }
-      if (isHouseLikeUI) return lot ? `Matched house / lot ${lot}` : "Matched house / lot";
-      return lot ? `Matched apartment / lot ${lot}` : "Matched apartment / lot";
+      if (isHouseLikeUI) return lot ? `Matched to your property (lot ${lot}).` : "Matched to your property.";
+      return lot ? `Matched to your unit (${lot}).` : "Matched to your unit.";
     }
     if (phase === "building_similar_match_state") {
       const lot = (requestedLot ?? "").trim();
       return lot
-        ? `No exact unit in registry for lot ${lot}. Estimate from similar apartments at this address.`
-        : "No exact unit in registry. Estimate from similar apartments at this address.";
+        ? `No separate registry line for unit ${lot}. Estimate uses similar sales in this building.`
+        : "No separate registry line for this unit. Estimate uses similar sales in this building.";
     }
     if (phase === "searched_no_exact_match_but_building_exists_state") {
       const lot = (requestedLot ?? "").trim();
@@ -445,44 +484,44 @@ export function FranceApartmentSheet({
       const ws = String((parsed as any)?.fr_runtime_debug?.winning_step ?? "").trim();
       if (ws === "street_fallback") {
         return lot
-          ? `No exact match for lot ${lot}. Estimates use similar properties on the same street.`
-          : "No exact lot match. Estimates use similar properties on the same street.";
+          ? `No unit-specific record for ${lot}. Estimate uses the same street.`
+          : "No unit-specific record. Estimate uses the same street.";
       }
       if (ws === "commune_fallback") {
         return lot
-          ? `No exact match for lot ${lot}. Estimates use similar properties in the same commune.`
-          : "No exact lot match. Estimates use similar properties in the same commune.";
+          ? `No unit-specific record for ${lot}. Estimate uses the wider area.`
+          : "No unit-specific record. Estimate uses the wider area.";
       }
       if (ws === "building_level" || ws === "building_fallback") {
         return lot
-          ? `No exact match for lot ${lot}. Estimates use similar properties in this building.`
-          : "No exact lot match. Estimates use similar properties in this building.";
+          ? `No unit-specific record for ${lot}. Estimate uses this building.`
+          : "No unit-specific record. Estimate uses this building.";
       }
       if (isHouseLikeUI) {
         if (rt === "similar_apartment_same_building" || rt === "nearby_comparable") {
           return lot
-            ? `No exact property match for lot ${lot}. Based on nearby property transactions.`
-            : "No exact property match. Based on nearby property transactions.";
+            ? `No exact match for lot ${lot}. Based on nearby official sales.`
+            : "No exact match. Based on nearby official sales.";
         }
         return lot
-          ? `No exact property match for lot ${lot} — showing building transaction data.`
-          : "No exact property match — showing building transaction data.";
+          ? `No exact match for lot ${lot}. Showing building-level official data.`
+          : "No exact match. Showing building-level official data.";
       }
       if (rt === "similar_apartment_same_building") {
         return lot
-          ? `No exact apartment match for lot ${lot} — showing the closest apartment in this building.`
-          : "No exact apartment match — showing the closest apartment in this building.";
+          ? `No exact unit for ${lot}. Showing the closest comparable in this building.`
+          : "No exact unit on file. Showing the closest comparable in this building.";
       }
       if (rt === "nearby_comparable") {
         return lot
-          ? `No exact apartment match for lot ${lot} — showing a similar nearby apartment.`
-          : "No exact apartment match — showing a similar nearby apartment.";
+          ? `No exact unit for ${lot}. Showing a nearby comparable.`
+          : "No exact unit on file. Showing a nearby comparable.";
       }
       return lot
-        ? `No exact apartment match for lot ${lot} — showing building transaction data.`
-        : "No exact apartment match — showing building transaction data.";
+        ? `No exact unit for ${lot}. Showing building-level official data.`
+        : "No exact unit on file. Showing building-level official data.";
     }
-    return isHouseLikeUI ? "No matching property or building transaction data found." : "No matching apartment or building transaction data found.";
+    return isHouseLikeUI ? "No official transaction tied to this address yet." : "No official transaction tied to this unit yet.";
   }, [phase, requestedLot, lotInput, normalized?.resultType, isHouseLikeUI, isPropertyTypeUnknown, parsed?.fr_runtime_debug]);
 
   const submit = React.useCallback((source: "enter" | "button") => {
@@ -703,17 +742,13 @@ export function FranceApartmentSheet({
         referenceSaleDateLabelFromRaw(fvForDate?.last_sale_date as unknown);
 
     const title = isLoadingNow
-      ? "Searching DVF…"
+      ? "Fetching official records…"
       : badge?.label ??
         (!fr
           ? "No result"
           : fr?.success === false
             ? "No result"
-            : "Result");
-    const explanation = isLoadingNow
-      ? ((requestedLot ?? "").trim() ? `Searching lot ${(requestedLot ?? "").trim()} for this address` : "Searching building data for this address")
-      : (subtitle || fr?.matchExplanation || null);
-
+            : "Valuation ready");
     const fv = (parsed as any)?.fr_valuation_display as FranceValuationDisplay | undefined;
     const topEstimated = coercePositiveNumber((parsed as any)?.estimated_value);
     const topPricePerM2 = coercePositiveNumber((parsed as any)?.price_per_m2);
@@ -890,18 +925,6 @@ export function FranceApartmentSheet({
       hasPricePerM2Headline && !hasValue && valueRange == null;
     const showEstimatedValueSubLabel = !isPricePerM2OnlyHeadline && (hasValue || valueRange != null);
 
-    const lastTxValue =
-      !isLoadingNow && !isNoResult ? coercePositiveNumber(fr?.property?.transactionValue as unknown) : null;
-    const estimatedEqualsLastTx =
-      !isLoadingNow &&
-      !isNoResult &&
-      !isSuspiciousFallback &&
-      valueRange == null &&
-      typeof rawValue === "number" &&
-      rawValue > 0 &&
-      lastTxValue != null &&
-      rawValue === lastTxValue;
-
     const displayPricePerSqm =
       !isLoadingNow && !isNoResult && !isSuspiciousFallback && ppm2Display != null ? ppm2Display : null;
 
@@ -931,12 +954,7 @@ export function FranceApartmentSheet({
 
     const txMatchType = (fv?.last_transaction_match_type ?? (pr as any)?.last_transaction?.match_type ?? "exact") as string;
     const txSourceAddress = fv?.last_transaction_source_address ?? (pr as any)?.last_transaction?.source_address;
-    const lastTransactionRowTitle =
-      txMatchType === "exact"
-        ? "Last transaction"
-        : txMatchType === "area_fallback"
-          ? "Last area transaction"
-          : "Last comparable transaction";
+    const lastTransactionSectionTitle = "Last official sale";
     const lastTransactionSummaryLine = (() => {
       if (isLoadingNow) return "—";
       const amt = lastTxAmountPositive;
@@ -944,20 +962,39 @@ export function FranceApartmentSheet({
       const hasUsableDate = referenceSaleValue != null && referenceSaleValue.trim().length > 0;
       if (fr?.resultType === "building_similar_unit" && !isNoResult && hasUsableAmount) {
         return hasUsableDate
-          ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`
-          : `${formatFranceEuroTotal(amt)}`;
+          ? `Last sold for ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`
+          : `Last sold for ${formatFranceEuroTotal(amt)}`;
       }
       if (hasUsableAmount && hasUsableDate) {
-        return `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
+        return `Last sold for ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}`;
       }
       if (hasUsableAmount) {
-        return hasUsableDate ? `${formatFranceEuroTotal(amt)} • ${referenceSaleValue}` : `${formatFranceEuroTotal(amt)}`;
+        return hasUsableDate ? `Last sold for ${formatFranceEuroTotal(amt)} • ${referenceSaleValue}` : `Last sold for ${formatFranceEuroTotal(amt)}`;
       }
       if (hasUsableDate) {
         return referenceSaleValue;
       }
-      return "No exact recent transaction available";
+      return "No recent sale on file";
     })();
+    const pctSinceLastSaleUi: { text: string; tone: "up" | "down" | "flat" } | null = (() => {
+      if (isLoadingNow || isNoResult || isSuspiciousFallback) return null;
+      if (!hasValue || typeof rawValue !== "number" || rawValue <= 0) return null;
+      const last = lastTxAmountPositive;
+      if (last == null || last <= 0) return null;
+      const pct = ((rawValue - last) / last) * 100;
+      if (!Number.isFinite(pct)) return null;
+      const abs = Math.abs(pct);
+      const decimals = abs >= 10 ? 0 : 1;
+      const rounded = Number(pct.toFixed(decimals));
+      if (Math.abs(pct) < 1) return { text: "About the same as last sale", tone: "flat" };
+      const sign = rounded > 0 ? "+" : "";
+      const t = `${sign}${rounded}% since last sale`;
+      if (rounded > 0) return { text: t, tone: "up" };
+      if (rounded < 0) return { text: t, tone: "down" };
+      return { text: "About the same as last sale", tone: "flat" };
+    })();
+    const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
+    const showMultiUnitTransactionNote = frLastTransactionSuggestsMultiUnit((pr as any)?.last_transaction);
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
@@ -967,7 +1004,9 @@ export function FranceApartmentSheet({
           ? streetAvgMsg
           : sourceLabel || (isNoResult ? "No reliable data found" : "—");
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
-    const livabilityText = isLoadingNow ? "—" : coerceDisplayString(legacy?.livabilityRating as unknown, "—");
+    const livabilityText = isLoadingNow
+      ? "—"
+      : frAreaDemandLabelFromLivability(coerceDisplayString(legacy?.livabilityRating as unknown, "") || null);
     // Reuse the exact gold token used by the Search button and active Explore icon.
     const goldTextClass = "text-amber-400";
     const frConfNorm = String(unwrapScalar(fr?.confidence as unknown) ?? "")
@@ -1004,9 +1043,9 @@ export function FranceApartmentSheet({
           <div
             className="pointer-events-auto shrink-0 rounded-[10px] border border-white/10 bg-[#0b0d10] shadow-md"
             style={{
-              width: 300,
-              maxWidth: 300,
-              padding: 8,
+              width: 320,
+              maxWidth: 320,
+              padding: 10,
             }}
           >
             {/* Row 1 – Header */}
@@ -1036,24 +1075,27 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
+              {!isLoadingNow && subtitle.trim() ? (
+                <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{subtitle}</div>
+              ) : null}
             </div>
 
             {/* Core summary – premium layout */}
             <div className="mt-1.5 space-y-[6px]">
               {/* 1) Estimated value – hero */}
-              <div className="rounded-[10px] border border-white/10 bg-black/20 p-2.5">
+              <div className="rounded-[10px] border border-amber-400/15 bg-gradient-to-b from-black/30 to-black/50 p-3 shadow-inner shadow-black/40">
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                      Estimated value
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] leading-tight text-zinc-400">
+                      Estimated True Value
                     </div>
                     <div
                       className={
                         isLoadingNow
-                          ? `mt-1 flex items-center gap-2 whitespace-nowrap text-[20px] font-medium leading-tight ${goldTextClass}`
+                          ? `mt-1.5 flex items-center gap-2 whitespace-nowrap text-[20px] font-medium leading-tight ${goldTextClass}`
                           : isNoResult
-                            ? "mt-1 text-sm font-semibold whitespace-nowrap leading-tight text-zinc-100"
-                            : `mt-1 text-[24px] sm:text-[26px] whitespace-nowrap font-bold leading-none ${goldTextClass}`
+                            ? "mt-1.5 text-sm font-semibold whitespace-nowrap leading-tight text-zinc-100"
+                            : `mt-1.5 text-[28px] sm:text-[30px] whitespace-nowrap font-bold leading-[1.05] tracking-tight ${goldTextClass}`
                       }
                     >
                       {isLoadingNow ? (
@@ -1066,6 +1108,22 @@ export function FranceApartmentSheet({
                           ? "No exact data found"
                           : mainValue)
                       )}
+                    </div>
+                    {pctSinceLastSaleUi != null && !isLoadingNow && !isNoResult ? (
+                      <div
+                        className={
+                          pctSinceLastSaleUi.tone === "up"
+                            ? "mt-1.5 text-[13px] font-semibold text-emerald-400"
+                            : pctSinceLastSaleUi.tone === "down"
+                              ? "mt-1.5 text-[13px] font-semibold text-rose-400"
+                              : "mt-1.5 text-[13px] font-semibold text-zinc-400"
+                        }
+                      >
+                        {pctSinceLastSaleUi.text}
+                      </div>
+                    ) : null}
+                    <div className="mt-2 text-[11px] font-medium leading-snug text-zinc-400/95">
+                      Data source: Official government records
                     </div>
                   </div>
                   {!isLoadingNow && !isNoResult ? (
@@ -1091,19 +1149,29 @@ export function FranceApartmentSheet({
                       : "Source: Building-level data"}
                   </div>
                 ) : null}
+                {dataFreshnessYear != null && !isLoadingNow && !isNoResult ? (
+                  <div className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+                    Data updated: {dataFreshnessYear}, may be delayed
+                  </div>
+                ) : null}
               </div>
 
-              {/* 2) Last transaction – minimal: title, amount•date, source only when not exact */}
+              {/* 2) Last transaction – human wording */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                 <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                  {lastTransactionRowTitle}
+                  {lastTransactionSectionTitle}
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
                 </div>
+                {showMultiUnitTransactionNote ? (
+                  <div className="mt-1 text-[11px] font-medium text-amber-200/90">
+                    Transaction includes multiple units
+                  </div>
+                ) : null}
                 {txMatchType !== "exact" && txSourceAddress && txSourceAddress.trim() ? (
                   <div className="mt-0.5 text-[11px] text-zinc-400/90">
-                    Source: {txSourceAddress}
+                    Recorded at: {txSourceAddress}
                   </div>
                 ) : null}
               </div>
@@ -1131,10 +1199,10 @@ export function FranceApartmentSheet({
                 </div>
               ) : null}
 
-              {/* 5) Livability */}
+              {/* 5) Area demand (wording only) */}
               <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
                 <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
-                  Livability
+                  Area demand
                 </div>
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
                 {(() => {
@@ -1143,14 +1211,14 @@ export function FranceApartmentSheet({
                   const liquidity = rd?.fr_area_liquidity as string | null | undefined;
                   if (!priceLevel && !trend && !liquidity) return null;
                   const parts: string[] = [];
-                  if (priceLevel === "premium") parts.push("Quartier premium");
-                  else if (priceLevel === "moderate") parts.push("Quartier modéré");
-                  else if (priceLevel === "affordable") parts.push("Quartier abordable");
-                  if (trend === "up") parts.push("prix en hausse");
-                  else if (trend === "down") parts.push("prix en baisse");
-                  else if (trend === "stable") parts.push("prix stable");
-                  if (liquidity === "high") parts.push("marché actif");
-                  else if (liquidity === "low") parts.push("peu de transactions");
+                  if (priceLevel === "premium") parts.push("Premium neighbourhood");
+                  else if (priceLevel === "moderate") parts.push("Mid-range neighbourhood");
+                  else if (priceLevel === "affordable") parts.push("More affordable neighbourhood");
+                  if (trend === "up") parts.push("Prices trending up");
+                  else if (trend === "down") parts.push("Prices trending down");
+                  else if (trend === "stable") parts.push("Prices stable");
+                  if (liquidity === "high") parts.push("Active market");
+                  else if (liquidity === "low") parts.push("Fewer transactions");
                   if (parts.length === 0) return null;
                   return (
                     <div className="mt-1.5 text-[11px] font-medium leading-tight text-zinc-400/90">
@@ -1159,6 +1227,26 @@ export function FranceApartmentSheet({
                   );
                 })()}
               </div>
+
+              {/* Re-engagement */}
+              {!isLoadingNow && !isNoResult ? (
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => (onCompareNearby ?? onClose)()}
+                    className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-zinc-100 transition-colors hover:border-amber-400/30 hover:bg-amber-400/10 hover:text-white"
+                  >
+                    Compare nearby
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => (onCheckAnotherProperty ?? onClose)()}
+                    className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-zinc-100 transition-colors hover:border-amber-400/30 hover:bg-amber-400/10 hover:text-white"
+                  >
+                    Check another property
+                  </button>
+                </div>
+              ) : null}
 
             </div>
 
@@ -1305,7 +1393,7 @@ export function FranceApartmentSheet({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="text-[11px] font-semibold tracking-wide text-amber-300">France DVF</div>
+                <div className="text-[11px] font-semibold tracking-wide text-amber-300">France · Official records</div>
               </div>
               <div className="mt-1 break-words text-[12px] font-medium text-white/90">{address}</div>
             </div>
