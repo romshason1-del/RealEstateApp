@@ -2496,11 +2496,6 @@ export const AddressExplorer = () => {
                 postcode={selectedBuilding.postcode}
                 currencySymbol={selectedBuilding.currencySymbol}
                 onClose={dismissSelectedBuilding}
-                onCompareNearby={dismissSelectedBuilding}
-                onCheckAnotherProperty={() => {
-                  dismissSelectedBuilding();
-                  window.setTimeout(() => searchInputRef.current?.focus(), 0);
-                }}
               />
             ) : (
               <PropertyValueCardSafe

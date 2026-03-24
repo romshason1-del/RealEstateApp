@@ -8,7 +8,6 @@ import type { FrancePropertyResponse } from "@/lib/france-response-contract";
 import {
   coerceConfidenceLabel,
   coerceDisplayString,
-  coerceFiniteNumber,
   coerceFranceDisplayDateString,
   coerceNullableString,
   coercePositiveNumber,
@@ -58,10 +57,6 @@ type FranceSheetProps = {
   rawInputAddressForFrance?: string;
   currencySymbol?: string;
   onClose: () => void;
-  /** Optional: e.g. dismiss sheet so the user can pick another pin on the map */
-  onCompareNearby?: () => void;
-  /** Optional: e.g. dismiss sheet and focus address search */
-  onCheckAnotherProperty?: () => void;
 };
 
 /** API `fr_valuation_display` envelope (France property-value route). */
@@ -104,8 +99,6 @@ export function FranceApartmentSheet({
   rawInputAddressForFrance,
   currencySymbol: _currencySymbol = "€",
   onClose,
-  onCompareNearby,
-  onCheckAnotherProperty,
 }: FranceSheetProps) {
   const addressForApi = (typedAddressForFrance?.trim() || address?.trim() || "").trim();
   const rawForApi = (rawInputAddressForFrance?.trim() || typedAddressForFrance?.trim() || addressForApi || address?.trim() || "").trim();
@@ -117,7 +110,6 @@ export function FranceApartmentSheet({
   const [keyboardInsetPx, setKeyboardInsetPx] = React.useState(0);
   const [hasSubmittedLotSearch, setHasSubmittedLotSearch] = React.useState(false);
   const [isResultCardOpen, setIsResultCardOpen] = React.useState(false);
-  const [isMoreDetailsOpen, setIsMoreDetailsOpen] = React.useState(false);
   const [resolvedForDisplay, setResolvedForDisplay] = React.useState<{
     fr: FrancePropertyResponse | null;
     legacy: { averageBuildingValue: number | null; livabilityRating?: string | null } | null;
@@ -147,7 +139,6 @@ export function FranceApartmentSheet({
     setLotInput("");
     setHasSubmittedLotSearch(false);
     setIsResultCardOpen(false);
-    setIsMoreDetailsOpen(false);
     setShowOptionalAptInput(false);
     setResolvedForDisplay(null);
     setIsExpanded(false);
@@ -337,9 +328,8 @@ export function FranceApartmentSheet({
     if (hasSubmittedLotSearch) setHasSubmittedLotSearch(false);
     if (isResultCardOpen) setIsResultCardOpen(false);
     if (resolvedForDisplay != null) setResolvedForDisplay(null);
-    if (isMoreDetailsOpen) setIsMoreDetailsOpen(false);
     if (isExpanded) setIsExpanded(false);
-  }, [isHouseDirectFlow, backendShouldPromptLot, detectClassIsHouse, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isMoreDetailsOpen, isExpanded]);
+  }, [isHouseDirectFlow, backendShouldPromptLot, detectClassIsHouse, resultCardBlocked, hasSubmittedLotSearch, isResultCardOpen, resolvedForDisplay, isExpanded]);
 
   const displayConfidence = React.useMemo(() => {
     return coerceConfidenceLabel(normalized?.confidence as unknown);
@@ -650,7 +640,7 @@ export function FranceApartmentSheet({
   const panelMaxHeightVh = isExpanded ? EXPANDED_MAX_VH : COMPACT_MAX_VH;
 
   // NOTE: do NOT memoize this portal node. We need immediate re-render on UI-only state
-  // changes like "More details" toggling (no waiting for a refetch).
+  // changes (no waiting for a refetch).
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
@@ -843,11 +833,6 @@ export function FranceApartmentSheet({
       !isLoadingNow &&
       !isSuspiciousFallback;
 
-    const transactionCountRaw =
-      !isLoadingNow ? coerceFiniteNumber(fr?.buildingStats?.transactionCount as unknown) : null;
-    const transactionCount =
-      transactionCountRaw != null && transactionCountRaw > 0 ? Math.round(transactionCountRaw) : null;
-
     const apiValueRange = (parsed as any)?.value_range ?? (data as any)?.value_range;
     const valueRange = (() => {
       if (isLoadingNow) return null;
@@ -949,8 +934,6 @@ export function FranceApartmentSheet({
         coercePositiveNumber((pr as any)?.last_transaction?.amount as unknown) ??
         coercePositiveNumber(fv?.last_sale_price as unknown)
       : null;
-
-    const dateText = isLoadingNow ? "—" : referenceSaleValue ?? "—";
 
     const txMatchType = (fv?.last_transaction_match_type ?? (pr as any)?.last_transaction?.match_type ?? "exact") as string;
     const txSourceAddress = fv?.last_transaction_source_address ?? (pr as any)?.last_transaction?.source_address;
@@ -1228,99 +1211,7 @@ export function FranceApartmentSheet({
                 })()}
               </div>
 
-              {/* Re-engagement */}
-              {!isLoadingNow && !isNoResult ? (
-                <div className="flex flex-wrap gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => (onCompareNearby ?? onClose)()}
-                    className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-zinc-100 transition-colors hover:border-amber-400/30 hover:bg-amber-400/10 hover:text-white"
-                  >
-                    Compare nearby
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => (onCheckAnotherProperty ?? onClose)()}
-                    className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-zinc-100 transition-colors hover:border-amber-400/30 hover:bg-amber-400/10 hover:text-white"
-                  >
-                    Check another property
-                  </button>
-                </div>
-              ) : null}
-
             </div>
-
-            {/* More details (collapsed by default) */}
-            {(
-              transactionCount ||
-              fr?.property?.pricePerSqm ||
-              fr?.property?.surfaceArea ||
-              fr?.property?.propertyType
-            ) ? (
-              <div className="mt-1.5" style={{ marginBottom: 0 }}>
-                <button
-                  type="button"
-                  onClick={() => setIsMoreDetailsOpen((v) => !v)}
-                  className="flex w-full items-center justify-between rounded-[10px] border border-white/10 bg-white/5 px-2.5 py-2 text-left"
-                  aria-expanded={isMoreDetailsOpen}
-                >
-                  <span className="text-xs font-semibold text-white/85">More details</span>
-                  <span className="text-xs font-semibold text-white/60">{isMoreDetailsOpen ? "Hide" : "Show"}</span>
-                </button>
-
-                {isMoreDetailsOpen ? (
-                  <div className="mt-1" />
-                ) : null}
-
-                <div
-                  className={[
-                    "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
-                    isMoreDetailsOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-                  ].join(" ")}
-                >
-                  <div className="overflow-hidden">
-                    <div className="mt-[6px] rounded-[10px] border border-zinc-500/15 bg-black/15 p-2">
-                      <div className="text-[10px] uppercase tracking-wider text-zinc-400/90">Additional details</div>
-                      <div className="mt-1 space-y-0.5 text-[10px] leading-tight text-zinc-200/80">
-                        {transactionCount ? (
-                          <div>Transactions: <span className="font-medium text-white">{transactionCount}</span></div>
-                        ) : null}
-                        {coercePositiveNumber(fr?.property?.surfaceArea as unknown) != null ? (
-                          <div>
-                            Surface:{" "}
-                            <span className="font-medium text-white">
-                              {coercePositiveNumber(fr?.property?.surfaceArea as unknown)} m²
-                            </span>
-                          </div>
-                        ) : null}
-                        {!isSuspiciousFallback && coercePositiveNumber(fr?.property?.pricePerSqm as unknown) != null ? (
-                          <div>
-                            Price/m²:{" "}
-                            <span className="font-medium text-white">
-                              {formatFranceEuroPerSqmFromUnknown(fr?.property?.pricePerSqm, { medianSuffix: false })}
-                            </span>
-                          </div>
-                        ) : null}
-                        {isSuspiciousFallback ? (
-                          <div>Price/m²: <span className="font-medium text-white">Suppressed (suspicious)</span></div>
-                        ) : null}
-                        {coerceDisplayString(fr?.property?.propertyType as unknown, "").trim() ? (
-                          <div>
-                            Property type:{" "}
-                            <span className="font-medium text-white">
-                              {coerceDisplayString(fr?.property?.propertyType as unknown, "—")}
-                            </span>
-                          </div>
-                        ) : null}
-                        {/* Secondary rows hidden by default */}
-                        <div>Date: <span className="font-medium text-white">{dateText}</span></div>
-                        <div>Confidence: <span className="font-medium text-white">{confidenceText}</span></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </div>
         </div>
       </div>,
