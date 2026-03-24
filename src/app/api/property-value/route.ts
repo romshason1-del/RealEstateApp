@@ -1309,9 +1309,9 @@ export async function GET(request: NextRequest) {
         const ltFinalMu = prFinalMu?.last_transaction as Record<string, unknown> | undefined;
         try {
           const muPostcode = String(postcodeNormForSource ?? "").trim();
-          const muCity = String(cityNormForSource || cityNorm || "").trim().toUpperCase();
-          const muStreet = String(streetNormForExactMatch || streetNormForSource || "").trim().toUpperCase();
-          const muHouse = String(houseNumberNormForSource ?? "").trim().toUpperCase();
+          const muCityMain = String(cityNormForSource || cityNorm || "").trim();
+          const muStreetNorm = String(streetNormForExactMatch || streetNormForSource || "").trim();
+          const muHouse = String(houseNumberNormForSource ?? "").trim();
           let rawPricePlf: number | null = null;
           if (frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw != null) {
             const p = frParseNumericLoose(frUnwrapBqMu(frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw));
@@ -1336,21 +1336,23 @@ export async function GET(request: NextRequest) {
           }
           if (
             muPostcode.length > 0 &&
-            muCity.length > 0 &&
-            muStreet.length >= 2 &&
+            muCityMain.length > 0 &&
+            muStreetNorm.length >= 2 &&
             muHouse.length > 0 &&
             rawPricePlf != null &&
             rawPricePlf > 0 &&
             saleDateIso != null &&
             saleDateIso.length >= 10
           ) {
+            // Same address predicates as property_latest_facts (not TRIM(UPPER(col)) = @param): helper rows
+            // store city/street like facts (e.g. arrondissement in city, voie in street) and would never match plain equality.
             const frMuHelperSql = `
 SELECT multi_unit_transaction, distinct_unit_count
 FROM \`streetiq-bigquery.streetiq_gold.france_multi_unit_transactions\`
-WHERE LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(@postcode), 5, '0')
-  AND TRIM(UPPER(CAST(city AS STRING))) = @city
-  AND TRIM(UPPER(CAST(street AS STRING))) = @street
-  AND TRIM(UPPER(CAST(house_number AS STRING))) = @house_number
+WHERE ${frBqPostcodeMatchSql}
+  AND ${frBqCityMatchSql}
+  AND ${frBqStreetMatchSql}
+  AND ${frBqHouseNumberMatchSql}
   AND DATE(last_sale_date) = PARSE_DATE('%Y-%m-%d', @sale_date_iso)
   AND SAFE_CAST(last_sale_price_raw AS INT64) = @last_sale_price_raw
 LIMIT 1
@@ -1359,10 +1361,13 @@ LIMIT 1
               {
                 query: frMuHelperSql.trim(),
                 params: {
-                  postcode: muPostcode,
-                  city: muCity,
-                  street: muStreet,
+                  country: country || "",
+                  city_main: muCityMain,
+                  postcode: postcodeNormForSource || "",
+                  street: streetNorm || "",
+                  street_normalized: muStreetNorm,
                   house_number: muHouse,
+                  house_number_norm: houseNumberNormForMatch || "",
                   sale_date_iso: saleDateIso,
                   last_sale_price_raw: rawPricePlf,
                 },
