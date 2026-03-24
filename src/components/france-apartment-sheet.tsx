@@ -732,11 +732,13 @@ export function FranceApartmentSheet({
     setIsExpanded(false);
   }, []);
 
+  // Do not tie to `shouldShowApartmentInput`: after a lot is submitted the API sets
+  // `fr_should_prompt_lot` false, so that flag would hide this button exactly when results show.
   const showCheckAnotherApartmentButton =
-    shouldShowApartmentInput &&
     hasSubmittedLotSearch &&
     !isHouseLikeUI &&
-    !isHouseDirectFlow;
+    !isHouseDirectFlow &&
+    (frDetectFinalClass === "apartment" || frDetectFinalClass === "unclear");
 
   // NOTE: do NOT memoize this portal node. We need immediate re-render on UI-only state
   // changes (no waiting for a refetch).
@@ -1169,7 +1171,7 @@ export function FranceApartmentSheet({
           }}
         >
           <div
-            className="pointer-events-auto shrink-0 rounded-[10px] border border-white/10 bg-[#0b0d10] shadow-md"
+            className="pointer-events-auto max-h-[min(72vh,560px)] shrink-0 overflow-y-auto overflow-x-hidden rounded-[10px] border border-white/10 bg-[#0b0d10] shadow-md"
             style={{
               width: 320,
               maxWidth: 320,
