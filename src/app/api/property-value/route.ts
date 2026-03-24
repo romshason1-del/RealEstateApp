@@ -1454,10 +1454,7 @@ ${multiUnitBuildingWhere}
     last_sale_price = @anchor_last_sale_price
     OR ABS(SAFE_CAST(last_sale_price AS FLOAT64) - CAST(@anchor_last_sale_price AS FLOAT64)) < 1.0
   )
-  AND (
-    FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)) = @anchor_sale_date
-    OR REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})') = @anchor_sale_date
-  )
+  AND FORMAT_DATE('%Y-%m-%d', DATE(TIMESTAMP(last_sale_date), "Europe/Paris")) = @anchor_sale_date
 `;
                 frRuntimeDebug.fr_mu_count_query_executed = true;
                 const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
