@@ -988,7 +988,28 @@ export function FranceApartmentSheet({
     const multi_unit_transaction: boolean | undefined =
       rawMultiUnit === true ? true : rawMultiUnit === false ? false : undefined;
     console.log("multi_unit_transaction:", multi_unit_transaction);
-    const showMultiUnitTransactionNote = multi_unit_transaction === true;
+    const normalizeLotCompareToken = (s: string) =>
+      s.trim().toUpperCase().replace(/^0+(?=[0-9])/, "") || s.trim().toUpperCase();
+    const sourceUnitLine = String(fv?.source_unit_display ?? "").trim();
+    const mSrc =
+      /(?:APARTMENT|APPART|APT|LOT|UNIT|N°|Nº|#)\s*([A-Z0-9]+)/i.exec(sourceUnitLine)?.[1] ??
+      /\b(\d{1,4})\s*$/i.exec(sourceUnitLine)?.[1] ??
+      "";
+    const reqLotLine = String(
+      (resolvedForDisplay?.fr as { requestedLot?: string } | null | undefined)?.requestedLot ??
+        requestedLot ??
+        ""
+    ).trim();
+    const reqTok = reqLotLine ? normalizeLotCompareToken(reqLotLine) : "";
+    const srcTok = mSrc ? normalizeLotCompareToken(mSrc) : "";
+    const sourceLotMismatchForDisclosure =
+      reqTok.length > 0 && srcTok.length > 0 && reqTok !== srcTok;
+    const displayedTransactionIsExactUnitWin =
+      winningStepStr === "exact_unit" && fr?.resultType === "exact_apartment";
+    const showMultiUnitTransactionNote =
+      multi_unit_transaction === true &&
+      displayedTransactionIsExactUnitWin &&
+      !sourceLotMismatchForDisclosure;
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
