@@ -979,7 +979,8 @@ export function FranceApartmentSheet({
       return { text: "The price is unchanged since the last transaction", tone: "flat" };
     })();
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
-    const showMultiUnitTransactionNote = (parsed as any)?.multi_unit_transaction === true;
+    // Only when API sets multi_unit_transaction === true (BigQuery helper france_multi_unit_transactions).
+    const showMultiUnitTransactionNote = (parsed as Record<string, unknown> | null)?.multi_unit_transaction === true;
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
@@ -1151,7 +1152,7 @@ export function FranceApartmentSheet({
                 </div>
                 {showMultiUnitTransactionNote ? (
                   <div className="mt-1 text-[11px] font-medium text-amber-200/90">
-                    This building contains multiple apartments. Prices may reflect combined or aggregated transactions.
+                    Transaction includes multiple units
                   </div>
                 ) : null}
                 {txMatchType !== "exact" && txSourceAddress && txSourceAddress.trim() ? (
