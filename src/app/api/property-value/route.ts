@@ -788,29 +788,17 @@ export async function GET(request: NextRequest) {
       const frReturn = async (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
-        // Source of truth: france_building_unit_flags table. House ALWAYS suppresses.
+        // Apartment/lot prompt: BigQuery `france_building_unit_flags.has_unit_level_differentiation` only (plus house lock).
         const buildingRowsCount = (frRuntimeDebug.building_rows_count as number) ?? 0;
         const buildingCandidatesCount = (frRuntimeDebug.building_similar_unit_candidates_count as number) ?? 0;
         const hasUnitLevelDiff = frRuntimeDebug.has_unit_level_differentiation === true;
         frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiff;
-        const payloadAsksForLot =
-          payload.multiple_units === true || payload.prompt_for_apartment === true;
-        const lowConfHeuristicNoPrompt =
-          propertyTypeFinal === "apartment" &&
-          propertyTypeSource === "heuristic_fallback" &&
-          propertyTypeConfidence === "low";
         const shouldPromptLotCanonical =
           propertyTypeFinal === "house"
             ? false
-            : lowConfHeuristicNoPrompt
+            : !hasUnitLevelDiff
               ? false
-              : !hasUnitLevelDiff
-                ? false
-                : !submittedLotPresent &&
-                  (payloadAsksForLot ||
-                    flowAsApartment ||
-                    buildingRowsCount > 0 ||
-                    buildingCandidatesCount > 0);
+              : !submittedLotPresent;
         frRuntimeDebug.fr_should_prompt_lot = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_prompt_visible = shouldPromptLotCanonical;
         frRuntimeDebug.fr_lot_submitted = submittedLotPresent;
@@ -1030,16 +1018,12 @@ export async function GET(request: NextRequest) {
         if (propertyTypeFinal === "house") {
           outPayload.multiple_units = false;
           outPayload.prompt_for_apartment = false;
-        } else if (propertyTypeFinal === "unknown") {
-          outPayload.prompt_for_apartment = shouldPromptLotCanonical && !submittedLotPresent;
-        } else if (lowConfHeuristicNoPrompt) {
-          outPayload.prompt_for_apartment = false;
+        } else if (!hasUnitLevelDiff) {
           outPayload.multiple_units = false;
-        }
-        // Unit prompt rule: never ask for apartment when no unit-level differentiation exists
-        if (!hasUnitLevelDiff) {
           outPayload.prompt_for_apartment = false;
-          outPayload.multiple_units = false;
+        } else {
+          outPayload.multiple_units = true;
+          outPayload.prompt_for_apartment = !submittedLotPresent;
         }
         if (needsLabelSafetyOverride || needsConfidenceDowngrade) {
           if (outPayload.fr && typeof outPayload.fr === "object") {
@@ -2813,16 +2797,13 @@ LIMIT 1
         multiUnitSource = apartmentEvidenceFromFacts ? "source" : isMultiUnitDetected ? "building_intel" : apartmentFromType ? "building_intel" : "none";
       }
       const flowAsApartment = detectClass === "apartment";
-      // Source of truth: france_building_unit_flags table. No heuristic overrides.
+      // Lot-first flow: only when BigQuery unit flags say this address has unit-level differentiation (house suppressed).
       const hasUnitLevelDiffFromFlags = frRuntimeDebug.has_unit_level_differentiation === true;
-      const shouldPromptLotInitial =
-        (flowAsApartment || isLikelyBuilding) &&
+      let shouldPromptLot =
+        propertyTypeFinal !== "house" &&
+        detectClass !== "house" &&
         !submittedLotPresent &&
-        (allowMultiUnitFromQueries || isLikelyBuilding) &&
         hasUnitLevelDiffFromFlags;
-      let shouldPromptLot = detectClass !== "house" && shouldPromptLotInitial;
-      // Low-confidence heuristic apartment with no strict DVF must never trigger apartment prompt
-      if (lowConfHeuristicApartmentNoStrict) shouldPromptLot = false;
 
       const apartmentEvidenceDesc =
         apartmentEvidenceFromFacts ? "multi_lot_or_appartement_from_facts"
@@ -6605,19 +6586,11 @@ LIMIT 1
       // Source of truth: france_building_unit_flags (set earlier from lookup)
       const hasUnitLevelDiffNoData = frRuntimeDebug.has_unit_level_differentiation === true;
       frRuntimeDebug.has_unit_level_differentiation = hasUnitLevelDiffNoData;
-      const lowConfHeuristicNoPromptHere =
-        propertyTypeFinal === "apartment" &&
-        propertyTypeSource === "heuristic_fallback" &&
-        propertyTypeConfidence === "low";
       const shouldPromptLotFromBuilding =
         hasUnitLevelDiffNoData &&
-        !lowConfHeuristicNoPromptHere &&
+        propertyTypeFinal !== "house" &&
         detectClass !== "house" &&
-        !submittedLotPresent &&
-        (flowAsApartment ||
-          isLikelyBuilding ||
-          buildingRowsCount > 0 ||
-          buildingCandidatesCount > 0);
+        !submittedLotPresent;
       if (shouldPromptLotFromBuilding) {
         frRuntimeDebug.fr_should_prompt_lot = true;
         _frLog("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
