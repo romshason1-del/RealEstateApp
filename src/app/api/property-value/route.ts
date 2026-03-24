@@ -1339,21 +1339,25 @@ export async function GET(request: NextRequest) {
             muCityMain.length > 0 &&
             muStreetNorm.length >= 2 &&
             muHouse.length > 0 &&
+            (houseNumberNormForMatch ?? "").length > 0 &&
             rawPricePlf != null &&
             rawPricePlf > 0 &&
             saleDateIso != null &&
             saleDateIso.length >= 10
           ) {
-            // Same address predicates as property_latest_facts (not TRIM(UPPER(col)) = @param): helper rows
-            // store city/street like facts (e.g. arrondissement in city, voie in street) and would never match plain equality.
+            // Exact displayed transaction only: no LIKE / OR (city, street, house) or price tolerance — avoids
+            // matching another sale at the same building or a looser street/city match.
             const frMuHelperSql = `
 SELECT multi_unit_transaction, distinct_unit_count
 FROM \`streetiq-bigquery.streetiq_gold.france_multi_unit_transactions\`
 WHERE ${frBqPostcodeMatchSql}
-  AND ${frBqCityMatchSql}
-  AND ${frBqStreetMatchSql}
-  AND ${frBqHouseNumberMatchSql}
-  AND DATE(last_sale_date) = PARSE_DATE('%Y-%m-%d', @sale_date_iso)
+  AND (${frBqCityNormalizedExpr} = UPPER(TRIM(@city_main)))
+  AND (${frBqStreetNormalizedExpr} = TRIM(@street_normalized))
+  AND (
+    TRIM(CAST(house_number AS STRING)) = TRIM(CAST(@house_number AS STRING))
+    AND REGEXP_REPLACE(REGEXP_REPLACE(UPPER(TRIM(CAST(house_number AS STRING))), r'\\s+', ''), r'[^0-9A-Z]', '') = @house_number_norm
+  )
+  AND FORMAT_DATE('%Y-%m-%d', DATE(TIMESTAMP(last_sale_date), "Europe/Paris")) = @sale_date_iso
   AND SAFE_CAST(last_sale_price_raw AS INT64) = @last_sale_price_raw
 LIMIT 1
 `;
