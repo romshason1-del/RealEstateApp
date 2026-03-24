@@ -740,24 +740,58 @@ export function FranceApartmentSheet({
     !isHouseDirectFlow &&
     (frDetectFinalClass === "apartment" || frDetectFinalClass === "unclear");
 
+  // TEMP QA: remove after debugging "Check another apartment" visibility
+  console.log("CHECK BUTTON DEBUG", {
+    hasSubmittedLotSearch,
+    frDetectFinalClass,
+    isHouseLikeUI,
+    isHouseDirectFlow,
+    showCheckAnotherApartmentButton,
+  });
+
   // NOTE: do NOT memoize this portal node. We need immediate re-render on UI-only state
   // changes (no waiting for a refetch).
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
-    if (!isResultCardOpen) return null;
+    if (!isResultCardOpen) {
+      console.log("CHECK BUTTON DEBUG PORTAL_SKIPPED", { reason: "!isResultCardOpen", isResultCardOpen });
+      return null;
+    }
 
     const houseFlowActive = isHouseDirectFlow;
     const apartmentBlockActiveNow = apartmentBlockActive;
 
-    if (apartmentBlockActiveNow) return null;
+    if (apartmentBlockActiveNow) {
+      console.log("CHECK BUTTON DEBUG PORTAL_SKIPPED", {
+        reason: "apartmentBlockActive",
+        apartmentBlockActiveNow,
+        hasSubmittedLotSearch,
+      });
+      return null;
+    }
 
     const showForHouseOrDirect = houseFlowActive && (frAddressFetchDone || isLoading);
     const showForApartment = hasSubmittedLotSearch || (isLoading && frDetectFinalClass === "apartment");
     const showForNonLotFlow = frAddressFetchDone && effectiveData && frDetectFinalClass !== "apartment";
 
     if (!showForHouseOrDirect && !showForApartment && !showForNonLotFlow) {
+      console.log("CHECK BUTTON DEBUG PORTAL_SKIPPED", {
+        reason: "show gates",
+        isResultCardOpen,
+        showForHouseOrDirect,
+        showForApartment,
+        showForNonLotFlow,
+        hasSubmittedLotSearch,
+        apartmentBlockActiveNow,
+      });
       return null;
     }
+
+    console.log("CHECK BUTTON DEBUG PORTAL_RENDER", {
+      showForApartment,
+      hasSubmittedLotSearch,
+      isLoading,
+    });
 
     const isLoadingNow = isLoading;
     const fr = resolvedForDisplay?.fr ?? normalized ?? null;
@@ -1371,6 +1405,29 @@ export function FranceApartmentSheet({
                   );
                 })()}
               </div>
+
+              {/* TEMP QA: visible state — remove after debugging */}
+              <div className="mt-2 break-all rounded border border-rose-500/40 bg-rose-950/40 px-2 py-1.5 text-[9px] leading-tight text-rose-200">
+                DEBUG BUTTON STATE:{" "}
+                {JSON.stringify({
+                  hasSubmittedLotSearch,
+                  frDetectFinalClass,
+                  showCheckAnotherApartmentButton,
+                })}
+              </div>
+
+              {/* TEMP QA: force-render — if this never appears, portal/card is not mounted or is off-screen */}
+              {true ? (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={resetToApartmentPrompt}
+                    className="w-full rounded-lg border-2 border-rose-400 bg-rose-500/20 py-2 text-center text-[12px] font-bold text-rose-100"
+                  >
+                    Check another apartment (FORCED)
+                  </button>
+                </div>
+              ) : null}
 
               {showCheckAnotherApartmentButton && !isLoadingNow ? (
                 <div className="mt-1 border-t border-white/10 pt-2">
