@@ -1098,16 +1098,15 @@ export function FranceApartmentSheet({
       return { text: "The price is unchanged since the last transaction", tone: "flat" };
     })();
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
-    // Root field from `/api/property-value` — must not use `parsed`/`effectiveData` alone (sticky building
-    // payload can win priority and carry the wrong flag vs the latest fetch or frozen `resolvedForDisplay`).
-    const rawMultiUnit =
-      resolvedForDisplay != null
-        ? resolvedForDisplay.multi_unit_transaction
-        : (data as Record<string, unknown> | undefined)?.multi_unit_transaction;
-    const multi_unit_transaction: boolean | undefined =
-      rawMultiUnit === true ? true : rawMultiUnit === false ? false : undefined;
-    // API sets this only when france_multi_unit_transactions exact-matches AND fr_display_context === exact_unit.
-    const showMultiUnitTransactionNote = multi_unit_transaction === true;
+    // "Transaction includes multiple units" must follow ONLY `multi_unit_transaction === true` on the
+    // settled response. While `isLoading` is true, React Query still holds the previous `data` — never read
+    // `multi_unit_transaction` from `data` during loading (stale note + "Searching..." flash).
+    const showMultiUnitTransactionNote =
+      !isLoadingNow &&
+      (resolvedForDisplay != null
+        ? resolvedForDisplay.multi_unit_transaction === true
+        : data != null &&
+          (data as Record<string, unknown>).multi_unit_transaction === true);
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
