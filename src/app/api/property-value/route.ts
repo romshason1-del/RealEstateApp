@@ -1333,7 +1333,7 @@ export async function GET(request: NextRequest) {
           pr.livability_rating = derived;
         }
 
-        /** Read-only disclosure: `france_multi_unit_transactions` row keyed by address + sale date + price; exact_unit uses helper boolean; building_level uses distinct_unit_count > 1. */
+        /** Read-only disclosure: `france_multi_unit_transactions` row keyed by address + sale date + price. Both exact_unit and building_level require helper `multi_unit_transaction` (prefer false; do not infer from distinct_unit_count alone). */
         let multi_unit_transaction = false;
         let multi_unit_distinct_unit_count: number | null = null;
         frRuntimeDebug.fr_multi_unit_lookup_match_found = false;
@@ -1450,6 +1450,7 @@ LIMIT 1
               const exactUnitDisclosure = frDisplayContext === "exact_unit" && helperMut;
               const buildingLevelMultiUnitDisclosure =
                 frDisplayContext === "building_level" &&
+                helperMut &&
                 ducFin != null &&
                 ducFin > 1;
               frRuntimeDebug.fr_multi_unit_building_level_disclosure = buildingLevelMultiUnitDisclosure;
