@@ -106,6 +106,8 @@ export function FranceApartmentSheet({
     fr: FrancePropertyResponse | null;
     legacy: { averageBuildingValue: number | null; livabilityRating?: string | null } | null;
     fr_runtime_debug?: Record<string, unknown> | null;
+    /** Same API response as `fr` — avoids stale `effectiveData` hiding/showing the wrong note */
+    multi_unit_transaction?: boolean;
   } | null>(null);
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [showOptionalAptInput, setShowOptionalAptInput] = React.useState(false);
@@ -587,6 +589,7 @@ export function FranceApartmentSheet({
       fr,
       legacy: { averageBuildingValue, livabilityRating: legacyLivability },
       fr_runtime_debug: runtimeDebug,
+      multi_unit_transaction: (parsed as Record<string, unknown> | undefined)?.multi_unit_transaction as boolean | undefined,
     });
   }, [
     isResultCardOpen,
@@ -979,8 +982,14 @@ export function FranceApartmentSheet({
       return { text: "The price is unchanged since the last transaction", tone: "flat" };
     })();
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
-    // Only when API sets multi_unit_transaction === true (BigQuery helper france_multi_unit_transactions).
-    const showMultiUnitTransactionNote = (parsed as Record<string, unknown> | null)?.multi_unit_transaction === true;
+    // Root field from `/api/property-value` — must not use `parsed`/`effectiveData` alone (sticky building
+    // payload can win priority and carry the wrong flag vs the latest fetch or frozen `resolvedForDisplay`).
+    const multi_unit_transaction: boolean | undefined =
+      resolvedForDisplay != null
+        ? resolvedForDisplay.multi_unit_transaction
+        : (data as Record<string, unknown> | undefined)?.multi_unit_transaction;
+    console.log("multi_unit_transaction:", multi_unit_transaction);
+    const showMultiUnitTransactionNote = multi_unit_transaction === true;
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
