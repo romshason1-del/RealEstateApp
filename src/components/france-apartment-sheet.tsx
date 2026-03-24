@@ -722,6 +722,22 @@ export function FranceApartmentSheet({
   const EXPANDED_MAX_VH = 70;
   const panelMaxHeightVh = isExpanded ? EXPANDED_MAX_VH : COMPACT_MAX_VH;
 
+  /** Same-address only: clear unit/lot UI state; do not bump `trigger` or alter address. */
+  const resetToApartmentPrompt = React.useCallback(() => {
+    setRequestedLot(undefined);
+    setLotInput("");
+    setHasSubmittedLotSearch(false);
+    setIsResultCardOpen(false);
+    setResolvedForDisplay(null);
+    setIsExpanded(false);
+  }, []);
+
+  const showCheckAnotherApartmentButton =
+    shouldShowApartmentInput &&
+    hasSubmittedLotSearch &&
+    !isHouseLikeUI &&
+    !isHouseDirectFlow;
+
   // NOTE: do NOT memoize this portal node. We need immediate re-render on UI-only state
   // changes (no waiting for a refetch).
   const resultCardNode = (() => {
@@ -1354,6 +1370,18 @@ export function FranceApartmentSheet({
                 })()}
               </div>
 
+              {showCheckAnotherApartmentButton && !isLoadingNow ? (
+                <div className="mt-1 border-t border-white/10 pt-2">
+                  <button
+                    type="button"
+                    onClick={resetToApartmentPrompt}
+                    className="w-full rounded-lg border border-white/15 bg-white/5 py-2 text-center text-[12px] font-medium text-zinc-200 hover:border-amber-400/30 hover:bg-white/10"
+                  >
+                    Check another apartment
+                  </button>
+                </div>
+              ) : null}
+
             </div>
           </div>
         </div>
@@ -1464,7 +1492,9 @@ export function FranceApartmentSheet({
 
           {lotPromptVisible ? (
             <div className="mt-3 rounded-xl border border-zinc-500/20 bg-black/35 px-3 py-2.5">
-              <div className="text-[10px] font-medium text-zinc-400">Apartment / lot number</div>
+              <div className="text-[10px] font-medium text-zinc-400">
+                {!hasSubmittedLotSearch ? "What's your apartment number?" : "Apartment / lot number"}
+              </div>
               <div className="mt-2 flex gap-2">
                 <input
                   type="text"
