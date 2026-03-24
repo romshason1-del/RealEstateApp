@@ -75,7 +75,8 @@ function frLastTransactionPayload(
   date: string | null,
   matchType: "exact" | "same_building_similar_unit" | "same_street_similar_house" | "nearby_similar_house" | "area_fallback",
   sourceAddress?: string | null,
-  messageOverride?: string | null
+  messageOverride?: string | null,
+  disclosureOverride?: string | null
 ): { amount: number; date: string | null; message?: string | null; match_type: string; disclosure: string; source_address?: string | null } {
   const disclosures: Record<string, string> = {
     exact: "Exact transaction for this property",
@@ -90,7 +91,7 @@ function frLastTransactionPayload(
     date,
     message: message ?? undefined,
     match_type: matchType,
-    disclosure: disclosures[matchType] ?? "Official DVF transaction",
+    disclosure: disclosureOverride ?? disclosures[matchType] ?? "Official DVF transaction",
     source_address: sourceAddress ?? null,
   };
 }
@@ -1491,13 +1492,13 @@ LIMIT 1
           .replace(/\s+/g, " ")
           .trim();
 
-        const prefixes = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "CHE", "ROUTE", "IMPASSE", "IMP", "ALLEE", "ALL", "PLACE", "PL", "SQUARE", "SQ", "SENTE", "COURS", "PROMENADE", "PROM"];
+        const prefixes = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "CHE", "ROUTE", "IMPASSE", "IMP", "ALLEE", "ALL", "PLACE", "PL", "SQUARE", "SQ", "SENTE", "COURS", "PROMENADE", "PROM", "QUAI"];
         const prefixRegex = new RegExp(`^(?:${prefixes.join("|")})\\.?\\s+`, "i");
         const cleaned = unified.replace(prefixRegex, "").replace(/\s+/g, " ").trim();
         return cleaned;
       };
 
-      const STREET_TYPES = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "CHE", "ROUTE", "IMPASSE", "IMP", "ALLEE", "ALL", "PLACE", "PL", "SQUARE", "SQ", "SENTE", "COURS", "PROMENADE", "PROM"];
+      const STREET_TYPES = ["RUE", "AVENUE", "AV", "BD", "BOULEVARD", "CHEMIN", "CHE", "ROUTE", "IMPASSE", "IMP", "ALLEE", "ALL", "PLACE", "PL", "SQUARE", "SQ", "SENTE", "COURS", "PROMENADE", "PROM", "QUAI"];
       const STOPWORDS = ["DE", "DU", "DES", "DE LA", "DE L", "LA", "LE", "LES"];
       const parseStreetForComparison = (raw: string): { type: string; core: string; coreTokens: string[] } => {
         const unified = (raw || "")
@@ -1516,7 +1517,7 @@ LIMIT 1
         const typeRegex = new RegExp(`^(${STREET_TYPES.join("|")})\\.?\\s+`, "i");
         const tm = rest.match(typeRegex);
         if (tm) {
-          type = tm[1].toUpperCase().replace(/^CHE$/, "CHEMIN").replace(/^IMP$/, "IMPASSE").replace(/^AV$/, "AVENUE").replace(/^BD$/, "BOULEVARD").replace(/^ALL$/, "ALLEE").replace(/^PL$/, "PLACE").replace(/^SQ$/, "SQUARE").replace(/^PROM$/, "PROMENADE");
+          type = tm[1].toUpperCase().replace(/^CHE$/, "CHEMIN").replace(/^IMP$/, "IMPASSE").replace(/^AV$/, "AVENUE").replace(/^BD$/, "BOULEVARD").replace(/^ALL$/, "ALLEE").replace(/^PL$/, "PLACE").replace(/^SQ$/, "SQUARE").replace(/^PROM$/, "PROMENADE").replace(/^QUAI$/, "QUAI");
           rest = rest.slice(tm[0].length).trim();
         }
         for (const sw of STOPWORDS) {
@@ -1526,6 +1527,35 @@ LIMIT 1
         const coreTokens = rest.split(/\s+/).filter(Boolean);
         return { type, core: rest, coreTokens };
       };
+
+      /** Building-level labelling only: same place name (core tokens) but different voie type (e.g. RUE vs QUAI). */
+      const frVoieTypeDiffersSameCore = (userStreet: string, recordStreet: string): boolean => {
+        const u = parseStreetForComparison(userStreet || "");
+        const r = parseStreetForComparison(recordStreet || "");
+        if (!u.type || !r.type || u.type === r.type) return false;
+        if (!u.coreTokens.length || !r.coreTokens.length) return false;
+        const uSet = new Set(u.coreTokens);
+        const rSet = new Set(r.coreTokens);
+        const overlap = [...uSet].filter((t) => rSet.has(t)).length;
+        const minCore = Math.min(uSet.size, rSet.size);
+        return minCore > 0 && overlap >= minCore;
+      };
+
+      /** Append clarification when official record street wording differs from user search (no valuation impact). */
+      const frClarifyBuildingRecordSourceAddress = (
+        formattedAddress: string | null,
+        userStreetRaw: string,
+        recordStreetRaw: string
+      ): string | null => {
+        const u = (userStreetRaw || "").trim();
+        const rec = (recordStreetRaw || "").trim();
+        if (!formattedAddress?.trim() || !u || !rec) return formattedAddress;
+        if (!frVoieTypeDiffersSameCore(u, rec)) return formattedAddress;
+        return (
+          `${formattedAddress} — Official listing uses a different street designation than you searched (same number and postcode in government data).`
+        );
+      };
+
       const scoreStreetSimilarity = (
         typedStreetRaw: string,
         candidateStreetRaw: string
@@ -3821,7 +3851,8 @@ LIMIT 1
             last_sale_price,
             last_sale_date,
             property_type,
-            house_number${lotColSel}
+            house_number,
+            street${lotColSel}
           FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -3886,7 +3917,8 @@ LIMIT 1
               last_sale_price,
               last_sale_date,
               property_type,
-              house_number${lotColSel}
+              house_number,
+              street${lotColSel}
             FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
             WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
               AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -3912,7 +3944,7 @@ LIMIT 1
             try {
               const richSourceBuildingParams = { ...similarParams, street_core: streetCoreForRichSource };
               const richSourceBuildingQuery = `
-                SELECT surface_m2, price_per_m2, last_sale_price, last_sale_date, property_type, house_number, unit_number AS lot_col
+                SELECT surface_m2, price_per_m2, last_sale_price, last_sale_date, property_type, house_number, street, unit_number AS lot_col
                 FROM \`streetiq-bigquery.streetiq_gold.france_dvf_rich_source\`
                 WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
                   AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -4118,6 +4150,15 @@ LIMIT 1
             winningSourceLabel: FR_LABEL_BUILDING_SIMILAR_UNIT,
           });
 
+          const bsuRecordSt = String((best.raw as any)?.street ?? "").trim() || streetNorm;
+          const bsuRecordHn = String((best.raw as any)?.house_number ?? "").trim() || houseNumberNorm;
+          const bsuBaseAddr = frFormatSourceAddress(bsuRecordHn, bsuRecordSt, postcodeNormForSource, cityNorm);
+          const bsuSourceAddr = frClarifyBuildingRecordSourceAddress(bsuBaseAddr, streetParsed, bsuRecordSt);
+          const bsuVoieDisclosure =
+            streetParsed.trim() && bsuRecordSt && frVoieTypeDiffersSameCore(streetParsed, bsuRecordSt)
+              ? "Latest transaction from official records for this number and postcode — street name differs from your search (same general location in government data)."
+              : undefined;
+
           return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
@@ -4134,13 +4175,9 @@ LIMIT 1
                   best.lastSaleEuro,
                   best.dateStr,
                   "same_building_similar_unit",
-                  frFormatSourceAddress(
-                    (best.raw as any)?.house_number ?? houseNumberNorm,
-                    streetNorm,
-                    postcodeNormForSource,
-                    cityNorm
-                  ),
-                  best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row"
+                  bsuSourceAddr,
+                  best.lastSaleEuro > 0 ? undefined : "No recorded sale amount for selected comparable row",
+                  bsuVoieDisclosure
                 ),
                 street_average: ppmForEstimate > 0 ? ppmForEstimate : null,
                 street_average_message: FR_LABEL_BUILDING_SIMILAR_UNIT,
@@ -4818,7 +4855,9 @@ LIMIT 1
             surface_m2,
             price_per_m2,
             last_sale_price,
-            last_sale_date
+            last_sale_date,
+            street,
+            house_number
           FROM \`streetiq-bigquery.streetiq_gold.${buildingTable}\`
           WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
             AND LOWER(TRIM(city)) = LOWER(TRIM(@city))
@@ -4839,7 +4878,14 @@ LIMIT 1
         };
         _frLog("[FR_PARAMS]", { query: "building_same_address_query", ...buildingParams });
         const [buildingRows] = await queryWithTimeout<
-          Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>
+          Array<{
+            surface_m2?: number;
+            price_per_m2?: number;
+            last_sale_price?: number;
+            last_sale_date?: string | null;
+            street?: unknown;
+            house_number?: unknown;
+          }>
         >(
           {
             query: buildingQuery,
@@ -4852,7 +4898,14 @@ LIMIT 1
         _frLog("[FR_SQL] rows_count=", (buildingRows as any[])?.length ?? 0);
         _frLog("[FR_SQL] columns_detected=", Object.keys(buildingTableInspection.sampleRow ?? {}));
 
-        const sameBuildingRows = buildingRows as Array<{ surface_m2?: number; price_per_m2?: number; last_sale_price?: number; last_sale_date?: string | null }>;
+        const sameBuildingRows = buildingRows as Array<{
+          surface_m2?: number;
+          price_per_m2?: number;
+          last_sale_price?: number;
+          last_sale_date?: string | null;
+          street?: unknown;
+          house_number?: unknown;
+        }>;
         sameBuildingRowsCount = sameBuildingRows.length;
         const usablePriceRows = sameBuildingRows.filter((r) => {
           const surf = parseMaybeDecimal(r.surface_m2);
@@ -4892,21 +4945,54 @@ LIMIT 1
               .map((r) => ({
                 amount: frPropertyLatestFactsMoneyToEuros(r.last_sale_price) ?? null,
                 date: frExtractDateStringFromRaw(r.last_sale_date),
+                rowStreet: String((r as { street?: unknown }).street ?? "").trim() || null,
+                rowHouse: String((r as { house_number?: unknown }).house_number ?? "").trim() || null,
               }))
-              .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
+              .filter(
+                (x): x is { amount: number; date: string | null; rowStreet: string | null; rowHouse: string | null } =>
+                  x.amount != null && x.amount > 0
+              );
             buildingLevelTxRows.sort((a, b) => {
               if (!a.date) return 1;
               if (!b.date) return -1;
               return b.date.localeCompare(a.date);
             });
-            const buildingLevelBestTx = buildingLevelTxRows.length > 0
-              ? { amount: buildingLevelTxRows[0]!.amount, date: buildingLevelTxRows[0]!.date }
-              : null;
+            const buildingLevelBestTx = buildingLevelTxRows.length > 0 ? buildingLevelTxRows[0]! : null;
             const hasBuildingLevelTx = buildingLevelBestTx != null && buildingLevelBestTx.amount > 0;
-            const buildingLevelSourceAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
+            const recordStreetBl = (buildingLevelBestTx?.rowStreet || streetNorm || "").trim();
+            const recordHouseBl = (buildingLevelBestTx?.rowHouse || houseNumberNorm || "").trim();
+            const buildingLevelBaseAddr = frFormatSourceAddress(recordHouseBl, recordStreetBl, postcodeNormForSource, cityNorm);
+            const buildingLevelSourceAddr = frClarifyBuildingRecordSourceAddress(
+              buildingLevelBaseAddr,
+              streetParsed,
+              recordStreetBl
+            );
+            const buildingLevelVoieNote =
+              streetParsed.trim() &&
+              recordStreetBl &&
+              frVoieTypeDiffersSameCore(streetParsed, recordStreetBl);
             const buildingLevelLastTxPayload = hasBuildingLevelTx
-              ? frLastTransactionPayload(buildingLevelBestTx!.amount, buildingLevelBestTx!.date, "same_building_similar_unit", buildingLevelSourceAddr)
-              : frLastTransactionPayload(0, null, "same_building_similar_unit", buildingLevelSourceAddr, "No exact recent transaction available");
+              ? frLastTransactionPayload(
+                  buildingLevelBestTx!.amount,
+                  buildingLevelBestTx!.date,
+                  "same_building_similar_unit",
+                  buildingLevelSourceAddr,
+                  undefined,
+                  buildingLevelVoieNote
+                    ? "Latest transaction from official records for this number and postcode — street name differs from your search (same general location in government data)."
+                    : undefined
+                )
+              : frLastTransactionPayload(
+                  0,
+                  null,
+                  "same_building_similar_unit",
+                  frClarifyBuildingRecordSourceAddress(
+                    frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm),
+                    streetParsed,
+                    streetNorm
+                  ),
+                  "No exact recent transaction available"
+                );
             _frLog("[FR_DEBUG] winning_valuation_step", {
               winningValuationStep: "building_level",
               winningSourceLabel: "Similar properties in this building",
@@ -4987,21 +5073,52 @@ LIMIT 1
               .map((r) => ({
                 amount: frPropertyLatestFactsMoneyToEuros((r as any).last_sale_price) ?? null,
                 date: frExtractDateStringFromRaw((r as any).last_sale_date),
+                rowStreet: String((r as any).street ?? "").trim() || null,
+                rowHouse: String((r as any).house_number ?? "").trim() || null,
               }))
-              .filter((x): x is { amount: number; date: string | null } => x.amount != null && x.amount > 0);
+              .filter(
+                (x): x is { amount: number; date: string | null; rowStreet: string | null; rowHouse: string | null } =>
+                  x.amount != null && x.amount > 0
+              );
             richBuildingLevelTxRows.sort((a, b) => {
               if (!a.date) return 1;
               if (!b.date) return -1;
               return b.date.localeCompare(a.date);
             });
-            const richBuildingLevelBestTx = richBuildingLevelTxRows.length > 0
-              ? { amount: richBuildingLevelTxRows[0]!.amount, date: richBuildingLevelTxRows[0]!.date }
-              : null;
+            const richBuildingLevelBestTx = richBuildingLevelTxRows.length > 0 ? richBuildingLevelTxRows[0]! : null;
             const hasRichBuildingLevelTx = richBuildingLevelBestTx != null && richBuildingLevelBestTx.amount > 0;
-            const richBuildingLevelSourceAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
+            const richRecordSt = (richBuildingLevelBestTx?.rowStreet || streetNorm || "").trim();
+            const richRecordHn = (richBuildingLevelBestTx?.rowHouse || houseNumberNorm || "").trim();
+            const richBaseAddr = frFormatSourceAddress(richRecordHn, richRecordSt, postcodeNormForSource, cityNorm);
+            const richBuildingLevelSourceAddr = frClarifyBuildingRecordSourceAddress(
+              richBaseAddr,
+              streetParsed,
+              richRecordSt
+            );
+            const richVoieDisclosure =
+              streetParsed.trim() && richRecordSt && frVoieTypeDiffersSameCore(streetParsed, richRecordSt)
+                ? "Latest transaction from official records for this number and postcode — street name differs from your search (same general location in government data)."
+                : undefined;
             const richBuildingLevelLastTxPayload = hasRichBuildingLevelTx
-              ? frLastTransactionPayload(richBuildingLevelBestTx!.amount, richBuildingLevelBestTx!.date, "same_building_similar_unit", richBuildingLevelSourceAddr)
-              : frLastTransactionPayload(0, null, "same_building_similar_unit", richBuildingLevelSourceAddr, "No exact recent transaction available");
+              ? frLastTransactionPayload(
+                  richBuildingLevelBestTx!.amount,
+                  richBuildingLevelBestTx!.date,
+                  "same_building_similar_unit",
+                  richBuildingLevelSourceAddr,
+                  undefined,
+                  richVoieDisclosure
+                )
+              : frLastTransactionPayload(
+                  0,
+                  null,
+                  "same_building_similar_unit",
+                  frClarifyBuildingRecordSourceAddress(
+                    frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm),
+                    streetParsed,
+                    streetNorm
+                  ),
+                  "No exact recent transaction available"
+                );
             frRuntimeDebug.property_latest_facts_money_divisor = 1000;
             frRuntimeDebug.winning_step = "building_level";
             frRuntimeDebug.winning_source_label = "Similar properties in this building (from DVF rich source)";
@@ -5273,10 +5390,33 @@ LIMIT 1
         const fallbackSource = "Similar properties in this building";
         const lastTx = buildingProfile.last_transaction;
         const hasRealTx = lastTx != null && lastTx.amount != null && lastTx.amount > 0;
-        const buildingProfileSourceAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
+        const buildingProfileBaseAddr = frFormatSourceAddress(houseNumberNorm, streetNorm, postcodeNormForSource, cityNorm);
+        const buildingProfileSourceAddr = frClarifyBuildingRecordSourceAddress(
+          buildingProfileBaseAddr,
+          streetParsed,
+          streetNorm
+        );
+        const buildingProfileVoieDisclosure =
+          streetParsed.trim() && streetNorm && frVoieTypeDiffersSameCore(streetParsed, streetNorm)
+            ? "Latest transaction from official records for this number and postcode — street name differs from your search (same general location in government data)."
+            : undefined;
         const lastTransactionPayload = hasRealTx
-          ? frLastTransactionPayload(lastTx!.amount, lastTx!.date, "same_building_similar_unit", buildingProfileSourceAddr)
-          : frLastTransactionPayload(0, null, "same_building_similar_unit", buildingProfileSourceAddr, "No exact recent transaction available");
+          ? frLastTransactionPayload(
+              lastTx!.amount,
+              lastTx!.date,
+              "same_building_similar_unit",
+              buildingProfileSourceAddr,
+              undefined,
+              buildingProfileVoieDisclosure
+            )
+          : frLastTransactionPayload(
+              0,
+              null,
+              "same_building_similar_unit",
+              buildingProfileSourceAddr,
+              "No exact recent transaction available",
+              buildingProfileVoieDisclosure
+            );
         _frLog("[FR_BUILDING_PROFILE] used_in=fallback");
         frRuntimeDebug.winning_step = "building_profile";
         frRuntimeDebug.winning_source_label = fallbackSource;
