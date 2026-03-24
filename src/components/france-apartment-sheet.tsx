@@ -961,12 +961,18 @@ export function FranceApartmentSheet({
       const abs = Math.abs(pct);
       const decimals = abs >= 10 ? 0 : 1;
       const rounded = Number(pct.toFixed(decimals));
-      if (Math.abs(pct) < 1) return { text: "About the same as last sale", tone: "flat" };
-      const sign = rounded > 0 ? "+" : "";
-      const t = `${sign}${rounded}% since last sale`;
-      if (rounded > 0) return { text: t, tone: "up" };
-      if (rounded < 0) return { text: t, tone: "down" };
-      return { text: "About the same as last sale", tone: "flat" };
+      if (Math.abs(pct) < 1) {
+        return { text: "The price is unchanged since the last transaction", tone: "flat" };
+      }
+      const magnitude = Math.abs(rounded);
+      const pctLabel = decimals === 0 ? String(Math.round(magnitude)) : String(magnitude);
+      if (rounded > 0) {
+        return { text: `The price has increased since the last transaction by ${pctLabel}%`, tone: "up" };
+      }
+      if (rounded < 0) {
+        return { text: `The price has decreased since the last transaction by ${pctLabel}%`, tone: "down" };
+      }
+      return { text: "The price is unchanged since the last transaction", tone: "flat" };
     })();
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
     const showMultiUnitTransactionNote = (parsed as any)?.multi_unit_transaction === true;

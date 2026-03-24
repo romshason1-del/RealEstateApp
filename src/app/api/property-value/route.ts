@@ -1317,6 +1317,7 @@ export async function GET(request: NextRequest) {
         ) {
           const last_sale_price_raw = Math.round(amtFinal * 1000);
           const saleDateIso = dateFinal.slice(0, 10);
+          /** Match property_latest_facts rows: exact raw OR euros within 2€ (display rounding / float); DATE or string sale date. */
           const multiUnitDisclosureSql = `
 SELECT COUNT(DISTINCT CASE
   WHEN unit_number IS NOT NULL AND LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
@@ -1329,8 +1330,14 @@ WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
   AND ${frBqStreetMatchSql}
   AND ${frBqHouseNumberMatchSql}
   AND last_sale_price IS NOT NULL
-  AND last_sale_price = @last_sale_price_raw
-  AND SAFE.PARSE_DATE('%Y-%m-%d', REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')) = PARSE_DATE('%Y-%m-%d', @sale_date)
+  AND (
+    last_sale_price = @last_sale_price_raw
+    OR ABS(SAFE_DIVIDE(CAST(last_sale_price AS FLOAT64), 1000.0) - CAST(@amt_euros AS FLOAT64)) <= 2.0
+  )
+  AND (
+    FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)) = @sale_date
+    OR SAFE.PARSE_DATE('%Y-%m-%d', REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')) = PARSE_DATE('%Y-%m-%d', @sale_date)
+  )
 `;
           try {
             const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
@@ -1346,6 +1353,7 @@ WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
                   house_number_norm: houseNumberNormForMatch || "",
                   sale_date: saleDateIso,
                   last_sale_price_raw,
+                  amt_euros: amtFinal,
                 },
                 location: "EU",
               },
