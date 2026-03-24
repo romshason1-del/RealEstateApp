@@ -1336,6 +1336,19 @@ SELECT COUNT(DISTINCT CASE
           /** When a lot was submitted, anchor price+date on the facts row for that unit (matches raw last_sale_price; avoids API amount mismatch). */
           if (lotNormMu.length > 0) {
             try {
+              // Must use the same lot predicate as the exact-unit ladder (`frBqLotMatchSql` ORs every
+              // schema lot column). Anchoring on `unit_number` only returns 0 rows when the exact win
+              // matched another lot column — then multi_unit_transaction incorrectly stays false.
+              const anchorLotFilter =
+                frBqLotMatchSql != null && String(frBqLotMatchSql).trim().length > 0
+                  ? `AND (${frBqLotMatchSql})`
+                  : `AND (
+    TRIM(CAST(unit_number AS STRING)) = @lot_normalized
+    OR (
+      LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
+      AND REGEXP_REPLACE(TRIM(CAST(unit_number AS STRING)), r'^0+', '') = @lot_stripped
+    )
+  )`;
               const anchorSql = `
 SELECT last_sale_price,
   COALESCE(
@@ -1345,13 +1358,7 @@ SELECT last_sale_price,
 ${multiUnitBuildingWhere}
   AND last_sale_price IS NOT NULL
   AND last_sale_date IS NOT NULL
-  AND (
-    TRIM(CAST(unit_number AS STRING)) = @lot_normalized
-    OR (
-      LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
-      AND REGEXP_REPLACE(TRIM(CAST(unit_number AS STRING)), r'^0+', '') = @lot_stripped
-    )
-  )
+${anchorLotFilter}
 LIMIT 1
 `;
               const [anchorRows] = await queryWithTimeout<[Array<{ last_sale_price?: unknown; sale_date_iso?: unknown }>]>(
@@ -1367,8 +1374,12 @@ LIMIT 1
                 "fr_multi_unit_transaction_anchor"
               );
               const anchor = anchorRows?.[0];
-              const anchorPriceRaw = anchor?.last_sale_price;
-              const dateIsoRaw = anchor?.sale_date_iso;
+              const unwrapBqScalar = (v: unknown): unknown =>
+                v && typeof v === "object" && !Array.isArray(v) && "value" in (v as object)
+                  ? (v as { value: unknown }).value
+                  : v;
+              const anchorPriceRaw = unwrapBqScalar(anchor?.last_sale_price);
+              const dateIsoRaw = unwrapBqScalar(anchor?.sale_date_iso);
               const anchorDateIso =
                 typeof dateIsoRaw === "string" && dateIsoRaw.trim().length >= 10
                   ? dateIsoRaw.trim().slice(0, 10)
