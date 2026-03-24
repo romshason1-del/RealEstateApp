@@ -772,6 +772,9 @@ export async function GET(request: NextRequest) {
         fr_rich_source_candidate_count: null as number | null,
         fr_sql_filter_summary: null as string | null,
         fr_source_unit_display: null as string | null,
+        /** Exact winning facts row (property_latest_facts): used only for multi_unit_transaction disclosure anchor. */
+        fr_disclosure_anchor_last_sale_price_raw: null as unknown,
+        fr_disclosure_anchor_last_sale_date_raw: null as unknown,
       };
 
       frRuntimeDebug.fr_input_address_raw = fullRawAddress || (addressParam || rawInputAddress || "").trim() || null;
@@ -1323,6 +1326,16 @@ SELECT COUNT(DISTINCT CASE
   THEN TRIM(CAST(unit_number AS STRING))
   END) AS distinct_units
 `;
+        const frMuUnwrapScalar = (v: unknown): unknown =>
+          v && typeof v === "object" && !Array.isArray(v) && "value" in (v as object)
+            ? (v as { value: unknown }).value
+            : v;
+        const frMuReadDistinctUnits = (row: { distinct_units?: unknown } | undefined): number => {
+          const raw = frMuUnwrapScalar(row?.distinct_units);
+          if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+          const n = frParseNumericLoose(raw);
+          return n != null && Number.isFinite(n) ? n : NaN;
+        };
         if (pcForMu.length > 0 && hnForMu.length > 0 && streetNormForMu.length >= 2) {
           const baseParams = {
             country: country || "",
@@ -1333,23 +1346,42 @@ SELECT COUNT(DISTINCT CASE
             house_number: hnForMu,
             house_number_norm: houseNumberNormForMatch || "",
           };
-          /** When a lot was submitted, anchor price+date on the facts row for that unit (matches raw last_sale_price; avoids API amount mismatch). */
+          /** When a lot was submitted, anchor price+date on the exact winning facts row first, else a lookup row (same raw last_sale_price as ladder). */
           if (lotNormMu.length > 0) {
             try {
-              // Must use the same lot predicate as the exact-unit ladder (`frBqLotMatchSql` ORs every
-              // schema lot column). Anchoring on `unit_number` only returns 0 rows when the exact win
-              // matched another lot column — then multi_unit_transaction incorrectly stays false.
-              const anchorLotFilter =
-                frBqLotMatchSql != null && String(frBqLotMatchSql).trim().length > 0
-                  ? `AND (${frBqLotMatchSql})`
-                  : `AND (
+              let ap: number | null = null;
+              let anchorDateIso: string | null = null;
+
+              const useExactWinAnchor =
+                String(frRuntimeDebug.winning_step ?? "") === "exact_unit" &&
+                String(frRuntimeDebug.fr_exact_source_layer ?? "") === "facts" &&
+                frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw != null;
+
+              if (useExactWinAnchor) {
+                ap = frParseNumericLoose(frMuUnwrapScalar(frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw));
+                anchorDateIso =
+                  frExtractDateStringFromRaw(frMuUnwrapScalar(frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw))?.slice(
+                    0,
+                    10
+                  ) ?? null;
+                if (ap != null && !(ap > 0)) ap = null;
+              }
+
+              if (ap == null || !anchorDateIso) {
+                // Must use the same lot predicate as the exact-unit ladder (`frBqLotMatchSql` ORs every
+                // schema lot column). Anchoring on `unit_number` only returns 0 rows when the exact win
+                // matched another lot column — then multi_unit_transaction incorrectly stays false.
+                const anchorLotFilter =
+                  frBqLotMatchSql != null && String(frBqLotMatchSql).trim().length > 0
+                    ? `AND (${frBqLotMatchSql})`
+                    : `AND (
     TRIM(CAST(unit_number AS STRING)) = @lot_normalized
     OR (
       LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
       AND REGEXP_REPLACE(TRIM(CAST(unit_number AS STRING)), r'^0+', '') = @lot_stripped
     )
   )`;
-              const anchorSql = `
+                const anchorSql = `
 SELECT last_sale_price,
   COALESCE(
     FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)),
@@ -1361,36 +1393,43 @@ ${multiUnitBuildingWhere}
 ${anchorLotFilter}
 LIMIT 1
 `;
-              const [anchorRows] = await queryWithTimeout<[Array<{ last_sale_price?: unknown; sale_date_iso?: unknown }>]>(
-                {
-                  query: anchorSql.trim(),
-                  params: {
-                    ...baseParams,
-                    lot_normalized: lotNormMu,
-                    lot_stripped: lotStrippedMu || lotNormMu,
+                const [anchorRows] = await queryWithTimeout<[Array<{ last_sale_price?: unknown; sale_date_iso?: unknown }>]>(
+                  {
+                    query: anchorSql.trim(),
+                    params: {
+                      ...baseParams,
+                      lot_normalized: lotNormMu,
+                      lot_stripped: lotStrippedMu || lotNormMu,
+                    },
+                    location: "EU",
                   },
-                  location: "EU",
-                },
-                "fr_multi_unit_transaction_anchor"
-              );
-              const anchor = anchorRows?.[0];
-              const unwrapBqScalar = (v: unknown): unknown =>
-                v && typeof v === "object" && !Array.isArray(v) && "value" in (v as object)
-                  ? (v as { value: unknown }).value
-                  : v;
-              const anchorPriceRaw = unwrapBqScalar(anchor?.last_sale_price);
-              const dateIsoRaw = unwrapBqScalar(anchor?.sale_date_iso);
-              const anchorDateIso =
-                typeof dateIsoRaw === "string" && dateIsoRaw.trim().length >= 10
-                  ? dateIsoRaw.trim().slice(0, 10)
-                  : frExtractDateStringFromRaw(dateIsoRaw)?.slice(0, 10) ?? null;
-              const ap = frParseNumericLoose(anchorPriceRaw as unknown);
+                  "fr_multi_unit_transaction_anchor"
+                );
+                const anchor = anchorRows?.[0];
+                const anchorPriceRaw = frMuUnwrapScalar(anchor?.last_sale_price);
+                const dateIsoRaw = frMuUnwrapScalar(anchor?.sale_date_iso);
+                if (!anchorDateIso) {
+                  anchorDateIso =
+                    typeof dateIsoRaw === "string" && dateIsoRaw.trim().length >= 10
+                      ? dateIsoRaw.trim().slice(0, 10)
+                      : frExtractDateStringFromRaw(dateIsoRaw)?.slice(0, 10) ?? null;
+                }
+                if (ap == null) {
+                  const parsed = frParseNumericLoose(anchorPriceRaw as unknown);
+                  ap = parsed != null && parsed > 0 ? parsed : null;
+                }
+              }
+
               if (ap != null && ap > 0 && anchorDateIso) {
+                const anchorLsp = Math.round(ap);
                 const countByAnchorSql = `
 ${multiUnitCountSelect}
 ${multiUnitBuildingWhere}
   AND last_sale_price IS NOT NULL
-  AND last_sale_price = @anchor_last_sale_price
+  AND (
+    last_sale_price = @anchor_last_sale_price
+    OR ABS(SAFE_CAST(last_sale_price AS FLOAT64) - CAST(@anchor_last_sale_price AS FLOAT64)) < 1.0
+  )
   AND (
     FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)) = @anchor_sale_date
     OR REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})') = @anchor_sale_date
@@ -1401,14 +1440,14 @@ ${multiUnitBuildingWhere}
                     query: countByAnchorSql.trim(),
                     params: {
                       ...baseParams,
-                      anchor_last_sale_price: ap,
+                      anchor_last_sale_price: anchorLsp,
                       anchor_sale_date: anchorDateIso,
                     },
                     location: "EU",
                   },
                   "fr_multi_unit_transaction_disclosure_anchored"
                 );
-                const du = Number((muRows?.[0] as { distinct_units?: unknown })?.distinct_units);
+                const du = frMuReadDistinctUnits(muRows?.[0] as { distinct_units?: unknown });
                 multi_unit_transaction = Number.isFinite(du) && du > 1;
               }
             } catch {
@@ -1451,7 +1490,7 @@ ${multiUnitBuildingWhere}
                 },
                 "fr_multi_unit_transaction_disclosure"
               );
-              const du = Number((muRows?.[0] as { distinct_units?: unknown })?.distinct_units);
+              const du = frMuReadDistinctUnits(muRows?.[0] as { distinct_units?: unknown });
               multi_unit_transaction = Number.isFinite(du) && du > 1;
             } catch {
               multi_unit_transaction = false;
@@ -4628,6 +4667,10 @@ ${multiUnitBuildingWhere}
           const exactUnitNum = (exactBest as any)?.unit_number;
           frRuntimeDebug.fr_source_unit_display =
             exactUnitNum != null && String(exactUnitNum).trim() ? `Apartment ${String(exactUnitNum).trim()}` : null;
+          if (isExactUnitTier && exactBest && frRuntimeDebug.fr_exact_source_layer === "facts") {
+            frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw = (exactBest as any).last_sale_price;
+            frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw = (exactBest as any).last_sale_date;
+          }
           return await frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
