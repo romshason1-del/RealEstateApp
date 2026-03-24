@@ -1151,7 +1151,7 @@ export function FranceApartmentSheet({
                 </div>
                 {showMultiUnitTransactionNote ? (
                   <div className="mt-1 text-[11px] font-medium text-amber-200/90">
-                    Transaction includes multiple units
+                    This building contains multiple apartments. Prices may reflect combined or aggregated transactions.
                   </div>
                 ) : null}
                 {txMatchType !== "exact" && txSourceAddress && txSourceAddress.trim() ? (

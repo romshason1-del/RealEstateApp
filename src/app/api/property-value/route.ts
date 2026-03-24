@@ -772,23 +772,9 @@ export async function GET(request: NextRequest) {
         fr_rich_source_candidate_count: null as number | null,
         fr_sql_filter_summary: null as string | null,
         fr_source_unit_display: null as string | null,
-        /** Exact winning facts row (property_latest_facts): used only for multi_unit_transaction disclosure anchor. */
+        /** Exact winning facts row (property_latest_facts): raw price/date for france_multi_unit_transactions lookup only. */
         fr_disclosure_anchor_last_sale_price_raw: null as unknown,
         fr_disclosure_anchor_last_sale_date_raw: null as unknown,
-        /** TEMP: multi_unit_transaction anchored COUNT path only (remove after diagnosis). */
-        fr_mu_outer_guard_passed: null as boolean | null,
-        fr_mu_inner_guard_passed: null as boolean | null,
-        fr_mu_anchor_last_sale_price_param: null as number | null,
-        fr_mu_anchor_sale_date_param: null as string | null,
-        fr_mu_base_postcode: null as string | null,
-        fr_mu_base_city: null as string | null,
-        fr_mu_base_street: null as string | null,
-        fr_mu_base_house_number: null as string | null,
-        fr_mu_count_query_executed: null as boolean | null,
-        fr_mu_count_query_error: null as string | null,
-        fr_mu_count_query_result_raw: null as unknown,
-        fr_mu_distinct_units_parsed: null as number | null,
-        fr_mu_final_flag: null as boolean | null,
       };
 
       frRuntimeDebug.fr_input_address_raw = fullRawAddress || (addressParam || rawInputAddress || "").trim() || null;
@@ -1312,224 +1298,103 @@ export async function GET(request: NextRequest) {
           pr.livability_rating = derived;
         }
 
-        /** Read-only disclosure: same building + same sale date/price in property_latest_facts spans >1 distinct unit_number. */
+        /** Read-only disclosure: lookup precomputed row in france_multi_unit_transactions (ETL helper). */
         let multi_unit_transaction = false;
-        const prFinal = outPayload.property_result as Record<string, unknown> | undefined;
-        const ltFinal = prFinal?.last_transaction as Record<string, unknown> | undefined;
-        const amtFinal =
-          typeof ltFinal?.amount === "number" && Number.isFinite(ltFinal.amount) && ltFinal.amount > 0
-            ? ltFinal.amount
-            : null;
-        const dateFinal = frExtractDateStringFromRaw(ltFinal?.date);
-        const pcForMu = String(postcodeNormForSource ?? "").trim();
-        const hnForMu = String(houseNumberNormForSource ?? "").trim();
-        const streetNormForMu = String(streetNormForExactMatch || streetNormForSource || "").trim();
-        const lotNormMu = String(normalizedRequestedLot ?? "").trim().toUpperCase();
-        const lotStrippedMu = lotNormMu.replace(/^0+/, "") || lotNormMu;
-        const multiUnitBuildingWhere = `
-FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
-WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
-  AND ${frBqPostcodeMatchSql}
-  AND ${frBqCityMatchSql}
-  AND ${frBqStreetMatchSql}
-  AND ${frBqHouseNumberMatchSql}
-`;
-        const multiUnitCountSelect = `
-SELECT COUNT(DISTINCT CASE
-  WHEN unit_number IS NOT NULL AND LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
-  THEN TRIM(CAST(unit_number AS STRING))
-  END) AS distinct_units
-`;
-        const frMuUnwrapScalar = (v: unknown): unknown =>
+        let multi_unit_distinct_unit_count: number | null = null;
+        const frUnwrapBqMu = (v: unknown): unknown =>
           v && typeof v === "object" && !Array.isArray(v) && "value" in (v as object)
             ? (v as { value: unknown }).value
             : v;
-        const frMuReadDistinctUnits = (row: { distinct_units?: unknown } | undefined): number => {
-          const raw = frMuUnwrapScalar(row?.distinct_units);
-          if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-          const n = frParseNumericLoose(raw);
-          return n != null && Number.isFinite(n) ? n : NaN;
-        };
-        const frMuOuterOk = pcForMu.length > 0 && hnForMu.length > 0 && streetNormForMu.length >= 2;
-        frRuntimeDebug.fr_mu_outer_guard_passed = frMuOuterOk;
-        frRuntimeDebug.fr_mu_base_postcode = pcForMu || null;
-        frRuntimeDebug.fr_mu_base_city = (cityNormForSource || cityNorm || "").trim() || null;
-        frRuntimeDebug.fr_mu_base_street = streetNormForMu || null;
-        frRuntimeDebug.fr_mu_base_house_number = hnForMu || null;
-        frRuntimeDebug.fr_mu_inner_guard_passed = false;
-        frRuntimeDebug.fr_mu_count_query_executed = false;
-        if (frMuOuterOk) {
-          const baseParams = {
-            country: country || "",
-            city_main: cityNormForSource || cityNorm || "",
-            postcode: postcodeNormForSource || "",
-            street: streetNorm || "",
-            street_normalized: streetNormForMu,
-            house_number: hnForMu,
-            house_number_norm: houseNumberNormForMatch || "",
-          };
-          /** When a lot was submitted, anchor price+date on the exact winning facts row first, else a lookup row (same raw last_sale_price as ladder). */
-          if (lotNormMu.length > 0) {
-            try {
-              let ap: number | null = null;
-              let anchorDateIso: string | null = null;
-
-              const useExactWinAnchor =
-                String(frRuntimeDebug.winning_step ?? "") === "exact_unit" &&
-                frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw != null;
-
-              if (useExactWinAnchor) {
-                ap = frParseNumericLoose(frMuUnwrapScalar(frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw));
-                anchorDateIso =
-                  frExtractDateStringFromRaw(frMuUnwrapScalar(frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw))?.slice(
-                    0,
-                    10
-                  ) ?? null;
-                if (ap != null && !(ap > 0)) ap = null;
-              }
-
-              if (ap == null || !anchorDateIso) {
-                // Must use the same lot predicate as the exact-unit ladder (`frBqLotMatchSql` ORs every
-                // schema lot column). Anchoring on `unit_number` only returns 0 rows when the exact win
-                // matched another lot column — then multi_unit_transaction incorrectly stays false.
-                const anchorLotFilter =
-                  frBqLotMatchSql != null && String(frBqLotMatchSql).trim().length > 0
-                    ? `AND (${frBqLotMatchSql})`
-                    : `AND (
-    TRIM(CAST(unit_number AS STRING)) = @lot_normalized
-    OR (
-      LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
-      AND REGEXP_REPLACE(TRIM(CAST(unit_number AS STRING)), r'^0+', '') = @lot_stripped
-    )
-  )`;
-                const anchorSql = `
-SELECT last_sale_price,
-  COALESCE(
-    FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)),
-    REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')
-  ) AS sale_date_iso
-${multiUnitBuildingWhere}
-  AND last_sale_price IS NOT NULL
-  AND last_sale_date IS NOT NULL
-${anchorLotFilter}
-LIMIT 1
-`;
-                const [anchorRows] = await queryWithTimeout<[Array<{ last_sale_price?: unknown; sale_date_iso?: unknown }>]>(
-                  {
-                    query: anchorSql.trim(),
-                    params: {
-                      ...baseParams,
-                      lot_normalized: lotNormMu,
-                      lot_stripped: lotStrippedMu || lotNormMu,
-                    },
-                    location: "EU",
-                  },
-                  "fr_multi_unit_transaction_anchor"
-                );
-                const anchor = anchorRows?.[0];
-                const anchorPriceRaw = frMuUnwrapScalar(anchor?.last_sale_price);
-                const dateIsoRaw = frMuUnwrapScalar(anchor?.sale_date_iso);
-                if (!anchorDateIso) {
-                  anchorDateIso =
-                    typeof dateIsoRaw === "string" && dateIsoRaw.trim().length >= 10
-                      ? dateIsoRaw.trim().slice(0, 10)
-                      : frExtractDateStringFromRaw(dateIsoRaw)?.slice(0, 10) ?? null;
-                }
-                if (ap == null) {
-                  const parsed = frParseNumericLoose(anchorPriceRaw as unknown);
-                  ap = parsed != null && parsed > 0 ? parsed : null;
-                }
-              }
-
-              if (ap != null && ap > 0 && anchorDateIso) {
-                const anchorLsp = Math.round(ap);
-                frRuntimeDebug.fr_mu_inner_guard_passed = true;
-                frRuntimeDebug.fr_mu_anchor_last_sale_price_param = anchorLsp;
-                frRuntimeDebug.fr_mu_anchor_sale_date_param = anchorDateIso;
-                const countByAnchorSql = `
-${multiUnitCountSelect}
-${multiUnitBuildingWhere}
-  AND last_sale_price IS NOT NULL
-  AND (
-    last_sale_price = @anchor_last_sale_price
-    OR ABS(SAFE_CAST(last_sale_price AS FLOAT64) - CAST(@anchor_last_sale_price AS FLOAT64)) < 1.0
-  )
-  AND FORMAT_DATE('%Y-%m-%d', DATE(TIMESTAMP(last_sale_date), "Europe/Paris")) = @anchor_sale_date
-`;
-                frRuntimeDebug.fr_mu_count_query_executed = true;
-                const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
-                  {
-                    query: countByAnchorSql.trim(),
-                    params: {
-                      ...baseParams,
-                      anchor_last_sale_price: anchorLsp,
-                      anchor_sale_date: anchorDateIso,
-                    },
-                    location: "EU",
-                  },
-                  "fr_multi_unit_transaction_disclosure_anchored"
-                );
-                const countRow = muRows?.[0] as { distinct_units?: unknown } | undefined;
-                frRuntimeDebug.fr_mu_count_query_result_raw =
-                  countRow != null ? { distinct_units: countRow.distinct_units } : null;
-                const du = frMuReadDistinctUnits(countRow);
-                frRuntimeDebug.fr_mu_distinct_units_parsed = Number.isFinite(du) ? du : null;
-                multi_unit_transaction = Number.isFinite(du) && du > 1;
-                frRuntimeDebug.fr_mu_final_flag = multi_unit_transaction;
-              }
-            } catch (err) {
-              multi_unit_transaction = false;
-              frRuntimeDebug.fr_mu_count_query_error = err instanceof Error ? err.message : String(err);
-              frRuntimeDebug.fr_mu_final_flag = multi_unit_transaction;
-            }
+        const prFinalMu = outPayload.property_result as Record<string, unknown> | undefined;
+        const ltFinalMu = prFinalMu?.last_transaction as Record<string, unknown> | undefined;
+        try {
+          const muPostcode = String(postcodeNormForSource ?? "").trim();
+          const muCity = String(cityNormForSource || cityNorm || "").trim().toUpperCase();
+          const muStreet = String(streetNormForExactMatch || streetNormForSource || "").trim().toUpperCase();
+          const muHouse = String(houseNumberNormForSource ?? "").trim().toUpperCase();
+          let rawPricePlf: number | null = null;
+          if (frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw != null) {
+            const p = frParseNumericLoose(frUnwrapBqMu(frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw));
+            if (p != null && p > 0) rawPricePlf = Math.round(p);
           }
           if (
-            !multi_unit_transaction &&
-            String(frRuntimeDebug.winning_step ?? "") !== "exact_unit" &&
-            amtFinal != null &&
-            dateFinal != null &&
-            dateFinal.length >= 10
+            rawPricePlf == null &&
+            typeof ltFinalMu?.amount === "number" &&
+            Number.isFinite(ltFinalMu.amount) &&
+            ltFinalMu.amount > 0
           ) {
-            const last_sale_price_raw = Math.round(amtFinal * 1000);
-            const saleDateIso = dateFinal.slice(0, 10);
-            /** Fallback: match API last_transaction amount (thousandths or ±2€) + date. */
-            const multiUnitDisclosureSql = `
-${multiUnitCountSelect}
-${multiUnitBuildingWhere}
-  AND last_sale_price IS NOT NULL
-  AND (
-    last_sale_price = @last_sale_price_raw
-    OR ABS(SAFE_DIVIDE(CAST(last_sale_price AS FLOAT64), 1000.0) - CAST(@amt_euros AS FLOAT64)) <= 2.0
-  )
-  AND (
-    FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)) = @sale_date
-    OR SAFE.PARSE_DATE('%Y-%m-%d', REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')) = PARSE_DATE('%Y-%m-%d', @sale_date)
-  )
+            rawPricePlf = Math.round(ltFinalMu.amount * 1000);
+          }
+          let saleDateIso: string | null = null;
+          if (frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw != null) {
+            saleDateIso =
+              frExtractDateStringFromRaw(frUnwrapBqMu(frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw))?.slice(0, 10) ??
+              null;
+          }
+          if (!saleDateIso && ltFinalMu?.date != null) {
+            saleDateIso = frExtractDateStringFromRaw(ltFinalMu.date)?.slice(0, 10) ?? null;
+          }
+          if (
+            muPostcode.length > 0 &&
+            muCity.length > 0 &&
+            muStreet.length >= 2 &&
+            muHouse.length > 0 &&
+            rawPricePlf != null &&
+            rawPricePlf > 0 &&
+            saleDateIso != null &&
+            saleDateIso.length >= 10
+          ) {
+            const frMuHelperSql = `
+SELECT multi_unit_transaction, distinct_unit_count
+FROM \`streetiq-bigquery.streetiq_gold.france_multi_unit_transactions\`
+WHERE LPAD(TRIM(CAST(postcode AS STRING)), 5, '0') = LPAD(TRIM(@postcode), 5, '0')
+  AND TRIM(UPPER(CAST(city AS STRING))) = @city
+  AND TRIM(UPPER(CAST(street AS STRING))) = @street
+  AND TRIM(UPPER(CAST(house_number AS STRING))) = @house_number
+  AND DATE(last_sale_date) = PARSE_DATE('%Y-%m-%d', @sale_date_iso)
+  AND SAFE_CAST(last_sale_price_raw AS INT64) = @last_sale_price_raw
+LIMIT 1
 `;
-            try {
-              const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
-                {
-                  query: multiUnitDisclosureSql.trim(),
-                  params: {
-                    ...baseParams,
-                    sale_date: saleDateIso,
-                    last_sale_price_raw,
-                    amt_euros: amtFinal,
-                  },
-                  location: "EU",
+            const [muHelperRows] = await queryWithTimeout<[Array<Record<string, unknown>>]>(
+              {
+                query: frMuHelperSql.trim(),
+                params: {
+                  postcode: muPostcode,
+                  city: muCity,
+                  street: muStreet,
+                  house_number: muHouse,
+                  sale_date_iso: saleDateIso,
+                  last_sale_price_raw: rawPricePlf,
                 },
-                "fr_multi_unit_transaction_disclosure"
-              );
-              const du = frMuReadDistinctUnits(muRows?.[0] as { distinct_units?: unknown });
-              multi_unit_transaction = Number.isFinite(du) && du > 1;
-            } catch {
-              multi_unit_transaction = false;
+                location: "EU",
+              },
+              "france_multi_unit_transactions_lookup"
+            );
+            const muHit = muHelperRows?.[0];
+            if (muHit) {
+              const mut = muHit.multi_unit_transaction;
+              multi_unit_transaction = mut === true || mut === "true" || mut === 1;
+              const ducRaw = frUnwrapBqMu(muHit.distinct_unit_count);
+              const duc =
+                typeof ducRaw === "number" && Number.isFinite(ducRaw)
+                  ? ducRaw
+                  : frParseNumericLoose(ducRaw);
+              multi_unit_distinct_unit_count =
+                duc != null && Number.isFinite(duc) ? Math.trunc(duc) : null;
             }
           }
+        } catch {
+          multi_unit_transaction = false;
+          multi_unit_distinct_unit_count = null;
         }
 
         return NextResponse.json(
-          { ...outPayload, multi_unit_transaction, fr_runtime_debug: frRuntimeDebug },
+          {
+            ...outPayload,
+            multi_unit_transaction,
+            multi_unit_distinct_unit_count,
+            fr_runtime_debug: frRuntimeDebug,
+          },
           status ? { status } : undefined
         );
       };
@@ -4697,7 +4562,7 @@ ${multiUnitBuildingWhere}
           const exactUnitNum = (exactBest as any)?.unit_number;
           frRuntimeDebug.fr_source_unit_display =
             exactUnitNum != null && String(exactUnitNum).trim() ? `Apartment ${String(exactUnitNum).trim()}` : null;
-          // Disclosure only: raw property_latest_facts scalars for multi_unit_transaction COUNT (never derive from last_transaction.amount).
+          // Disclosure only: raw facts scalars for france_multi_unit_transactions lookup (same row as displayed transaction).
           if (isExactUnitTier && exactBest) {
             frRuntimeDebug.fr_disclosure_anchor_last_sale_price_raw = (exactBest as any).last_sale_price;
             frRuntimeDebug.fr_disclosure_anchor_last_sale_date_raw = (exactBest as any).last_sale_date;

@@ -93,6 +93,10 @@ export type PropertyValueInsightsResponse = {
   date_mutation?: string | null;
   /** France: last 5 sales in this building (Date, Type, Price, Surface) */
   building_sales?: Array<{ date: string | null; type: string; price: number; surface: number | null; lot_number?: string | null }>;
+  /** France: ETL helper `france_multi_unit_transactions` — combined/aggregated sale disclosure */
+  multi_unit_transaction?: boolean;
+  /** France: distinct units from helper row (debug / transparency) */
+  multi_unit_distinct_unit_count?: number | null;
   unit_count?: number;
   uk_land_registry?: {
     building_average_price: number | null;
