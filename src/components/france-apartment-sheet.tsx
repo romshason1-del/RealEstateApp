@@ -271,6 +271,67 @@ export function FranceApartmentSheet({
     | "area_level"
     | "unknown"
     | null;
+
+  const normalizeLotTokenForContext = React.useCallback((s: string) => {
+    return s.trim().toUpperCase().replace(/^0+(?=[0-9])/, "") || s.trim().toUpperCase();
+  }, []);
+
+  /** Single precision/basis line for France results (mutually exclusive by display_context). */
+  const standardContextExplanation = React.useMemo(() => {
+    const dc = frDisplayContext;
+    const fvDisp = (parsed as { fr_valuation_display?: { source_unit_display?: string | null } } | null)
+      ?.fr_valuation_display;
+    const sourceUnitLine = String(fvDisp?.source_unit_display ?? "").trim();
+    const mSrc =
+      /(?:APARTMENT|APPART|APT|LOT|UNIT|N°|Nº|#)\s*([A-Z0-9]+)/i.exec(sourceUnitLine)?.[1] ??
+      /\b(\d{1,4})\s*$/i.exec(sourceUnitLine)?.[1] ??
+      "";
+    const reqLot = String(
+      (resolvedForDisplay?.fr as { requestedLot?: string } | null | undefined)?.requestedLot ??
+        requestedLot ??
+        ""
+    ).trim();
+    const reqTok = reqLot ? normalizeLotTokenForContext(reqLot) : "";
+    const srcTok = mSrc ? normalizeLotTokenForContext(mSrc) : "";
+    const sourceDiffersFromRequested =
+      reqTok.length > 0 && srcTok.length > 0 && reqTok !== srcTok;
+    const noSourceUnitForUser = sourceUnitLine.length === 0;
+    const isAddressLevelOfficialRecord =
+      dc === "exact_address" ||
+      ((dc == null || dc === "unknown") && normalized?.resultType === "exact_address");
+    const displayContextBlocksAddrExplanation =
+      dc === "exact_unit" ||
+      dc === "building_level" ||
+      dc === "street_level" ||
+      dc === "area_level";
+
+    if (dc === "exact_unit") return null;
+    if (
+      isAddressLevelOfficialRecord &&
+      !displayContextBlocksAddrExplanation &&
+      (noSourceUnitForUser || sourceDiffersFromRequested)
+    ) {
+      return "This is an address-level official record and may reflect multiple units.";
+    }
+    if (dc === "building_level") {
+      return "This estimate is based on recent sales within this building.";
+    }
+    if (dc === "street_level") {
+      return "This estimate is based on recent sales on this street.";
+    }
+    if (dc === "area_level") {
+      return "This estimate is based on similar properties in the surrounding area.";
+    }
+    return null;
+  }, [
+    frDisplayContext,
+    normalizeLotTokenForContext,
+    normalized?.resultType,
+    parsed,
+    requestedLot,
+    resolvedForDisplay,
+  ]);
+
   const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
   const backendLotPromptVisible = rdForLot?.fr_lot_prompt_visible === true;
   const backendWantsLotUi =
@@ -424,9 +485,7 @@ export function FranceApartmentSheet({
   const badge = React.useMemo(() => {
     if (frDisplayContext && phase !== "initial_building_state" && phase !== "no_result_state") {
       if (frDisplayContext === "exact_unit") {
-        return isHouseLikeUI
-          ? { label: "Official record — this property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
-          : { label: "Official record — this unit", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+        return { label: "Official record — exact property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
       }
       if (frDisplayContext === "exact_address") {
         return { label: "Official record — address level", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
@@ -450,7 +509,7 @@ export function FranceApartmentSheet({
       }
       return isHouseLikeUI
         ? { label: "Official record — this property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" }
-        : { label: "Official record — this unit", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
+        : { label: "Official record — exact property", tone: "bg-emerald-500/10 border-emerald-500/25 text-emerald-200" };
     }
     if (phase === "building_similar_match_state") {
       return {
@@ -483,16 +542,21 @@ export function FranceApartmentSheet({
     if (phase === "initial_building_state") {
       return "We found this building. Add your unit number for a tighter match.";
     }
+    if (
+      phase !== "no_result_state" &&
+      (frDisplayContext === "building_level" ||
+        frDisplayContext === "street_level" ||
+        frDisplayContext === "area_level")
+    ) {
+      return "";
+    }
     if (phase === "exact_apartment_match_state") {
       const lot = (requestedLot ?? lotInput).trim();
-      if (frDisplayContext === "exact_address" || normalized?.resultType === "exact_address") {
-        return lot
-          ? `Address-level official record for your search. Unit ${lot} is not on a separate line in this dataset — the sale shown is address-level, not necessarily that unit.`
-          : "Address-level official record — not a separate line per unit in this dataset.";
-      }
       if (frDisplayContext === "exact_unit") {
-        if (isHouseLikeUI) return lot ? `Matched to your property (lot ${lot}).` : "Matched to your property.";
-        return lot ? `Exact unit match for lot ${lot}.` : "Exact unit match.";
+        return "";
+      }
+      if (frDisplayContext === "exact_address" || normalized?.resultType === "exact_address") {
+        return "";
       }
       if (isHouseLikeUI) return lot ? `Matched to your property (lot ${lot}).` : "Matched to your property.";
       return lot ? `Matched to your unit (${lot}).` : "Matched to your unit.";
@@ -847,6 +911,8 @@ export function FranceApartmentSheet({
 
     const basedOnExplainer = (() => {
       if (isLoadingNow || isNoResult) return null;
+      if (frDisplayContext === "exact_unit") return null;
+      if (standardContextExplanation) return null;
       const ws = winningStepStr;
       if (ws === "exact_unit" || ws === "exact_address" || ws === "exact_house") return "Based on this property's recorded sale";
       if (ws === "exact_approximate" || ws === "building_level" || ws === "building_fallback" || ws === "building_similar_unit")
@@ -1028,40 +1094,8 @@ export function FranceApartmentSheet({
         : (data as Record<string, unknown> | undefined)?.multi_unit_transaction;
     const multi_unit_transaction: boolean | undefined =
       rawMultiUnit === true ? true : rawMultiUnit === false ? false : undefined;
-    console.log("multi_unit_transaction:", multi_unit_transaction);
     // API sets this only when france_multi_unit_transactions exact-matches AND fr_display_context === exact_unit.
     const showMultiUnitTransactionNote = multi_unit_transaction === true;
-    const normalizeLotTokenForHint = (s: string) =>
-      s.trim().toUpperCase().replace(/^0+(?=[0-9])/, "") || s.trim().toUpperCase();
-    const sourceUnitLineForAddrHint = String(fv?.source_unit_display ?? "").trim();
-    const mSrcAddr =
-      /(?:APARTMENT|APPART|APT|LOT|UNIT|N°|Nº|#)\s*([A-Z0-9]+)/i.exec(sourceUnitLineForAddrHint)?.[1] ??
-      /\b(\d{1,4})\s*$/i.exec(sourceUnitLineForAddrHint)?.[1] ??
-      "";
-    const reqLotAddr = String(
-      (resolvedForDisplay?.fr as { requestedLot?: string } | null | undefined)?.requestedLot ??
-        requestedLot ??
-        ""
-    ).trim();
-    const reqTokAddr = reqLotAddr ? normalizeLotTokenForHint(reqLotAddr) : "";
-    const srcTokAddr = mSrcAddr ? normalizeLotTokenForHint(mSrcAddr) : "";
-    const sourceUnitDiffersFromRequested =
-      reqTokAddr.length > 0 && srcTokAddr.length > 0 && reqTokAddr !== srcTokAddr;
-    const noSourceUnitForUser = sourceUnitLineForAddrHint.length === 0;
-    const isAddressLevelOfficialRecord =
-      frDisplayContext === "exact_address" ||
-      ((frDisplayContext == null || frDisplayContext === "unknown") && fr?.resultType === "exact_address");
-    const displayContextBlocksAddrHint =
-      frDisplayContext === "exact_unit" ||
-      frDisplayContext === "building_level" ||
-      frDisplayContext === "street_level" ||
-      frDisplayContext === "area_level";
-    const showAddressLevelOfficialRecordHint =
-      !isLoadingNow &&
-      !isNoResult &&
-      isAddressLevelOfficialRecord &&
-      !displayContextBlocksAddrHint &&
-      (noSourceUnitForUser || sourceUnitDiffersFromRequested);
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
@@ -1142,7 +1176,9 @@ export function FranceApartmentSheet({
                   </div>
                 ) : null}
               </div>
-              {!isLoadingNow && subtitle.trim() ? (
+              {!isLoadingNow && !isNoResult && standardContextExplanation ? (
+                <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{standardContextExplanation}</div>
+              ) : !isLoadingNow && subtitle.trim() ? (
                 <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{subtitle}</div>
               ) : null}
             </div>
@@ -1231,11 +1267,6 @@ export function FranceApartmentSheet({
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
                 </div>
-                {showAddressLevelOfficialRecordHint ? (
-                  <div className="mt-1 text-[11px] leading-snug text-zinc-400/90">
-                    This is an address-level official record and may reflect multiple units.
-                  </div>
-                ) : null}
                 {showMultiUnitTransactionNote ? (
                   <div className="mt-1 text-[11px] font-medium text-amber-200/90">
                     Transaction includes multiple units
