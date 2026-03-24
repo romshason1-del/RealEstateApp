@@ -115,7 +115,10 @@ export function FranceApartmentSheet({
   const { data, isLoading, refetch } = usePropertyValueInsights(addressForApi || rawForApi, "FR", {
     latitude: position.lat,
     longitude: position.lng,
-    aptNumber: requestedLot ?? (hasSubmittedLotSearch ? lotInput : undefined),
+    aptNumber: (() => {
+      const t = (requestedLot ?? (hasSubmittedLotSearch ? lotInput : "")).trim();
+      return t || undefined;
+    })(),
     postcode,
     refetchTrigger: trigger,
     countryCode: "FR",
@@ -510,7 +513,8 @@ export function FranceApartmentSheet({
     const lot = lotInput.trim();
     // Hard block: when backend requires lot, block until lot is provided.
     if (lotPromptGenuinelyRequired && !lot) return;
-    if (lotPromptGenuinelyRequired && isLoading) return;
+    // Do not block lot search while the initial building-level request is still in flight:
+    // otherwise Enter / refetch never runs with apt_number and the API stays at submitted_lot=null.
     setRequestedLot(lot || undefined);
     // Hard guarantee: never show any previous result while a new lot search is in flight.
     // We only render a final result once the latest request resolves and matches the requested lot.
@@ -518,7 +522,7 @@ export function FranceApartmentSheet({
     setHasSubmittedLotSearch(true);
     setTrigger((t) => t + 1);
     setIsResultCardOpen(true);
-  }, [lotInput, hasSubmittedLotSearch, lotPromptGenuinelyRequired, isLoading, normalized]);
+  }, [lotInput, lotPromptGenuinelyRequired]);
 
   const prevIsLoadingRef = React.useRef<boolean>(false);
   React.useEffect(() => {
@@ -1341,7 +1345,7 @@ export function FranceApartmentSheet({
                 <button
                   type="button"
                   onClick={() => submit("button")}
-                  disabled={isLoading}
+                  disabled={isLoading && !lotInput.trim()}
                   className="shrink-0 rounded-lg border border-amber-400/35 bg-amber-400/15 px-3.5 py-2 text-[13px] font-semibold text-amber-200 hover:bg-amber-400/20 disabled:opacity-50"
                 >
                   {isLoading ? "Searching…" : "Search"}

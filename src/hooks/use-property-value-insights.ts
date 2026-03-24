@@ -55,6 +55,7 @@ export function usePropertyValueInsights(
       ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),
       signal: abortRef.current.signal,
     };
+    const aptSent = (fetchOpts as { aptNumber?: string }).aptNumber ?? "";
     if ((countryCode ?? "").toUpperCase() === "FR") {
       console.log("[FR_LOT_FETCH] starting_new_request", {
         requestId: thisRequestId,
@@ -65,7 +66,18 @@ export function usePropertyValueInsights(
     }
     fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
-        if (thisRequestId === requestIdRef.current) setData(res);
+        if (thisRequestId === requestIdRef.current) {
+          if (isFR && aptSent) {
+            const rd = (res as { fr_runtime_debug?: Record<string, unknown> })?.fr_runtime_debug;
+            console.log("[FR_LOT_DEBUG]", {
+              requestId: thisRequestId,
+              raw_apt_number_param: rd?.raw_apt_number_param,
+              submitted_lot: rd?.submitted_lot,
+              fr_lot_submitted: rd?.fr_lot_submitted,
+            });
+          }
+          setData(res);
+        }
       })
       .catch((err) => {
         if (thisRequestId === requestIdRef.current) {
