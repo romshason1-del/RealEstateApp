@@ -1307,28 +1307,115 @@ export async function GET(request: NextRequest) {
         const pcForMu = String(postcodeNormForSource ?? "").trim();
         const hnForMu = String(houseNumberNormForSource ?? "").trim();
         const streetNormForMu = String(streetNormForExactMatch || streetNormForSource || "").trim();
-        if (
-          amtFinal != null &&
-          dateFinal != null &&
-          dateFinal.length >= 10 &&
-          pcForMu.length > 0 &&
-          hnForMu.length > 0 &&
-          streetNormForMu.length >= 2
-        ) {
-          const last_sale_price_raw = Math.round(amtFinal * 1000);
-          const saleDateIso = dateFinal.slice(0, 10);
-          /** Match property_latest_facts rows: exact raw OR euros within 2€ (display rounding / float); DATE or string sale date. */
-          const multiUnitDisclosureSql = `
-SELECT COUNT(DISTINCT CASE
-  WHEN unit_number IS NOT NULL AND LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
-  THEN TRIM(CAST(unit_number AS STRING))
-  END) AS distinct_units
+        const lotNormMu = String(normalizedRequestedLot ?? "").trim().toUpperCase();
+        const lotStrippedMu = lotNormMu.replace(/^0+/, "") || lotNormMu;
+        const multiUnitBuildingWhere = `
 FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
 WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
   AND ${frBqPostcodeMatchSql}
   AND ${frBqCityMatchSql}
   AND ${frBqStreetMatchSql}
   AND ${frBqHouseNumberMatchSql}
+`;
+        const multiUnitCountSelect = `
+SELECT COUNT(DISTINCT CASE
+  WHEN unit_number IS NOT NULL AND LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
+  THEN TRIM(CAST(unit_number AS STRING))
+  END) AS distinct_units
+`;
+        if (pcForMu.length > 0 && hnForMu.length > 0 && streetNormForMu.length >= 2) {
+          const baseParams = {
+            country: country || "",
+            city_main: cityNormForSource || cityNorm || "",
+            postcode: postcodeNormForSource || "",
+            street: streetNorm || "",
+            street_normalized: streetNormForMu,
+            house_number: hnForMu,
+            house_number_norm: houseNumberNormForMatch || "",
+          };
+          /** When a lot was submitted, anchor price+date on the facts row for that unit (matches raw last_sale_price; avoids API amount mismatch). */
+          if (lotNormMu.length > 0) {
+            try {
+              const anchorSql = `
+SELECT last_sale_price,
+  COALESCE(
+    FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)),
+    REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')
+  ) AS sale_date_iso
+${multiUnitBuildingWhere}
+  AND last_sale_price IS NOT NULL
+  AND last_sale_date IS NOT NULL
+  AND (
+    TRIM(CAST(unit_number AS STRING)) = @lot_normalized
+    OR (
+      LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
+      AND REGEXP_REPLACE(TRIM(CAST(unit_number AS STRING)), r'^0+', '') = @lot_stripped
+    )
+  )
+LIMIT 1
+`;
+              const [anchorRows] = await queryWithTimeout<[Array<{ last_sale_price?: unknown; sale_date_iso?: unknown }>]>(
+                {
+                  query: anchorSql.trim(),
+                  params: {
+                    ...baseParams,
+                    lot_normalized: lotNormMu,
+                    lot_stripped: lotStrippedMu || lotNormMu,
+                  },
+                  location: "EU",
+                },
+                "fr_multi_unit_transaction_anchor"
+              );
+              const anchor = anchorRows?.[0];
+              const anchorPriceRaw = anchor?.last_sale_price;
+              const dateIsoRaw = anchor?.sale_date_iso;
+              const anchorDateIso =
+                typeof dateIsoRaw === "string" && dateIsoRaw.trim().length >= 10
+                  ? dateIsoRaw.trim().slice(0, 10)
+                  : frExtractDateStringFromRaw(dateIsoRaw)?.slice(0, 10) ?? null;
+              const ap = frParseNumericLoose(anchorPriceRaw as unknown);
+              if (ap != null && ap > 0 && anchorDateIso) {
+                const countByAnchorSql = `
+${multiUnitCountSelect}
+${multiUnitBuildingWhere}
+  AND last_sale_price IS NOT NULL
+  AND last_sale_price = @anchor_last_sale_price
+  AND (
+    FORMAT_DATE('%Y-%m-%d', SAFE_CAST(last_sale_date AS DATE)) = @anchor_sale_date
+    OR REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})') = @anchor_sale_date
+  )
+`;
+                const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
+                  {
+                    query: countByAnchorSql.trim(),
+                    params: {
+                      ...baseParams,
+                      anchor_last_sale_price: ap,
+                      anchor_sale_date: anchorDateIso,
+                    },
+                    location: "EU",
+                  },
+                  "fr_multi_unit_transaction_disclosure_anchored"
+                );
+                const du = Number((muRows?.[0] as { distinct_units?: unknown })?.distinct_units);
+                multi_unit_transaction = Number.isFinite(du) && du > 1;
+              }
+            } catch {
+              multi_unit_transaction = false;
+            }
+          }
+          if (
+            !multi_unit_transaction &&
+            amtFinal != null &&
+            dateFinal != null &&
+            dateFinal.length >= 10
+          ) {
+            const last_sale_price_raw = Math.round(amtFinal * 1000);
+            const saleDateIso = dateFinal.slice(0, 10);
+            /** Fallback: match API last_transaction amount (thousandths or ±2€) + date. */
+            const multiUnitDisclosureSql = `
+${multiUnitCountSelect}
+${multiUnitBuildingWhere}
   AND last_sale_price IS NOT NULL
   AND (
     last_sale_price = @last_sale_price_raw
@@ -1339,30 +1426,25 @@ WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
     OR SAFE.PARSE_DATE('%Y-%m-%d', REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')) = PARSE_DATE('%Y-%m-%d', @sale_date)
   )
 `;
-          try {
-            const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
-              {
-                query: multiUnitDisclosureSql.trim(),
-                params: {
-                  country: country || "",
-                  city_main: cityNormForSource || cityNorm || "",
-                  postcode: postcodeNormForSource || "",
-                  street: streetNorm || "",
-                  street_normalized: streetNormForMu,
-                  house_number: hnForMu,
-                  house_number_norm: houseNumberNormForMatch || "",
-                  sale_date: saleDateIso,
-                  last_sale_price_raw,
-                  amt_euros: amtFinal,
+            try {
+              const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
+                {
+                  query: multiUnitDisclosureSql.trim(),
+                  params: {
+                    ...baseParams,
+                    sale_date: saleDateIso,
+                    last_sale_price_raw,
+                    amt_euros: amtFinal,
+                  },
+                  location: "EU",
                 },
-                location: "EU",
-              },
-              "fr_multi_unit_transaction_disclosure"
-            );
-            const du = Number((muRows?.[0] as { distinct_units?: unknown })?.distinct_units);
-            multi_unit_transaction = Number.isFinite(du) && du > 1;
-          } catch {
-            multi_unit_transaction = false;
+                "fr_multi_unit_transaction_disclosure"
+              );
+              const du = Number((muRows?.[0] as { distinct_units?: unknown })?.distinct_units);
+              multi_unit_transaction = Number.isFinite(du) && du > 1;
+            } catch {
+              multi_unit_transaction = false;
+            }
           }
         }
 
