@@ -2,8 +2,8 @@
 --
 -- Grain: one row per (normalized address + sale date + valeur), matching API lookup keys.
 -- multi_unit_transaction = TRUE only when exactly ONE DVF mutation at that grain is a multi-*apartment* sale:
---   COUNT(DISTINCT unit_number) >= 2 counting ONLY property_type = Appartement (ignore Dépendance, Parking,
---   Local, etc.), AND SUM(surface_m2) of those Appartement rows > 40 m² (prefer false).
+--   COUNT(DISTINCT unit_number) >= 2 counting ONLY rows classified as real apartments (Appartement only;
+--   exclude Dépendance, Parking, Cave, Local, etc.). Prefer FALSE.
 --
 -- Why older logic failed: (1) grouping only by address + date + price merged unrelated mutations; (2) row
 -- counts / distinct lots included annexes (dépendance, parking, cave) that are not additional dwellings.
@@ -137,7 +137,9 @@ with_norm AS (
     COALESCE(
       NULLIF(TRIM(CAST(document_id AS STRING)), ''),
       NULLIF(TRIM(CAST(mutation_group_key AS STRING)), '')
-    ) AS effective_mut_key
+    ) AS effective_mut_key,
+    -- Strict residential apartment only (Dépendance / Parking / Local / Cave / Maison use other labels in ETL).
+    (LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement') AS is_apartment_row
   FROM street_no_prefix
 ),
 all_grains AS (
@@ -154,7 +156,7 @@ all_grains AS (
     ANY_VALUE(street) AS street,
     ANY_VALUE(house_number) AS house_number
   FROM with_norm
-  WHERE LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
+  WHERE is_apartment_row
   GROUP BY
     postcode_norm,
     city_norm,
@@ -172,41 +174,27 @@ per_mutation AS (
     house_number_norm,
     last_sale_date,
     last_sale_price,
-    COUNTIF(LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement') AS n_apt,
+    COUNTIF(is_apartment_row) AS n_apt,
     COUNT(DISTINCT CASE
-      WHEN LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-      THEN NULLIF(TRIM(CAST(unit_number AS STRING)), '')
+      WHEN is_apartment_row THEN NULLIF(TRIM(CAST(unit_number AS STRING)), '')
     END) AS duc_apt,
     SUM(
       CASE
-        WHEN LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-          AND surface_m2 IS NOT NULL
-          AND surface_m2 > 0
-        THEN surface_m2
+        WHEN is_apartment_row AND surface_m2 IS NOT NULL AND surface_m2 > 0 THEN surface_m2
         ELSE 0
       END
     ) AS sum_surf_apt,
     MIN(
       CASE
-        WHEN LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-          AND surface_m2 IS NOT NULL
-          AND surface_m2 > 0
-        THEN surface_m2
+        WHEN is_apartment_row AND surface_m2 IS NOT NULL AND surface_m2 > 0 THEN surface_m2
       END
     ) AS min_surf_apt,
     MAX(
       CASE
-        WHEN LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-          AND surface_m2 IS NOT NULL
-          AND surface_m2 > 0
-        THEN surface_m2
+        WHEN is_apartment_row AND surface_m2 IS NOT NULL AND surface_m2 > 0 THEN surface_m2
       END
     ) AS max_surf_apt,
-    COUNTIF(
-      LOWER(TRIM(CAST(property_type AS STRING))) = 'appartement'
-      AND surface_m2 IS NOT NULL
-      AND surface_m2 > 0
-    ) AS n_surf_pos_apt,
+    COUNTIF(is_apartment_row AND surface_m2 IS NOT NULL AND surface_m2 > 0) AS n_surf_pos_apt,
     MAX(IF(NULLIF(TRIM(CAST(document_id AS STRING)), '') IS NOT NULL, 1, 0)) = 1 AS has_document_id
   FROM with_norm
   WHERE effective_mut_key IS NOT NULL AND TRIM(CAST(effective_mut_key AS STRING)) != ''
@@ -224,7 +212,6 @@ mut_flagged AS (
     *,
     CASE
       WHEN duc_apt < 2 OR n_apt < 2 THEN FALSE
-      WHEN sum_surf_apt <= 40 THEN FALSE
       WHEN has_document_id AND duc_apt >= 2 THEN TRUE
       WHEN
         n_surf_pos_apt >= 2

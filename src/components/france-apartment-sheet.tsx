@@ -106,8 +106,6 @@ export function FranceApartmentSheet({
     fr: FrancePropertyResponse | null;
     legacy: { averageBuildingValue: number | null; livabilityRating?: string | null } | null;
     fr_runtime_debug?: Record<string, unknown> | null;
-    /** Same API response as `fr` — avoids stale `effectiveData` hiding/showing the wrong note */
-    multi_unit_transaction?: boolean;
   } | null>(null);
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [showOptionalAptInput, setShowOptionalAptInput] = React.useState(false);
@@ -286,11 +284,7 @@ export function FranceApartmentSheet({
       /(?:APARTMENT|APPART|APT|LOT|UNIT|N°|Nº|#)\s*([A-Z0-9]+)/i.exec(sourceUnitLine)?.[1] ??
       /\b(\d{1,4})\s*$/i.exec(sourceUnitLine)?.[1] ??
       "";
-    const reqLot = String(
-      (resolvedForDisplay?.fr as { requestedLot?: string } | null | undefined)?.requestedLot ??
-        requestedLot ??
-        ""
-    ).trim();
+    const reqLot = String(normalized?.requestedLot ?? requestedLot ?? "").trim();
     const reqTok = reqLot ? normalizeLotTokenForContext(reqLot) : "";
     const srcTok = mSrc ? normalizeLotTokenForContext(mSrc) : "";
     const sourceDiffersFromRequested =
@@ -317,9 +311,9 @@ export function FranceApartmentSheet({
     frDisplayContext,
     normalizeLotTokenForContext,
     normalized?.resultType,
+    normalized?.requestedLot,
     parsed,
     requestedLot,
-    resolvedForDisplay,
   ]);
 
   const backendShouldPromptLot = rdForLot?.fr_should_prompt_lot === true;
@@ -680,7 +674,6 @@ export function FranceApartmentSheet({
       fr,
       legacy: { averageBuildingValue, livabilityRating: legacyLivability },
       fr_runtime_debug: runtimeDebug,
-      multi_unit_transaction: (parsed as Record<string, unknown> | undefined)?.multi_unit_transaction as boolean | undefined,
     });
   }, [
     isResultCardOpen,
@@ -1055,6 +1048,12 @@ export function FranceApartmentSheet({
     const lastTransactionSectionTitle = "Last official sale";
     const lastTransactionSummaryLine = (() => {
       if (isLoadingNow) return "—";
+      if (frDisplayContext === "area_level") {
+        return "Area reference — not this unit’s exact recorded sale";
+      }
+      if (frDisplayContext === "street_level") {
+        return "Street-level reference — not necessarily this unit’s exact sale";
+      }
       const amt = lastTxAmountPositive;
       const hasUsableAmount = amt != null && amt > 0;
       const hasUsableDate = referenceSaleValue != null && referenceSaleValue.trim().length > 0;
@@ -1098,23 +1097,24 @@ export function FranceApartmentSheet({
       return { text: "The price is unchanged since the last transaction", tone: "flat" };
     })();
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
-    // "Transaction includes multiple units" must follow ONLY `multi_unit_transaction === true` on the
-    // settled response. While `isLoading` is true, React Query still holds the previous `data` — never read
-    // `multi_unit_transaction` from `data` during loading (stale note + "Searching..." flash).
+    // Multi-unit note: current finished API response only (never `resolvedForDisplay` / prior fetch).
+    const currentResponse = data as Record<string, unknown> | null | undefined;
     const showMultiUnitTransactionNote =
-      !isLoadingNow &&
-      (resolvedForDisplay != null
-        ? resolvedForDisplay.multi_unit_transaction === true
-        : data != null &&
-          (data as Record<string, unknown>).multi_unit_transaction === true);
+      !isLoadingNow && currentResponse != null && currentResponse.multi_unit_transaction === true;
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
-      : hasFranceValuationWin && winningSourceFromApi
-        ? winningSourceFromApi
-        : streetAvgMsg && !/no reliable data found/i.test(streetAvgMsg)
-          ? streetAvgMsg
-          : sourceLabel || (isNoResult ? "No reliable data found" : "—");
+      : frDisplayContext === "building_level"
+        ? "This estimate is based on recent sales within this building."
+        : frDisplayContext === "street_level"
+          ? "This estimate is based on recent sales on this street."
+          : frDisplayContext === "area_level"
+            ? "This estimate is based on similar properties in the surrounding area."
+            : hasFranceValuationWin && winningSourceFromApi
+              ? winningSourceFromApi
+              : streetAvgMsg && !/no reliable data found/i.test(streetAvgMsg)
+                ? streetAvgMsg
+                : sourceLabel || (isNoResult ? "No reliable data found" : "—");
     const confidenceText = isLoadingNow ? "—" : (displayConfidence ? displayConfidence : "—");
     const livabilityText = isLoadingNow
       ? "—"
@@ -1266,7 +1266,11 @@ export function FranceApartmentSheet({
                     Based on ~{Math.round(fv.surface_m2_used)} m² ({fv.surface_source_label})
                   </div>
                 ) : null}
-                {!isLoadingNow && !isNoResult && (hasValue || ppm2Display != null) && frDisplayContext === "exact_unit" && fv?.source_unit_display?.trim() ? (
+                {!isLoadingNow &&
+                !isNoResult &&
+                (hasValue || ppm2Display != null) &&
+                frDisplayContext === "exact_unit" &&
+                fv?.source_unit_display?.trim() ? (
                   <div className="mt-1 text-[10px] text-zinc-400/80">Source unit: {fv.source_unit_display.trim()}</div>
                 ) : null}
                 {dataFreshnessYear != null && !isLoadingNow && !isNoResult ? (

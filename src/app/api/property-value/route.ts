@@ -795,6 +795,8 @@ export async function GET(request: NextRequest) {
         fr_unit_prompt_reason: null as string | null,
         fr_has_unit_level_differentiation: null as boolean | null,
         fr_distinct_unit_count: null as number | null,
+        /** Final QA: apartment/lot prompt aligned with `france_building_unit_flags` (same as `prompt_for_apartment`). */
+        fr_prompt_for_apartment_final: null as boolean | null,
       };
 
       const frMapWinningStepToDisplayContext = (
@@ -1333,7 +1335,7 @@ export async function GET(request: NextRequest) {
           pr.livability_rating = derived;
         }
 
-        /** Read-only disclosure: `france_multi_unit_transactions` row keyed by address + sale date + price. Both exact_unit and building_level require helper `multi_unit_transaction` (prefer false; do not infer from distinct_unit_count alone). */
+        /** Read-only disclosure: `france_multi_unit_transactions` only — helper row match + BQ `multi_unit_transaction` flag (no display-context inference, no distinct_unit_count alone). */
         let multi_unit_transaction = false;
         let multi_unit_distinct_unit_count: number | null = null;
         frRuntimeDebug.fr_multi_unit_lookup_match_found = false;
@@ -1447,16 +1449,17 @@ LIMIT 1
                   ? ducRaw
                   : frParseNumericLoose(ducRaw);
               const ducFin = duc != null && Number.isFinite(duc) ? Math.trunc(duc) : null;
-              const exactUnitDisclosure = frDisplayContext === "exact_unit" && helperMut;
-              const buildingLevelMultiUnitDisclosure =
-                frDisplayContext === "building_level" &&
-                helperMut &&
-                ducFin != null &&
-                ducFin > 1;
-              frRuntimeDebug.fr_multi_unit_building_level_disclosure = buildingLevelMultiUnitDisclosure;
-              multi_unit_transaction = exactUnitDisclosure || buildingLevelMultiUnitDisclosure;
-              multi_unit_distinct_unit_count =
-                exactUnitDisclosure || buildingLevelMultiUnitDisclosure ? ducFin : null;
+              const disclosureContexts: Array<typeof frDisplayContext> = [
+                "exact_unit",
+                "exact_address",
+                "building_level",
+              ];
+              const allowMultiUnitUi =
+                frDisplayContext != null && disclosureContexts.includes(frDisplayContext);
+              multi_unit_transaction = helperMut && allowMultiUnitUi;
+              multi_unit_distinct_unit_count = multi_unit_transaction ? ducFin : null;
+              frRuntimeDebug.fr_multi_unit_building_level_disclosure =
+                helperMut && frDisplayContext === "building_level";
             }
           }
         } catch {
@@ -1467,6 +1470,7 @@ LIMIT 1
           frRuntimeDebug.fr_multi_unit_building_level_disclosure = null;
         }
         frRuntimeDebug.fr_multi_unit_transaction_final = multi_unit_transaction;
+        frRuntimeDebug.fr_prompt_for_apartment_final = outPayload.prompt_for_apartment === true;
 
         return NextResponse.json(
           {

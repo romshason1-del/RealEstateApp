@@ -41,8 +41,9 @@ export function usePropertyValueInsights(
     const thisRequestId = ++requestIdRef.current;
     abortRef.current?.abort();
     abortRef.current = new AbortController();
-    setIsLoading(true);
     const isFR = (countryCode ?? "").toUpperCase() === "FR";
+    if (isFR) setData(null);
+    setIsLoading(true);
     const rawForFrance = (opts?.rawInputAddress || (isFR ? address : "")).trim();
     const fetchOpts = {
       countryCode: countryCode || "IL",
