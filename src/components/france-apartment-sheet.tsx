@@ -41,14 +41,6 @@ function frDataFreshnessYearFromPayload(parsed: unknown, fv: unknown, pr: unknow
   return null;
 }
 
-function frLastTransactionSuggestsMultiUnit(lt: unknown): boolean {
-  if (lt == null || typeof lt !== "object") return false;
-  const o = lt as Record<string, unknown>;
-  if (o.multi_lot === true || o.is_multi_lot === true || o.includes_multiple_units === true) return true;
-  if (String(o.multi_lot_flag ?? "").toLowerCase() === "true") return true;
-  return false;
-}
-
 type FranceSheetProps = {
   address: string;
   position: { lat: number; lng: number };
@@ -977,7 +969,7 @@ export function FranceApartmentSheet({
       return { text: "About the same as last sale", tone: "flat" };
     })();
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
-    const showMultiUnitTransactionNote = frLastTransactionSuggestsMultiUnit((pr as any)?.last_transaction);
+    const showMultiUnitTransactionNote = (parsed as any)?.multi_unit_transaction === true;
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"

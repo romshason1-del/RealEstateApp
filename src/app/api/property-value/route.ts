@@ -782,7 +782,7 @@ export async function GET(request: NextRequest) {
       // (normalizedRequestedLot is computed above from `aptNumber`.)
       frRuntimeDebug.submitted_lot = normalizedRequestedLot ?? null;
 
-      const frReturn = (payload: Record<string, unknown>, tag: string, status?: number) => {
+      const frReturn = async (payload: Record<string, unknown>, tag: string, status?: number) => {
         frRuntimeDebug.submitted_lot_present = submittedLotPresent;
 
         // Source of truth: france_building_unit_flags table. House ALWAYS suppresses.
@@ -1294,8 +1294,72 @@ export async function GET(request: NextRequest) {
                   : (pr.livability_rating as "POOR" | "FAIR" | "GOOD" | "VERY GOOD" | "EXCELLENT") ?? "FAIR";
           pr.livability_rating = derived;
         }
+
+        /** Read-only disclosure: same building + same sale date/price in property_latest_facts spans >1 distinct unit_number. */
+        let multi_unit_transaction = false;
+        const prFinal = outPayload.property_result as Record<string, unknown> | undefined;
+        const ltFinal = prFinal?.last_transaction as Record<string, unknown> | undefined;
+        const amtFinal =
+          typeof ltFinal?.amount === "number" && Number.isFinite(ltFinal.amount) && ltFinal.amount > 0
+            ? ltFinal.amount
+            : null;
+        const dateFinal = frExtractDateStringFromRaw(ltFinal?.date);
+        const pcForMu = String(postcodeNormForSource ?? "").trim();
+        const hnForMu = String(houseNumberNormForSource ?? "").trim();
+        const streetNormForMu = String(streetNormForExactMatch || streetNormForSource || "").trim();
+        if (
+          amtFinal != null &&
+          dateFinal != null &&
+          dateFinal.length >= 10 &&
+          pcForMu.length > 0 &&
+          hnForMu.length > 0 &&
+          streetNormForMu.length >= 2
+        ) {
+          const last_sale_price_raw = Math.round(amtFinal * 1000);
+          const saleDateIso = dateFinal.slice(0, 10);
+          const multiUnitDisclosureSql = `
+SELECT COUNT(DISTINCT CASE
+  WHEN unit_number IS NOT NULL AND LENGTH(TRIM(CAST(unit_number AS STRING))) > 0
+  THEN TRIM(CAST(unit_number AS STRING))
+  END) AS distinct_units
+FROM \`streetiq-bigquery.streetiq_gold.property_latest_facts\`
+WHERE LOWER(TRIM(country)) = LOWER(TRIM(@country))
+  AND ${frBqPostcodeMatchSql}
+  AND ${frBqCityMatchSql}
+  AND ${frBqStreetMatchSql}
+  AND ${frBqHouseNumberMatchSql}
+  AND last_sale_price IS NOT NULL
+  AND last_sale_price = @last_sale_price_raw
+  AND SAFE.PARSE_DATE('%Y-%m-%d', REGEXP_EXTRACT(TRIM(SAFE_CAST(last_sale_date AS STRING)), r'^(\\d{4}-\\d{2}-\\d{2})')) = PARSE_DATE('%Y-%m-%d', @sale_date)
+`;
+          try {
+            const [muRows] = await queryWithTimeout<[Array<{ distinct_units?: unknown }>]>(
+              {
+                query: multiUnitDisclosureSql.trim(),
+                params: {
+                  country: country || "",
+                  city_main: cityNormForSource || cityNorm || "",
+                  postcode: postcodeNormForSource || "",
+                  street: streetNorm || "",
+                  street_normalized: streetNormForMu,
+                  house_number: hnForMu,
+                  house_number_norm: houseNumberNormForMatch || "",
+                  sale_date: saleDateIso,
+                  last_sale_price_raw,
+                },
+                location: "EU",
+              },
+              "fr_multi_unit_transaction_disclosure"
+            );
+            const du = Number((muRows?.[0] as { distinct_units?: unknown })?.distinct_units);
+            multi_unit_transaction = Number.isFinite(du) && du > 1;
+          } catch {
+            multi_unit_transaction = false;
+          }
+        }
+
         return NextResponse.json(
-          { ...outPayload, fr_runtime_debug: frRuntimeDebug },
+          { ...outPayload, multi_unit_transaction, fr_runtime_debug: frRuntimeDebug },
           status ? { status } : undefined
         );
       };
@@ -3416,7 +3480,7 @@ export async function GET(request: NextRequest) {
               .map((r) => frPropertyLatestFactsMoneyToEuros((r as any).price_per_m2))
               .filter((v): v is number => v != null && v > 0);
             frRuntimeDebug.fr_price_variance = computeVariance(exactHousePpmValues);
-            return frReturn(
+            return await frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
                 data_source: "properties_france",
@@ -3642,7 +3706,7 @@ export async function GET(request: NextRequest) {
         buildingProfile?: BuildingProfile | null;
         /** When from rich source, use these same-address rows instead of querying property_latest_facts. */
         preloadedSameAddressRows?: Array<Record<string, unknown>> | null;
-      }): Promise<ReturnType<typeof frReturn> | null> => {
+      }): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         try {
           if (!houseNumberNorm || !postcodeNorm) {
             const rr = !houseNumberNorm ? "missing_house_number" : "missing_postcode";
@@ -3970,7 +4034,7 @@ export async function GET(request: NextRequest) {
             winningSourceLabel: FR_LABEL_BUILDING_SIMILAR_UNIT,
           });
 
-          return frReturn(
+          return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -4038,7 +4102,7 @@ export async function GET(request: NextRequest) {
       /** Post-lot relaxed lookup: when exact returned 0 rows but lot was submitted, try relaxed address matching. */
       const tryFrancePostLotRelaxedLookup = async (
         preloadedSameAddressRows?: Array<Record<string, unknown>> | null
-      ): Promise<ReturnType<typeof frReturn> | null> => {
+      ): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         try {
           const streetForRelaxed = streetNormForSource || streetNorm || "";
           if (!exactLotToken || !postcodeNorm) {
@@ -4312,7 +4376,7 @@ export async function GET(request: NextRequest) {
           const plrUnit = (best.raw as any)?.unit_number ?? (best.raw as any)?.lot_col;
           frRuntimeDebug.fr_source_unit_display =
             plrUnit != null && String(plrUnit).trim() ? `Apartment ${String(plrUnit).trim()}` : null;
-          return frReturn(
+          return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -4463,7 +4527,7 @@ export async function GET(request: NextRequest) {
           const exactUnitNum = (exactBest as any)?.unit_number;
           frRuntimeDebug.fr_source_unit_display =
             exactUnitNum != null && String(exactUnitNum).trim() ? `Apartment ${String(exactUnitNum).trim()}` : null;
-          return frReturn({
+          return await frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
             fr_detect: detectClass,
@@ -4767,7 +4831,7 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.fr_selected_reason = "same_address_sufficient_rows";
             frRuntimeDebug.chosen_surface_value = medianSurfaceM2ForFallback;
             frRuntimeDebug.winning_median_price_per_m2 = medianPricePerM2Euro;
-            return frReturn(
+            return await frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
                 data_source: "properties_france",
@@ -4861,7 +4925,7 @@ export async function GET(request: NextRequest) {
             frRuntimeDebug.winning_median_price_per_m2 = medianPpmEuro;
             frRuntimeDebug.building_rows_count = exactRows.length;
             frRuntimeDebug.building_usable_rows_count = richUsable.length;
-            return frReturn(
+            return await frReturn(
               {
                 address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
                 data_source: "properties_france",
@@ -5010,7 +5074,7 @@ export async function GET(request: NextRequest) {
               frRuntimeDebug.surface_source = "same_street_similar";
               frRuntimeDebug.chosen_surface_value = surfaceForEst;
               _frLog("[FR_FLOW] valuation_ladder_complete tag=valuation_response branch=SAME_STREET_HOUSE_FROM_FACTS");
-              return frReturn(
+              return await frReturn(
                 {
                   address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
                   data_source: "properties_france",
@@ -5111,7 +5175,7 @@ export async function GET(request: NextRequest) {
       `;
 
       // Building profile fallback: use when price_per_m2 > 0; surface optional (confidence via row count).
-      const tryBuildingProfileFallback = (): ReturnType<typeof frReturn> | null => {
+      const tryBuildingProfileFallback = async (): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         if (!buildingProfile || buildingProfile.transaction_count < 1) return null;
         const medianPpm = buildingProfile.median_price_per_m2;
         if (medianPpm == null || medianPpm <= 0) return null;
@@ -5138,7 +5202,7 @@ export async function GET(request: NextRequest) {
         frRuntimeDebug.fr_total_rows_used = buildingProfile.transaction_count;
         frRuntimeDebug.fr_building_profile_candidate_count = buildingProfile.transaction_count;
         frRuntimeDebug.fr_final_winner_layer = "building_profile";
-        return frReturn(
+        return await frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -5182,7 +5246,7 @@ export async function GET(request: NextRequest) {
         );
       };
 
-      const buildingProfileWin = tryBuildingProfileFallback();
+      const buildingProfileWin = await tryBuildingProfileFallback();
       if (buildingProfileWin) return buildingProfileWin;
 
       // MANDATORY lot-aware gate: before street/nearby, when lot submitted, try lot-aware same-address (or relaxed) one more time.
@@ -5496,7 +5560,7 @@ export async function GET(request: NextRequest) {
                 lastTxFromStreet.amount > 0 ? undefined : "Representative sale date from street data"
               )
             : frLastTransactionPayload(0, null, "same_street_similar_house", null, "No exact recent transaction available");
-          return frReturn({
+          return await frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
             fr_detect: frDetectToUse,
@@ -5562,7 +5626,7 @@ export async function GET(request: NextRequest) {
               lastTxFromStreetPriceOnly.amount > 0 ? undefined : "Representative sale date from street data"
             )
           : frLastTransactionPayload(0, null, "same_street_similar_house", null, "No exact recent transaction available");
-        return frReturn(
+        return await frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -5764,7 +5828,7 @@ export async function GET(request: NextRequest) {
           const communeTxPayload = communeLastTx
             ? frLastTransactionPayload(communeLastTx.amount, communeLastTx.date, "area_fallback", communeAreaSource, communeLastTx.amount > 0 ? undefined : "Representative sale date from commune data")
             : frLastTransactionPayload(0, null, "area_fallback", communeAreaSource, "No exact recent transaction available");
-          return frReturn({
+          return await frReturn({
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
             fr_detect: frDetectToUse,
@@ -5809,7 +5873,7 @@ export async function GET(request: NextRequest) {
       }
 
       // NEARBY fallback: same postcode, nearby streets/addresses ג€” before no_data
-      const tryNearbyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
+      const tryNearbyFallback = async (): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         if (!postcodeNorm || !cityNorm) return null;
         const isHouse = detectClass === "house";
         const isApartment = flowAsApartment;
@@ -5994,7 +6058,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_nearby_candidate_count = withPpm.length;
           frRuntimeDebug.fr_final_winner_layer = "nearby_fallback";
 
-          return frReturn(
+          return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -6049,7 +6113,7 @@ export async function GET(request: NextRequest) {
       const nearbyWin = await tryNearbyFallback();
       if (nearbyWin) return nearbyWin;
 
-      const tryCommuneEmergencyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
+      const tryCommuneEmergencyFallback = async (): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         const cityForQuery = cityNormForSource || cityNorm;
         if (!cityForQuery?.trim()) return null;
         try {
@@ -6125,7 +6189,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_commune_emergency_candidate_count = ppmAndTxRows.length;
           frRuntimeDebug.fr_final_winner_layer = "commune_emergency";
           _frLog("[FR_EMERGENCY] commune_emergency rows=" + String(ppmAndTxRows.length) + " median_ppm=" + String(medianPpm));
-          return frReturn(
+          return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -6173,7 +6237,7 @@ export async function GET(request: NextRequest) {
       if (emergencyWin) return emergencyWin;
 
       // Final safety net: city-only query when commune_emergency failed but we have city.
-      const tryCommuneSafetyNet = async (): Promise<ReturnType<typeof frReturn> | null> => {
+      const tryCommuneSafetyNet = async (): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         const cityForQuery = cityNormForSource || cityNorm;
         if (!cityForQuery?.trim()) return null;
         try {
@@ -6232,7 +6296,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
           _frLog("[FR_SAFETY] commune_safety_net rows=" + String(safetyNetRows.length) + " median_ppm=" + String(medianPpm));
-          return frReturn(
+          return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -6280,7 +6344,7 @@ export async function GET(request: NextRequest) {
       if (safetyNetWin) return safetyNetWin;
 
       // Hard fix: postcode-only fallback ג€“ BigQuery has data by postcode (Cannes 06400, Biarritz 64200).
-      const tryPostcodeOnlyFallback = async (): Promise<ReturnType<typeof frReturn> | null> => {
+      const tryPostcodeOnlyFallback = async (): Promise<Awaited<ReturnType<typeof frReturn>> | null> => {
         const postcodeForQuery = (postcodeNormForSource ?? postcodeNorm ?? "").trim();
         if (!postcodeForQuery || postcodeForQuery.length < 4) return null;
         try {
@@ -6337,7 +6401,7 @@ export async function GET(request: NextRequest) {
           frRuntimeDebug.fr_fallback_blocked_no_result = true;
           frRuntimeDebug.fr_price_variance = computeVariance(ppmEuros);
           _frLog("[FR_HARD] postcode_only_fallback rows=" + String(postcodeRows.length) + " median_ppm=" + String(medianPpm) + " postcode=" + postcodeForQuery);
-          return frReturn(
+          return await frReturn(
             {
               address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
               data_source: "properties_france",
@@ -6508,7 +6572,7 @@ export async function GET(request: NextRequest) {
       if (shouldPromptLotFromBuilding) {
         frRuntimeDebug.fr_should_prompt_lot = true;
         _frLog("[FR_GOLD] apartment_lot_prompt_triggered_at_no_data");
-        return frReturn(
+        return await frReturn(
           {
             address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
             data_source: "properties_france",
@@ -6549,7 +6613,7 @@ export async function GET(request: NextRequest) {
         hasBuildingEvidenceNoValue
           ? "Building identified, but insufficient reliable valuation data"
           : "No reliable data found";
-      return frReturn({
+      return await frReturn({
         address: { city: cityNorm, street: streetNorm, house_number: houseNumberNorm },
         data_source: "properties_france",
         fr_detect: frDetectToUse,
@@ -7273,6 +7337,7 @@ export async function GET(request: NextRequest) {
       const payload = {
         address: { city: city.trim(), street: street.trim(), house_number: houseNumber.trim() },
         data_source: "properties_france",
+        multi_unit_transaction: false,
         multiple_units: coerceToBuilding,
         result_level: coerceToBuilding ? "building" : result.resultLevel,
         ...(coerceToBuilding ? { average_building_value: averageBuildingEuroCoerced } : {}),
