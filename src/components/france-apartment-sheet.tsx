@@ -1031,6 +1031,37 @@ export function FranceApartmentSheet({
     console.log("multi_unit_transaction:", multi_unit_transaction);
     // API sets this only when france_multi_unit_transactions exact-matches AND fr_display_context === exact_unit.
     const showMultiUnitTransactionNote = multi_unit_transaction === true;
+    const normalizeLotTokenForHint = (s: string) =>
+      s.trim().toUpperCase().replace(/^0+(?=[0-9])/, "") || s.trim().toUpperCase();
+    const sourceUnitLineForAddrHint = String(fv?.source_unit_display ?? "").trim();
+    const mSrcAddr =
+      /(?:APARTMENT|APPART|APT|LOT|UNIT|N°|Nº|#)\s*([A-Z0-9]+)/i.exec(sourceUnitLineForAddrHint)?.[1] ??
+      /\b(\d{1,4})\s*$/i.exec(sourceUnitLineForAddrHint)?.[1] ??
+      "";
+    const reqLotAddr = String(
+      (resolvedForDisplay?.fr as { requestedLot?: string } | null | undefined)?.requestedLot ??
+        requestedLot ??
+        ""
+    ).trim();
+    const reqTokAddr = reqLotAddr ? normalizeLotTokenForHint(reqLotAddr) : "";
+    const srcTokAddr = mSrcAddr ? normalizeLotTokenForHint(mSrcAddr) : "";
+    const sourceUnitDiffersFromRequested =
+      reqTokAddr.length > 0 && srcTokAddr.length > 0 && reqTokAddr !== srcTokAddr;
+    const noSourceUnitForUser = sourceUnitLineForAddrHint.length === 0;
+    const isAddressLevelOfficialRecord =
+      frDisplayContext === "exact_address" ||
+      ((frDisplayContext == null || frDisplayContext === "unknown") && fr?.resultType === "exact_address");
+    const displayContextBlocksAddrHint =
+      frDisplayContext === "exact_unit" ||
+      frDisplayContext === "building_level" ||
+      frDisplayContext === "street_level" ||
+      frDisplayContext === "area_level";
+    const showAddressLevelOfficialRecordHint =
+      !isLoadingNow &&
+      !isNoResult &&
+      isAddressLevelOfficialRecord &&
+      !displayContextBlocksAddrHint &&
+      (noSourceUnitForUser || sourceUnitDiffersFromRequested);
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
     const sourceText = isLoadingNow
       ? "—"
@@ -1200,6 +1231,11 @@ export function FranceApartmentSheet({
                 <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
                   {lastTransactionSummaryLine}
                 </div>
+                {showAddressLevelOfficialRecordHint ? (
+                  <div className="mt-1 text-[11px] leading-snug text-zinc-400/90">
+                    This is an address-level official record and may reflect multiple units.
+                  </div>
+                ) : null}
                 {showMultiUnitTransactionNote ? (
                   <div className="mt-1 text-[11px] font-medium text-amber-200/90">
                     Transaction includes multiple units
