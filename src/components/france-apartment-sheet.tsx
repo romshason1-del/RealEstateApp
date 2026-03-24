@@ -984,10 +984,12 @@ export function FranceApartmentSheet({
     const dataFreshnessYear = frDataFreshnessYearFromPayload(parsed, fv, pr, fr);
     // Root field from `/api/property-value` — must not use `parsed`/`effectiveData` alone (sticky building
     // payload can win priority and carry the wrong flag vs the latest fetch or frozen `resolvedForDisplay`).
-    const multi_unit_transaction: boolean | undefined =
+    const rawMultiUnit =
       resolvedForDisplay != null
         ? resolvedForDisplay.multi_unit_transaction
         : (data as Record<string, unknown> | undefined)?.multi_unit_transaction;
+    const multi_unit_transaction: boolean | undefined =
+      rawMultiUnit === true ? true : rawMultiUnit === false ? false : undefined;
     console.log("multi_unit_transaction:", multi_unit_transaction);
     const showMultiUnitTransactionNote = multi_unit_transaction === true;
     const streetAvgMsg = coerceDisplayString(pr?.street_average_message as unknown, "").trim();
