@@ -3,14 +3,12 @@
  * Table: streetiq-bigquery.streetiq_gold.us_nyc_api_truth
  */
 
-import { getBigQueryClient } from "@/lib/bigquery-client";
+import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
 
 const NYC_TRUTH_TABLE = "`streetiq-bigquery.streetiq_gold.us_nyc_api_truth`";
 
-function nycQueryLocation(): string {
-  return process.env.US_NYC_BIGQUERY_LOCATION?.trim() || "US";
-}
+const NYC_TRUTH_QUERY_LOCATION = "EU";
 
 function toNumberOrNull(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -74,8 +72,7 @@ const SELECT_FIELDS = `
  * Exact match: input must equal pluto_address or sales_address (after caller trim only).
  */
 export async function queryUSNYCApiTruthByAddress(address: string): Promise<USNYCApiTruthResponse> {
-  const client = getBigQueryClient();
-  const location = nycQueryLocation();
+  const client = getUSBigQueryClient();
   const query = `
     SELECT ${SELECT_FIELDS}
     FROM ${NYC_TRUTH_TABLE}
@@ -83,7 +80,7 @@ export async function queryUSNYCApiTruthByAddress(address: string): Promise<USNY
     LIMIT 1
   `;
   const params = { address };
-  const [rows] = await client.query({ query, params, location });
+  const [rows] = await client.query({ query, params, location: NYC_TRUTH_QUERY_LOCATION });
   const row = (rows as Record<string, unknown>[] | null | undefined)?.[0];
   if (!row) {
     return {

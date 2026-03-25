@@ -3,13 +3,13 @@
  * Do not import France BigQuery query services (`bigquery-france-service`).
  */
 
-import { isBigQueryConfigured } from "@/lib/bigquery-client";
+import { isUSNycBigQueryProjectConfigured } from "./bigquery-client";
 
 export type USQueryParams = Record<string, string | number | boolean | null | undefined>;
 
-/** True when the shared data project env is set (required to run NYC truth-table queries). */
+/** True when the data project env is set (required to run NYC truth-table queries). */
 export function isUSBigQueryConfigured(): boolean {
-  return isBigQueryConfigured();
+  return isUSNycBigQueryProjectConfigured();
 }
 
 /**
