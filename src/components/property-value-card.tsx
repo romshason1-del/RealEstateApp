@@ -15,7 +15,11 @@ import {
   sanitizeFrancePropertyResultForDisplay,
   type FrancePropertyResultLike,
 } from "@/lib/fr-display-safe";
-import { UsNycTruthPropertyCard, type UsNycTruthCardData } from "@/components/us/us-nyc-truth-property-card";
+import {
+  formatNycCardDisplayAddress,
+  UsNycTruthPropertyCard,
+  type UsNycTruthCardData,
+} from "@/components/us/us-nyc-truth-property-card";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -765,12 +769,25 @@ export function PropertyValueCard({
   const estimateIsRent = estimate && isLikelyRent(estimate.estimated_value, source);
   const estimateIsStreetValue = estimate && "value_type" in estimate && estimate.value_type === "street_median";
 
-  const providerAddr = insightsData && "address" in insightsData ? (insightsData as { address?: { city?: string; street?: string; house_number?: string } }).address : undefined;
+  const insightsForTitle = activeInsightsData ?? insightsData;
+  const providerAddr =
+    insightsForTitle && "address" in insightsForTitle
+      ? (insightsForTitle as { address?: { city?: string; street?: string; house_number?: string } }).address
+      : undefined;
+  const isNycTruthTitle =
+    isUS &&
+    insightsForTitle &&
+    typeof insightsForTitle === "object" &&
+    (insightsForTitle as { data_source?: string }).data_source === "us_nyc_truth";
   const formatProviderAddress = (a: { city?: string; street?: string; house_number?: string }) =>
     [a.house_number, a.street, a.city].filter(Boolean).join(", ").trim() || "";
   const displayAddress =
     selectedFormattedAddress ??
-    (providerAddr ? formatProviderAddress(providerAddr) : null) ??
+    (providerAddr
+      ? isNycTruthTitle
+        ? formatNycCardDisplayAddress(providerAddr) || formatProviderAddress(providerAddr)
+        : formatProviderAddress(providerAddr)
+      : null) ??
     address;
 
   return (
