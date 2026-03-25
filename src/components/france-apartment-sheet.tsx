@@ -26,6 +26,11 @@ function frAreaDemandLabelFromLivability(rating: string | null | undefined): str
   return "—";
 }
 
+/** Apartment number field: keep only ASCII digits (typing and paste). */
+function frFranceLotInputDigitsOnly(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
 function frDataFreshnessYearFromPayload(parsed: unknown, fv: unknown, pr: unknown, fr: unknown): number | null {
   const p = parsed as Record<string, unknown> | null | undefined;
   const fvRec = fv as Record<string, unknown> | null | undefined;
@@ -113,6 +118,8 @@ export function FranceApartmentSheet({
   const [apartmentPromptWasEverShown, setApartmentPromptWasEverShown] = React.useState(false);
   /** After "Check another apartment": show lot step even when latest API has `fr_should_prompt_lot` false. */
   const [forceLotPromptScreen, setForceLotPromptScreen] = React.useState(false);
+  /** After "Check another apartment": ignore unit-level hook `data` until refetch settles (use sticky building snapshot only). */
+  const [frApartmentEntryHardReset, setFrApartmentEntryHardReset] = React.useState(false);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
@@ -145,6 +152,7 @@ export function FranceApartmentSheet({
     setIsExpanded(false);
     setApartmentPromptWasEverShown(false);
     setForceLotPromptScreen(false);
+    setFrApartmentEntryHardReset(false);
   }, [addressKey]);
 
   // Prevent any "house-direct" result-card auto-open until we have resolved the initial
@@ -161,6 +169,16 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     if (frAddressFetchStarted && !isLoading) setFrAddressFetchDone(true);
   }, [frAddressFetchStarted, isLoading]);
+
+  const frHardResetPrevLoadingRef = React.useRef(false);
+  React.useEffect(() => {
+    const wasLoading = frHardResetPrevLoadingRef.current;
+    frHardResetPrevLoadingRef.current = isLoading;
+    if (!frApartmentEntryHardReset) return;
+    if (wasLoading && !isLoading) {
+      setFrApartmentEntryHardReset(false);
+    }
+  }, [isLoading, frApartmentEntryHardReset]);
 
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
@@ -227,6 +245,9 @@ export function FranceApartmentSheet({
   }, []);
 
   const effectiveData = React.useMemo(() => {
+    if (frApartmentEntryHardReset) {
+      return lastBuildingPayloadRef.current ?? null;
+    }
     // Priority order in UI layer: exact > similar > building > nearby > no_result.
     // Never let older/weaker sticky building payload override a newer/stronger result.
     if (data && lastBuildingPayloadRef.current) {
@@ -235,7 +256,7 @@ export function FranceApartmentSheet({
       return a >= b ? data : lastBuildingPayloadRef.current;
     }
     return data ?? lastBuildingPayloadRef.current ?? null;
-  }, [data, franceResultPriority]);
+  }, [data, franceResultPriority, frApartmentEntryHardReset]);
 
   const parsed = effectiveData as any;
   const normalized = (parsed?.fr ?? null) as FrancePropertyResponse | null;
@@ -622,10 +643,11 @@ export function FranceApartmentSheet({
   }, [phase, frDisplayContext, requestedLot, lotInput, normalized?.resultType, isHouseLikeUI, isPropertyTypeUnknown, parsed?.fr_runtime_debug]);
 
   const submit = React.useCallback((source: "enter" | "button") => {
-    const lot = lotInput.trim();
+    const lot = frFranceLotInputDigitsOnly(lotInput).trim();
     // Hard block: when backend requires lot, block until lot is provided.
     if (lotPromptGenuinelyRequired && !lot) return;
     setForceLotPromptScreen(false);
+    setFrApartmentEntryHardReset(false);
     // Do not block lot search while the initial building-level request is still in flight:
     // otherwise Enter / refetch never runs with apt_number and the API stays at submitted_lot=null.
     setRequestedLot(lot || undefined);
@@ -767,10 +789,12 @@ export function FranceApartmentSheet({
     flushSync(() => {
       resetToApartmentPrompt();
       if (apartmentPromptWasEverShown) {
+        setFrApartmentEntryHardReset(true);
         setForceLotPromptScreen(true);
         // Fresh FR fetch clears hook `data` (unit-specific payload) so no stale valuation remains in memory for UI.
         setTrigger((t) => t + 1);
       } else {
+        setFrApartmentEntryHardReset(false);
         setForceLotPromptScreen(false);
       }
     });
@@ -1521,7 +1545,7 @@ export function FranceApartmentSheet({
                   <button
                     key={l}
                     type="button"
-                    onClick={() => setLotInput(String(l))}
+                    onClick={() => setLotInput(frFranceLotInputDigitsOnly(String(l)))}
                     className="rounded-full border border-amber-400/20 bg-black/40 px-2.5 py-1 text-[11px] font-medium text-amber-200/90 hover:border-amber-400/35 hover:bg-black/55"
                   >
                     {l}
@@ -1542,9 +1566,11 @@ export function FranceApartmentSheet({
               <div className="mt-2 flex gap-2">
                 <input
                   type="text"
-                  inputMode="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="off"
                   value={lotInput}
-                  onChange={(e) => setLotInput(e.target.value)}
+                  onChange={(e) => setLotInput(frFranceLotInputDigitsOnly(e.target.value))}
                   onFocus={() => setIsLotFocused(true)}
                   onBlur={() => setIsLotFocused(false)}
                   onKeyDown={(e) => {
