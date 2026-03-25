@@ -3,6 +3,7 @@
  * US-only — do not use for France.
  */
 
+import { fetchAcrisNycTruthDeedHistory } from "@/lib/us/acris/acris-truth";
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 
 function num(v: unknown): number | null {
@@ -21,11 +22,13 @@ function str(v: unknown): string | null {
  * When `success` is true, merges truth fields + `address` + minimal `property_result` for legacy checks.
  * Preserves `us_nyc_debug` if present.
  * NYC UI uses `data_source === "us_nyc_truth"` and reads top-level metrics (no street-average presentation).
+ *
+ * Enrichment: optional ACRIS deed history (secondary validation vs truth `latest_sale_*`; does not replace them).
  */
-export function adaptUsNycTruthJsonForMainPropertyValueRoute(
+export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   us: Record<string, unknown>,
   ctx: { city: string; street: string; houseNumber: string }
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const city = ctx.city.trim() || "—";
   const street = ctx.street.trim() || "—";
   const houseNumber = ctx.houseNumber.trim() || "—";
@@ -41,6 +44,7 @@ export function adaptUsNycTruthJsonForMainPropertyValueRoute(
   const sales_address = str(us.sales_address);
   const pluto_address = str(us.pluto_address);
   const street_name = str(us.street_name);
+  const truthHouseNumber = str(us.house_number);
 
   const lastAmt = latest_sale_price != null && latest_sale_price > 0 ? latest_sale_price : 0;
 
@@ -85,9 +89,54 @@ export function adaptUsNycTruthJsonForMainPropertyValueRoute(
   if (lastAmt > 0 && latest_sale_date) {
     out.last_sale = { price: lastAmt, date: latest_sale_date };
   }
-  if (us.us_nyc_debug != null) {
-    out.us_nyc_debug = us.us_nyc_debug;
+
+  const acrisStreetNumber = (truthHouseNumber ?? "").trim() || houseNumber;
+  const acrisStreetName = (street_name ?? "").trim();
+
+  let acris_last_sale_price: number | null = null;
+  let acris_last_sale_date: string | null = null;
+  let acris_has_multiple_deeds = false;
+  let acris_debug: { success: boolean; deed_count: number; matched: unknown } = {
+    success: false,
+    deed_count: 0,
+    matched: null,
+  };
+
+  if (acrisStreetNumber && acrisStreetName) {
+    const acris = await fetchAcrisNycTruthDeedHistory({
+      streetNumber: acrisStreetNumber,
+      streetName: acrisStreetName,
+    });
+
+    if (acris.success) {
+      acris_last_sale_price = acris.latest_deed?.document_amt ?? null;
+      acris_last_sale_date = acris.latest_deed?.document_date
+        ? coerceBigQueryDateToYyyyMmDd(acris.latest_deed.document_date)
+        : null;
+      acris_has_multiple_deeds = acris.has_multiple_deeds;
+      acris_debug = {
+        success: true,
+        deed_count: acris.deeds.length,
+        matched: acris.latest_deed ?? null,
+      };
+    } else {
+      acris_debug = {
+        success: false,
+        deed_count: 0,
+        matched: null,
+      };
+    }
   }
+
+  out.acris_last_sale_price = acris_last_sale_price;
+  out.acris_last_sale_date = acris_last_sale_date;
+  out.acris_has_multiple_deeds = acris_has_multiple_deeds;
+
+  const priorDebug =
+    us.us_nyc_debug != null && typeof us.us_nyc_debug === "object" && !Array.isArray(us.us_nyc_debug)
+      ? { ...(us.us_nyc_debug as Record<string, unknown>) }
+      : {};
+  out.us_nyc_debug = { ...priorDebug, acris_debug };
 
   return out;
 }
