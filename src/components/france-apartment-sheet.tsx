@@ -120,8 +120,10 @@ export function FranceApartmentSheet({
   const { data, isLoading, refetch } = usePropertyValueInsights(addressForApi || rawForApi, "FR", {
     latitude: position.lat,
     longitude: position.lng,
+    // Only the last Search-submit lot is sent to the API; typing in the input must not change aptNumber
+    // (the hook refetches when aptNumber changes).
     aptNumber: (() => {
-      const t = (requestedLot ?? (hasSubmittedLotSearch ? lotInput : "")).trim();
+      const t = (requestedLot ?? "").trim();
       return t || undefined;
     })(),
     postcode,
@@ -777,6 +779,8 @@ export function FranceApartmentSheet({
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
+    // After "Check another apartment": stay on lot input only — never keep the floating result mounted.
+    if (forceLotPromptScreen && !hasSubmittedLotSearch) return null;
 
     const houseFlowActive = isHouseDirectFlow;
     const apartmentBlockActiveNow = apartmentBlockActive;
@@ -1547,7 +1551,6 @@ export function FranceApartmentSheet({
                     if (e.key === "Enter") {
                       e.preventDefault();
                       e.stopPropagation();
-                      submit("enter");
                     }
                   }}
                   className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950/70 px-3 py-2 text-[16px] text-white placeholder:text-zinc-600 outline-none focus:border-amber-400/40"
