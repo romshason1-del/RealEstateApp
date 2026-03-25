@@ -18,6 +18,33 @@ function str(v: unknown): string | null {
   return String(v);
 }
 
+/** Last-token expansion for ACRIS Real Property Legals `street_name` matching only (not UI / not BigQuery). */
+const ACRIS_STREET_SUFFIX_MAP: Record<string, string> = {
+  ST: "STREET",
+  AVE: "AVENUE",
+  RD: "ROAD",
+  BLVD: "BOULEVARD",
+  DR: "DRIVE",
+  CT: "COURT",
+  LN: "LANE",
+  PL: "PLACE",
+  TER: "TERRACE",
+  PKWY: "PARKWAY",
+};
+
+function normalizeStreetNameForAcrisLegals(raw: string): string {
+  const s = raw.trim().replace(/\s+/g, " ").toUpperCase();
+  if (!s) return "";
+  const parts = s.split(" ");
+  const lastRaw = parts[parts.length - 1] ?? "";
+  const last = lastRaw.replace(/\.$/, "").toUpperCase();
+  const expanded = ACRIS_STREET_SUFFIX_MAP[last];
+  if (expanded) {
+    parts[parts.length - 1] = expanded;
+  }
+  return parts.join(" ");
+}
+
 /**
  * When `success` is true, merges truth fields + `address` + minimal `property_result` for legacy checks.
  * Preserves `us_nyc_debug` if present.
@@ -91,7 +118,8 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   }
 
   const acrisStreetNumber = (truthHouseNumber ?? "").trim() || houseNumber;
-  const acrisStreetName = (street_name ?? "").trim();
+  const acrisStreetNameRaw = (street_name ?? "").trim() || street;
+  const acrisStreetName = normalizeStreetNameForAcrisLegals(acrisStreetNameRaw);
 
   let acris_last_sale_price: number | null = null;
   let acris_last_sale_date: string | null = null;
