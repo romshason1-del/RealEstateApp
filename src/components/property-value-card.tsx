@@ -579,7 +579,11 @@ export function PropertyValueCard({
     (activeInsightsData?.avm_value != null ||
       activeInsightsData?.avm_rent != null ||
       (activeInsightsData?.last_sale != null && activeInsightsData.last_sale.price > 0) ||
-      (activeInsightsData?.sales_history != null && activeInsightsData.sales_history.length > 0));
+      (activeInsightsData?.sales_history != null && activeInsightsData.sales_history.length > 0) ||
+      (activeInsightsData &&
+        typeof activeInsightsData === "object" &&
+        (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" &&
+        (activeInsightsData as { success?: boolean }).success === true));
   const unitRequired = isUS && (activeInsightsData?.error === "UNIT_REQUIRED" || activeInsightsData?.debug?.unit_required === true);
   const noDataAvailable = isUS && activeInsightsData?.message === "No Data Available" && !hasPropertyData && !unitRequired;
   const hasMatch = hasPropertyData && (activeInsightsData?.match_quality === "exact_building" || activeInsightsData?.match_quality === "nearby_building");

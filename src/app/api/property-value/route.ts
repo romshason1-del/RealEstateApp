@@ -21,6 +21,7 @@ import { fetchUKNeighborhoodStats, computeUKLivabilityRating } from "@/lib/prope
 import { fetchEPCFloorArea, fetchEPCFloorAreasForArea, isEPCConfigured } from "@/lib/property-value-providers/uk-epc-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 import { emptyFranceResponse, type FrancePropertyResponse } from "@/lib/france-response-contract";
+import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -465,6 +466,14 @@ export async function GET(request: NextRequest) {
     usUrl.searchParams.set("address", usAddress);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const data = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
+    if (usRes.ok && data.success === true) {
+      const adapted = adaptUsNycTruthJsonForMainPropertyValueRoute(data, {
+        city: city.trim(),
+        street: street.trim(),
+        houseNumber: houseNumber.trim(),
+      });
+      return NextResponse.json(adapted, { status: 200 });
+    }
     return NextResponse.json(data, { status: usRes.status });
   }
 

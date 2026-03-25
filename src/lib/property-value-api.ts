@@ -258,7 +258,7 @@ export async function fetchPropertyValueInsights(
     }
   }
   const isIT = code === "IT";
-  if (!isIT && !isFR && (!parsed.city || !parsed.street)) {
+  if (!isIT && !isFR && code !== "US" && (!parsed.city || !parsed.street)) {
     return {
       message: "no reliable exact match found",
       debug: {
@@ -323,8 +323,15 @@ export async function fetchPropertyValueInsights(
         (data.property_result &&
           data.property_result.value_level !== "no_match" &&
           ((data.property_result.street_average ?? 0) > 0 || (data.property_result.exact_value ?? 0) > 0)));
+    const usNycTruthOk =
+      code === "US" &&
+      data &&
+      typeof data === "object" &&
+      (data as { data_source?: string }).data_source === "us_nyc_truth" &&
+      (data as { success?: boolean }).success === true;
     const hasValidData =
       frHasRealData ||
+      usNycTruthOk ||
       (!isFR &&
         (data.address ||
           data.avm_value ||

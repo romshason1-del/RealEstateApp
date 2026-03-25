@@ -3,6 +3,7 @@
  * Table: streetiq-bigquery.streetiq_gold.us_nyc_api_truth
  */
 
+import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
 import { buildNycTruthLookupCandidates } from "./us-nyc-address-normalize";
@@ -67,13 +68,7 @@ function toStringOrNull(v: unknown): string | null {
 }
 
 function toDateStringOrNull(v: unknown): string | null {
-  if (v == null || v === "") return null;
-  if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    return v.toISOString().slice(0, 10);
-  }
-  const s = String(v).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  return s.length > 0 ? s : null;
+  return coerceBigQueryDateToYyyyMmDd(v);
 }
 
 function mapTruthRow(row: Record<string, unknown>): Omit<USNYCApiTruthResponse, "success" | "message"> {
@@ -94,9 +89,12 @@ function mapTruthRow(row: Record<string, unknown>): Omit<USNYCApiTruthResponse, 
 function rowToJsonSafe(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(row)) {
-    if (v instanceof Date) out[k] = v.toISOString();
+    if (v instanceof Date) out[k] = v.toISOString().slice(0, 10);
     else if (typeof v === "bigint") out[k] = Number(v);
-    else out[k] = v as unknown;
+    else if (k === "latest_sale_date" || k.endsWith("_date")) {
+      const d = coerceBigQueryDateToYyyyMmDd(v);
+      out[k] = d ?? v;
+    } else out[k] = v as unknown;
   }
   return out;
 }
