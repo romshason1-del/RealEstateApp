@@ -14,6 +14,10 @@ export type UsNycTruthCardData = {
   property_result?: { value_level?: string };
   /** When true, UI may show apartment re-query (set by US pipeline only; no client heuristics). */
   supports_apartment_requery?: boolean;
+  /** ACRIS cross-check (main route); display-only. */
+  acris_last_sale_price?: number | null;
+  acris_last_sale_date?: string | null;
+  acris_has_multiple_deeds?: boolean;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -91,6 +95,20 @@ function saleIndicatesMultipleUnits(totalUnits: number | null | undefined): bool
   return totalUnits > 1;
 }
 
+/** Normalize dates to YYYY-MM-DD for strict equality (truth vs ACRIS). */
+function nycSaleDateKeyForCompare(d: string | null | undefined): string {
+  if (d == null || !String(d).trim()) return "";
+  const t = String(d).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+  const ms = Date.parse(t);
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : "";
+}
+
+function nycPricesMatchForAcris(a: number | null | undefined, b: number | null | undefined): boolean {
+  if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.round(a) === Math.round(b);
+}
+
 export type UsNycTruthPropertyCardProps = {
   data: UsNycTruthCardData;
   currencySymbol: string;
@@ -136,6 +154,12 @@ export function UsNycTruthPropertyCard({
   const multiUnit = saleIndicatesMultipleUnits(data.latest_sale_total_units ?? null);
   const isPropertyLevel = valueLevel === "property-level";
 
+  const showAcrisVerified =
+    nycPricesMatchForAcris(data.latest_sale_price, data.acris_last_sale_price) &&
+    nycSaleDateKeyForCompare(data.latest_sale_date) !== "" &&
+    nycSaleDateKeyForCompare(data.latest_sale_date) === nycSaleDateKeyForCompare(data.acris_last_sale_date);
+  const showAcrisMultipleDeedsLine = data.acris_has_multiple_deeds === true;
+
   const onAptKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -157,7 +181,17 @@ export function UsNycTruthPropertyCard({
           >
             Conservative
           </span>
+          {showAcrisVerified ? (
+            <span
+              className={`${badgeBase} border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-400/85`}
+            >
+              ACRIS verified
+            </span>
+          ) : null}
         </div>
+        {showAcrisMultipleDeedsLine ? (
+          <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Multiple recorded deeds found</div>
+        ) : null}
       </div>
 
       {apartmentFlowEnabled && showApartmentInput ? (
