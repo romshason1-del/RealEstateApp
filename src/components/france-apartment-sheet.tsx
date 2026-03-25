@@ -49,6 +49,8 @@ type FranceSheetProps = {
   rawInputAddressForFrance?: string;
   currencySymbol?: string;
   onClose: () => void;
+  /** Private-house flow: after closing France UI, focus main address search (parent-owned). */
+  onExitToMainSearch?: () => void;
 };
 
 /** API `fr_valuation_display` envelope (France property-value route). */
@@ -91,6 +93,7 @@ export function FranceApartmentSheet({
   rawInputAddressForFrance,
   currencySymbol: _currencySymbol = "€",
   onClose,
+  onExitToMainSearch,
 }: FranceSheetProps) {
   const addressForApi = (typedAddressForFrance?.trim() || address?.trim() || "").trim();
   const rawForApi = (rawInputAddressForFrance?.trim() || typedAddressForFrance?.trim() || addressForApi || address?.trim() || "").trim();
@@ -733,24 +736,27 @@ export function FranceApartmentSheet({
   }, []);
 
   /**
-   * Apartment/unclear: after lot submit, `fr_should_prompt_lot` is false — do not gate on `shouldShowApartmentInput`.
-   * House direct: same button label exits to parent search (`onClose`); no apartment prompt.
+   * Building / multi-unit (existing `property_type_final` ≠ house): lot submitted, not house-direct-only path.
+   * Private house (`isHouseLikeUI` from existing API `property_type_final`): any house result with card open.
+   * Portal only mounts when `isResultCardOpen` — that is the “result card open” gate.
    */
   const showCheckAnotherApartmentButton =
     hasSubmittedLotSearch &&
+    !isLoading &&
     ((!isHouseLikeUI &&
       !isHouseDirectFlow &&
       (frDetectFinalClass === "apartment" || frDetectFinalClass === "unclear")) ||
-      (isHouseLikeUI && isHouseDirectFlow));
+      isHouseLikeUI);
 
   const handleCheckAnotherApartment = React.useCallback(() => {
-    if (isHouseLikeUI && isHouseDirectFlow) {
+    if (isHouseLikeUI) {
       resetToApartmentPrompt();
       onClose();
+      queueMicrotask(() => onExitToMainSearch?.());
       return;
     }
     resetToApartmentPrompt();
-  }, [isHouseLikeUI, isHouseDirectFlow, onClose, resetToApartmentPrompt]);
+  }, [isHouseLikeUI, onClose, onExitToMainSearch, resetToApartmentPrompt]);
 
   // NOTE: do NOT memoize this portal node. We need immediate re-render on UI-only state
   // changes (no waiting for a refetch).
@@ -1384,7 +1390,7 @@ export function FranceApartmentSheet({
                 })()}
               </div>
 
-              {showCheckAnotherApartmentButton && !isLoadingNow ? (
+              {showCheckAnotherApartmentButton ? (
                 <div className="mt-1 border-t border-white/10 pt-2">
                   <button
                     type="button"
