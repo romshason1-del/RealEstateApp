@@ -356,6 +356,27 @@ function getGoldBigQueryClient(): BigQuery {
   return new BigQuery({ projectId: key.project_id, credentials: key });
 }
 
+/**
+ * When `countryCode` is omitted, the route defaults to IL and never hits the US NYC truth branch.
+ * If the full address line clearly ends with US state + ZIP (or parses as such), treat as US so
+ * `/api/property-value?address=...` works without `countryCode=US`. Does not run when country is explicit.
+ */
+const US_STATE_CODES_FOR_ROUTE_INFERENCE = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "AS", "GU", "MP", "PR", "VI",
+]);
+
+function shouldInferUnitedStatesFromAddressLine(countryParamExplicit: string | null, addressLine: string): boolean {
+  if (countryParamExplicit != null) return false;
+  const line = addressLine.trim();
+  if (!line) return false;
+  const ups = parseUSAddressFromFullString(line);
+  const st = ups.state.trim().toUpperCase();
+  const zip = ups.zip.trim();
+  if (US_STATE_CODES_FOR_ROUTE_INFERENCE.has(st) && /^\d{5}(-\d{4})?$/.test(zip)) return true;
+  const tail = line.match(/\b([A-Z]{2})\s+(\d{5})(?:-(\d{4}))?\s*$/i);
+  return !!(tail && US_STATE_CODES_FOR_ROUTE_INFERENCE.has(tail[1].toUpperCase()));
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   let city = searchParams.get("city") ?? "";
@@ -368,7 +389,11 @@ export async function GET(request: NextRequest) {
   const rawInputAddress = searchParams.get("rawInputAddress") ?? "";
   const selectedFormattedAddress = searchParams.get("selectedFormattedAddress") ?? "";
   const aptNumber = searchParams.get("apt_number") ?? searchParams.get("aptNumber") ?? "";
-  const countryCode = searchParams.get("countryCode") ?? searchParams.get("country") ?? "IL";
+  const countryCodeRaw = searchParams.get("countryCode") ?? searchParams.get("country");
+  const countryParamExplicit =
+    countryCodeRaw != null && String(countryCodeRaw).trim() !== "" ? String(countryCodeRaw).trim() : null;
+  let countryCode = (countryParamExplicit ?? "IL").toUpperCase();
+  if (countryCode === "RE") countryCode = "FR";
   const latParam = searchParams.get("latitude");
   const lngParam = searchParams.get("longitude");
   const latitude = latParam ? parseFloat(latParam) : undefined;
@@ -427,6 +452,22 @@ export async function GET(request: NextRequest) {
         if (parsed.street) street = street || parsed.street;
         if (parsed.houseNumber) houseNumber = houseNumber || parsed.houseNumber;
       }
+    }
+  }
+
+  if (shouldInferUnitedStatesFromAddressLine(countryParamExplicit, addressForParse)) {
+    countryCode = "US";
+    const ups = parseUSAddressFromFullString(addressForParse);
+    if (ups.city.trim()) city = ups.city;
+    if (ups.street.trim()) street = ups.street;
+    if (ups.houseNumber.trim()) houseNumber = ups.houseNumber;
+    const tail = addressForParse.trim().match(/\b([A-Z]{2})\s+(\d{5})(?:-(\d{4}))?\s*$/i);
+    if (tail) {
+      state = tail[1].toUpperCase();
+      zip = tail[3] ? `${tail[2]}-${tail[3]}` : tail[2];
+    } else {
+      if (ups.state.trim()) state = ups.state.trim().toUpperCase();
+      if (ups.zip.trim()) zip = ups.zip.trim();
     }
   }
 
