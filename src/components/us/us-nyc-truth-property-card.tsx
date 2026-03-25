@@ -97,19 +97,12 @@ export function UsNycTruthPropertyCard({ data, currencySymbol }: { data: UsNycTr
   const ppsf = data.price_per_sqft;
   const valueLevel = data.property_result?.value_level;
   const multiUnit = saleIndicatesMultipleUnits(data.latest_sale_total_units ?? null);
-  const displayLine = formatNycCardDisplayAddress(data.address);
 
   const sectionClass =
     "rounded-lg border border-violet-500/15 bg-zinc-950/60 px-2 py-1.5 sm:px-2.5 sm:py-2";
 
   return (
     <div className="space-y-1.5">
-      {displayLine ? (
-        <div className="rounded-lg border border-zinc-600/30 bg-zinc-900/40 px-2 py-1 sm:px-2.5 sm:py-1.5">
-          <div className="text-[8px] uppercase tracking-wider text-zinc-500">Address</div>
-          <div className="mt-0.5 text-[11px] font-medium leading-snug text-zinc-100">{displayLine}</div>
-        </div>
-      ) : null}
       <div className={sectionClass}>
         <div className="text-[8px] uppercase tracking-wider text-violet-400/90">Estimated value for this property</div>
         <div className="mt-0.5 text-sm font-semibold text-violet-200">
