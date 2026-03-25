@@ -120,6 +120,8 @@ export function FranceApartmentSheet({
   const [forceLotPromptScreen, setForceLotPromptScreen] = React.useState(false);
   /** After "Check another apartment": ignore unit-level hook `data` until refetch settles (use sticky building snapshot only). */
   const [frApartmentEntryHardReset, setFrApartmentEntryHardReset] = React.useState(false);
+  /** Synchronous gate: block floating result portal from first paint after "Check another" (avoids one-frame stale mount before React state catches up). */
+  const frSkipResultPortalUntilLotSubmitRef = React.useRef(false);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
@@ -153,6 +155,7 @@ export function FranceApartmentSheet({
     setApartmentPromptWasEverShown(false);
     setForceLotPromptScreen(false);
     setFrApartmentEntryHardReset(false);
+    frSkipResultPortalUntilLotSubmitRef.current = false;
   }, [addressKey]);
 
   // Prevent any "house-direct" result-card auto-open until we have resolved the initial
@@ -371,9 +374,10 @@ export function FranceApartmentSheet({
     setIsResultCardOpen(true);
   }, [isLoading, suppressFloatingFranceResult]);
 
-  // Keep result card closed in apartment-entry-only mode so nothing stays "open" behind the prompt.
-  React.useEffect(() => {
-    if (suppressFloatingFranceResult && isResultCardOpen) {
+  // Keep result card closed in apartment-entry-only mode — layout effect runs before paint (no stale card flash).
+  React.useLayoutEffect(() => {
+    if (!isResultCardOpen) return;
+    if (suppressFloatingFranceResult || frSkipResultPortalUntilLotSubmitRef.current) {
       setIsResultCardOpen(false);
     }
   }, [suppressFloatingFranceResult, isResultCardOpen]);
@@ -646,6 +650,7 @@ export function FranceApartmentSheet({
     const lot = frFranceLotInputDigitsOnly(lotInput).trim();
     // Hard block: when backend requires lot, block until lot is provided.
     if (lotPromptGenuinelyRequired && !lot) return;
+    frSkipResultPortalUntilLotSubmitRef.current = false;
     setForceLotPromptScreen(false);
     setFrApartmentEntryHardReset(false);
     // Do not block lot search while the initial building-level request is still in flight:
@@ -787,6 +792,11 @@ export function FranceApartmentSheet({
   const handleCheckAnotherApartment = React.useCallback(() => {
     console.log("CHECK ANOTHER APARTMENT CLICKED");
     flushSync(() => {
+      if (apartmentPromptWasEverShown) {
+        frSkipResultPortalUntilLotSubmitRef.current = true;
+      } else {
+        frSkipResultPortalUntilLotSubmitRef.current = false;
+      }
       resetToApartmentPrompt();
       if (apartmentPromptWasEverShown) {
         setFrApartmentEntryHardReset(true);
@@ -807,9 +817,9 @@ export function FranceApartmentSheet({
   // changes (no waiting for a refetch).
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
+    // Evaluate before `isResultCardOpen` so a stale "open" flag cannot mount the portal for one frame.
+    if (suppressFloatingFranceResult || frSkipResultPortalUntilLotSubmitRef.current) return null;
     if (!isResultCardOpen) return null;
-    // Apartment / lot entry (initial or after "Check another"): never mount the floating result card.
-    if (suppressFloatingFranceResult) return null;
 
     const houseFlowActive = isHouseDirectFlow;
     const apartmentBlockActiveNow = apartmentBlockActive;
