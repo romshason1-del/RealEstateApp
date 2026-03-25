@@ -29,6 +29,7 @@ export function createEmptyUSNYCApiTruthResponse(partial?: Partial<USNYCApiTruth
     estimated_value: null,
     latest_sale_price: null,
     latest_sale_date: null,
+    latest_sale_total_units: null,
     avg_street_price: null,
     avg_street_price_per_sqft: null,
     transaction_count: null,

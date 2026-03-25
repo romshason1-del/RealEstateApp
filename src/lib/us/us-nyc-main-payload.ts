@@ -18,8 +18,9 @@ function str(v: unknown): string | null {
 }
 
 /**
- * When `success` is true, merges truth fields + `address` + `property_result` for PropertyValueCard.
+ * When `success` is true, merges truth fields + `address` + minimal `property_result` for legacy checks.
  * Preserves `us_nyc_debug` if present.
+ * NYC UI uses `data_source === "us_nyc_truth"` and reads top-level metrics (no street-average presentation).
  */
 export function adaptUsNycTruthJsonForMainPropertyValueRoute(
   us: Record<string, unknown>,
@@ -32,6 +33,7 @@ export function adaptUsNycTruthJsonForMainPropertyValueRoute(
   const estimated_value = num(us.estimated_value);
   const latest_sale_price = num(us.latest_sale_price);
   const latest_sale_date = coerceBigQueryDateToYyyyMmDd(us.latest_sale_date);
+  const latest_sale_total_units = num(us.latest_sale_total_units);
   const avg_street_price = num(us.avg_street_price);
   const avg_street_price_per_sqft = num(us.avg_street_price_per_sqft);
   const transaction_count = num(us.transaction_count);
@@ -56,8 +58,8 @@ export function adaptUsNycTruthJsonForMainPropertyValueRoute(
       date: latest_sale_date,
       message: lastAmt > 0 ? undefined : "No recorded sale amount in NYC truth table",
     },
-    street_average: avg_street_price,
-    street_average_message: avg_street_price != null && avg_street_price > 0 ? null : "No street average in NYC truth table",
+    street_average: null,
+    street_average_message: null,
     livability_rating: "FAIR" as const,
   };
 
@@ -69,6 +71,7 @@ export function adaptUsNycTruthJsonForMainPropertyValueRoute(
     estimated_value,
     latest_sale_price,
     latest_sale_date,
+    latest_sale_total_units,
     avg_street_price,
     avg_street_price_per_sqft,
     transaction_count,

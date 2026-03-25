@@ -15,6 +15,7 @@ import {
   sanitizeFrancePropertyResultForDisplay,
   type FrancePropertyResultLike,
 } from "@/lib/fr-display-safe";
+import { UsNycTruthPropertyCard, type UsNycTruthCardData } from "@/components/us/us-nyc-truth-property-card";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -1185,6 +1186,25 @@ export function PropertyValueCard({
                   <pre className="max-h-32 overflow-auto rounded bg-black/30 p-2 font-mono text-[10px]">
                     {JSON.stringify(sanitizeForDisplay(insightsData.debug), null, 2)}
                   </pre>
+                </CollapsibleSection>
+              )}
+            </div>
+          ) : isUS &&
+            activeInsightsData &&
+            typeof activeInsightsData === "object" &&
+            (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" ? (
+            <div className="space-y-1.5">
+              <UsNycTruthPropertyCard data={activeInsightsData as UsNycTruthCardData} currencySymbol={currencySymbol} />
+              {debugMode && hasOfficialProvider && (
+                <CollapsibleSection title="Debug Info">
+                  <DebugPanel
+                    address={address}
+                    parsed={parsedLocal}
+                    canonical={canonicalLocal}
+                    insightsData={insightsData}
+                    latest={latest}
+                    currencySymbol={currencySymbol}
+                  />
                 </CollapsibleSection>
               )}
             </div>

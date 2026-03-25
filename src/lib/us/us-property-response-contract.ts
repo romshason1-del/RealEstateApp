@@ -45,6 +45,8 @@ export interface USNYCApiTruthResponse {
   estimated_value: number | null;
   latest_sale_price: number | null;
   latest_sale_date: string | null;
+  /** Unit count tied to the matched latest sale row in truth data (not street-level). */
+  latest_sale_total_units: number | null;
   avg_street_price: number | null;
   avg_street_price_per_sqft: number | null;
   transaction_count: number | null;

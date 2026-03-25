@@ -7,6 +7,12 @@ import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
 import { buildNycTruthLookupCandidates } from "./us-nyc-address-normalize";
+import {
+  queryUSNycStreetPricingByStreetName,
+  streetPricingQueryTemplate,
+  US_NYC_STREET_PRICING_SQL_WHERE,
+  US_NYC_STREET_PRICING_TABLE_REFERENCE,
+} from "./us-nyc-street-pricing";
 
 /** Fully qualified table id (no backticks) — used in responses and logs. */
 export const US_NYC_API_TRUTH_TABLE_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_api_truth";
@@ -23,6 +29,7 @@ const EMPTY_TRUTH: USNYCApiTruthResponse = {
   estimated_value: null,
   latest_sale_price: null,
   latest_sale_date: null,
+  latest_sale_total_units: null,
   avg_street_price: null,
   avg_street_price_per_sqft: null,
   transaction_count: null,
@@ -45,6 +52,11 @@ export type USNYCApiTruthQueryDebug = {
   attempts: readonly { candidate: string; rows_returned: number }[];
   bigquery_location: string;
   full_sql_template: string;
+  street_pricing_table_used?: string;
+  street_pricing_sql_where?: string;
+  street_pricing_street_name_used?: string;
+  street_pricing_rows_found?: number;
+  street_pricing_full_sql_template?: string;
 };
 
 function toNumberOrNull(v: unknown): number | null {
@@ -71,11 +83,41 @@ function toDateStringOrNull(v: unknown): string | null {
   return coerceBigQueryDateToYyyyMmDd(v);
 }
 
+async function applyStreetPricingTable(base: USNYCApiTruthResponse): Promise<{
+  merged: USNYCApiTruthResponse;
+  streetNameTried: string | null;
+  streetPricingRowFound: boolean;
+}> {
+  if (!base.success) {
+    return { merged: base, streetNameTried: null, streetPricingRowFound: false };
+  }
+  const sn = base.street_name?.trim() ?? null;
+  if (!sn) {
+    return { merged: base, streetNameTried: null, streetPricingRowFound: false };
+  }
+  const sp = await queryUSNycStreetPricingByStreetName(sn);
+  if (!sp) {
+    return { merged: base, streetNameTried: sn, streetPricingRowFound: false };
+  }
+  return {
+    merged: {
+      ...base,
+      avg_street_price: sp.avg_street_price,
+      avg_street_price_per_sqft: sp.avg_street_price_per_sqft,
+    },
+    streetNameTried: sn,
+    streetPricingRowFound: true,
+  };
+}
+
 function mapTruthRow(row: Record<string, unknown>): Omit<USNYCApiTruthResponse, "success" | "message"> {
+  const totalUnitsRaw =
+    row.total_units ?? row.TOTAL_UNITS ?? row.latest_sale_total_units ?? row.LATEST_SALE_TOTAL_UNITS;
   return {
     estimated_value: toNumberOrNull(row.estimated_value),
     latest_sale_price: toNumberOrNull(row.latest_sale_price),
     latest_sale_date: toDateStringOrNull(row.latest_sale_date),
+    latest_sale_total_units: toNumberOrNull(totalUnitsRaw),
     avg_street_price: toNumberOrNull(row.avg_street_price),
     avg_street_price_per_sqft: toNumberOrNull(row.avg_street_price_per_sqft),
     transaction_count: toNumberOrNull(row.transaction_count),
@@ -103,6 +145,7 @@ const SELECT_FIELDS = `
   estimated_value,
   latest_sale_price,
   latest_sale_date,
+  total_units,
   avg_street_price,
   avg_street_price_per_sqft,
   transaction_count,
@@ -134,11 +177,12 @@ export async function queryUSNYCApiTruthWithCandidates(candidates: readonly stri
     });
     const row = (rows as Record<string, unknown>[] | null | undefined)?.[0];
     if (row) {
-      return {
+      const { merged } = await applyStreetPricingTable({
         success: true,
         message: null,
         ...mapTruthRow(row),
-      };
+      });
+      return merged;
     }
   }
   return { ...EMPTY_TRUTH };
@@ -169,12 +213,15 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     const row = list[0];
     if (row) {
       firstRow = rowToJsonSafe(row);
+      const truthResponse: USNYCApiTruthResponse = {
+        success: true,
+        message: null,
+        ...mapTruthRow(row),
+      };
+      const { merged: response, streetNameTried, streetPricingRowFound } = await applyStreetPricingTable(truthResponse);
+
       return {
-        response: {
-          success: true,
-          message: null,
-          ...mapTruthRow(row),
-        },
+        response,
         debug: {
           original_input: originalInput,
           normalized_full_address: norm.normalized_full_address,
@@ -187,6 +234,15 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           attempts,
           bigquery_location: NYC_TRUTH_QUERY_LOCATION,
           full_sql_template: MATCH_QUERY,
+          ...(streetNameTried
+            ? {
+                street_pricing_table_used: US_NYC_STREET_PRICING_TABLE_REFERENCE,
+                street_pricing_sql_where: US_NYC_STREET_PRICING_SQL_WHERE,
+                street_pricing_street_name_used: streetNameTried,
+                street_pricing_rows_found: streetPricingRowFound ? 1 : 0,
+                street_pricing_full_sql_template: streetPricingQueryTemplate(),
+              }
+            : {}),
         },
       };
     }
