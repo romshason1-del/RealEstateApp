@@ -215,6 +215,21 @@ function validateInput(
     if (city.length > MAX_ADDRESS_LENGTH || street.length > MAX_ADDRESS_LENGTH || ((postcode ?? "").trim().length || 0) > MAX_ADDRESS_LENGTH) return { valid: false, error: "address too long" };
     return { valid: true };
   }
+  const isUS = code === "US";
+  if (isUS) {
+    const hasParsed = !!(city.trim() && street.trim());
+    const hasFullAddress = !!((opts?.addressParam ?? "").trim() || (opts?.rawInputAddress ?? "").trim());
+    if (!hasParsed && !hasFullAddress) return { valid: false, error: "address is required for United States" };
+    if (
+      city.length > MAX_ADDRESS_LENGTH ||
+      street.length > MAX_ADDRESS_LENGTH ||
+      ((opts?.addressParam ?? "").length > MAX_ADDRESS_LENGTH) ||
+      ((opts?.rawInputAddress ?? "").length > MAX_ADDRESS_LENGTH)
+    ) {
+      return { valid: false, error: "address too long" };
+    }
+    return { valid: true };
+  }
   if (!city || typeof city !== "string" || city.trim().length === 0) {
     return { valid: false, error: "city is required" };
   }
@@ -437,6 +452,21 @@ export async function GET(request: NextRequest) {
   })();
   const isIL = (countryCode ?? "").toUpperCase() === "IL";
   const usMockMode = isUS && isUSMockEnabled();
+
+  if (isUS) {
+    const usAddress =
+      addressParam.trim() ||
+      rawInputAddress.trim() ||
+      [houseNumber, street, city, state, zip].filter((p) => String(p ?? "").trim()).join(", ").trim();
+    if (!usAddress) {
+      return NextResponse.json({ message: "address is required", error: "INVALID_INPUT" }, { status: 400 });
+    }
+    const usUrl = new URL("/api/us/property-value", request.nextUrl.origin);
+    usUrl.searchParams.set("address", usAddress);
+    const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
+    const data = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
+    return NextResponse.json(data, { status: usRes.status });
+  }
 
   if (isIL) {
     try {
@@ -7771,9 +7801,9 @@ LIMIT 1
     }
   }
 
-  if (!isIL && !isFR) {
+  if (!isIL && !isFR && !isUS) {
     return NextResponse.json(
-      { message: "Country not supported. Only Israel (IL) and France (FR) are supported.", error: "UNSUPPORTED_COUNTRY" },
+      { message: "Country not supported. Only Israel (IL), France (FR), and United States (US) are supported.", error: "UNSUPPORTED_COUNTRY" },
       { status: 400 }
     );
   }
