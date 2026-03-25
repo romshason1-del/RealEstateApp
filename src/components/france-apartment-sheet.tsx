@@ -157,10 +157,14 @@ export function FranceApartmentSheet({
     if (frAddressFetchStarted && !isLoading) setFrAddressFetchDone(true);
   }, [frAddressFetchStarted, isLoading]);
 
-  // Show result card immediately when loading starts (no intermediate popup).
+  // Open the floating result card while a fetch is in flight — unless the user stepped back to the
+  // apartment/lot step (prompt was shown and they cleared the unit); otherwise refetch would reopen
+  // the card and feel like the reset button did nothing.
   React.useEffect(() => {
-    if (isLoading) setIsResultCardOpen(true);
-  }, [isLoading]);
+    if (!isLoading) return;
+    if (apartmentPromptWasEverShown && !hasSubmittedLotSearch) return;
+    setIsResultCardOpen(true);
+  }, [isLoading, apartmentPromptWasEverShown, hasSubmittedLotSearch]);
 
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
@@ -744,8 +748,12 @@ export function FranceApartmentSheet({
     apartmentPromptWasEverShown && hasSubmittedLotSearch && !isLoading;
 
   const handleCheckAnotherApartment = React.useCallback(() => {
+    console.log("CHECK ANOTHER APARTMENT CLICKED");
     resetToApartmentPrompt();
-  }, [resetToApartmentPrompt]);
+    if (!apartmentPromptWasEverShown) {
+      onClose();
+    }
+  }, [apartmentPromptWasEverShown, onClose, resetToApartmentPrompt]);
 
   // NOTE: do NOT memoize this portal node. We need immediate re-render on UI-only state
   // changes (no waiting for a refetch).
