@@ -339,21 +339,23 @@ export function FranceApartmentSheet({
 
   const lotPromptVisible = backendWantsLotUi;
   const lotPromptUiOpen = lotPromptVisible || forceLotPromptScreen;
+  /** Hide floating result on apartment/lot entry, including after "Check another" if `lotPromptUiOpen` briefly lags. */
+  const suppressFloatingFranceResult =
+    !hasSubmittedLotSearch && (lotPromptUiOpen || apartmentPromptWasEverShown);
 
-  // Open the floating result card while a fetch is in flight — never while the lot/apartment entry
-  // block is showing (initial prompt or after "Check another apartment").
+  // Open the floating result card while a fetch is in flight — never during apartment/lot entry.
   React.useEffect(() => {
     if (!isLoading) return;
-    if (lotPromptUiOpen && !hasSubmittedLotSearch) return;
+    if (suppressFloatingFranceResult) return;
     setIsResultCardOpen(true);
-  }, [isLoading, lotPromptUiOpen, hasSubmittedLotSearch]);
+  }, [isLoading, suppressFloatingFranceResult]);
 
   // Keep result card closed in apartment-entry-only mode so nothing stays "open" behind the prompt.
   React.useEffect(() => {
-    if (lotPromptUiOpen && !hasSubmittedLotSearch && isResultCardOpen) {
+    if (suppressFloatingFranceResult && isResultCardOpen) {
       setIsResultCardOpen(false);
     }
-  }, [lotPromptUiOpen, hasSubmittedLotSearch, isResultCardOpen]);
+  }, [suppressFloatingFranceResult, isResultCardOpen]);
 
   React.useEffect(() => {
     if (lotPromptVisible) setApartmentPromptWasEverShown(true);
@@ -766,6 +768,8 @@ export function FranceApartmentSheet({
       resetToApartmentPrompt();
       if (apartmentPromptWasEverShown) {
         setForceLotPromptScreen(true);
+        // Fresh FR fetch clears hook `data` (unit-specific payload) so no stale valuation remains in memory for UI.
+        setTrigger((t) => t + 1);
       } else {
         setForceLotPromptScreen(false);
       }
@@ -781,7 +785,7 @@ export function FranceApartmentSheet({
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
     // Apartment / lot entry (initial or after "Check another"): never mount the floating result card.
-    if (lotPromptUiOpen && !hasSubmittedLotSearch) return null;
+    if (suppressFloatingFranceResult) return null;
 
     const houseFlowActive = isHouseDirectFlow;
     const apartmentBlockActiveNow = apartmentBlockActive;
@@ -1194,6 +1198,7 @@ export function FranceApartmentSheet({
 
     return createPortal(
       <div
+        key={`fr-dvf-portal-${hasSubmittedLotSearch}-${String(requestedLot ?? "")}-${trigger}`}
         className="pointer-events-none fixed inset-0 z-30"
         aria-live="polite"
         aria-label="France DVF result"
