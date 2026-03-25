@@ -20,6 +20,7 @@ import {
   UsNycTruthPropertyCard,
   type UsNycTruthCardData,
 } from "@/components/us/us-nyc-truth-property-card";
+import { usNycPayloadSupportsApartmentFlow } from "@/components/us/us-nyc-multiunit-detect";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -510,6 +511,14 @@ export function PropertyValueCard({
       : isFR && lastGoodFrancePayloadRef.current && (isLoading || !isGoodFrancePayload(insightsData))
         ? (lastGoodFrancePayloadRef.current as typeof insightsData)
         : insightsData;
+
+  /** No client heuristics: only when US payload sets `supports_apartment_requery` (not emitted yet). */
+  const usNycApartmentFlowEnabled = React.useMemo(() => {
+    if (!isUS || !activeInsightsData || typeof activeInsightsData !== "object") return false;
+    const d = activeInsightsData as { data_source?: string; success?: boolean; supports_apartment_requery?: boolean };
+    if (d.data_source !== "us_nyc_truth" || d.success !== true) return false;
+    return usNycPayloadSupportsApartmentFlow(d);
+  }, [isUS, activeInsightsData]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -1210,8 +1219,12 @@ export function PropertyValueCard({
             activeInsightsData &&
             typeof activeInsightsData === "object" &&
             (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" ? (
-            <div className="space-y-1.5">
-              <UsNycTruthPropertyCard data={activeInsightsData as UsNycTruthCardData} currencySymbol={currencySymbol} />
+            <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
+              <UsNycTruthPropertyCard
+                data={activeInsightsData as UsNycTruthCardData}
+                currencySymbol={currencySymbol}
+                apartmentFlowEnabled={usNycApartmentFlowEnabled}
+              />
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">
                   <DebugPanel

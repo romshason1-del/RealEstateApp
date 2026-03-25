@@ -1,5 +1,7 @@
 "use client";
 
+import * as React from "react";
+
 export type UsNycTruthCardData = {
   /** Parsed address from main API payload (display-only formatting here). */
   address?: { city?: string; street?: string; house_number?: string };
@@ -10,6 +12,8 @@ export type UsNycTruthCardData = {
   /** From truth-table `total_units` on the matched sale row only. */
   latest_sale_total_units?: number | null;
   property_result?: { value_level?: string };
+  /** When true, UI may show apartment re-query (set by US pipeline only; no client heuristics). */
+  supports_apartment_requery?: boolean;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -87,33 +91,130 @@ function saleIndicatesMultipleUnits(totalUnits: number | null | undefined): bool
   return totalUnits > 1;
 }
 
+function nycTopMetadataLine(valueLevel: string | undefined): string {
+  switch (valueLevel) {
+    case "building-level":
+      return "Official record — building / multi-unit context";
+    case "street-level":
+      return "Official record — street-level match";
+    case "area-level":
+      return "Official record — area context";
+    case "no_match":
+      return "NYC lookup — no exact record";
+    case "property-level":
+    default:
+      return "Official record — property level";
+  }
+}
+
+export type UsNycTruthPropertyCardProps = {
+  data: UsNycTruthCardData;
+  currencySymbol: string;
+  /** Apartment prompt + CTA only when API sets `supports_apartment_requery`. */
+  apartmentFlowEnabled: boolean;
+  showApartmentInput?: boolean;
+  apartmentDraft?: string;
+  onApartmentDraftChange?: (value: string) => void;
+  onApartmentSearch?: () => void;
+  apartmentSearchInFlight?: boolean;
+  submittedApartment?: string;
+  onCheckAnotherApartment?: () => void;
+};
+
+const block =
+  "rounded-md border border-amber-500/20 bg-zinc-950/90 px-2.5 py-2 sm:px-3 sm:py-2.5 shadow-sm shadow-black/40";
+
 /**
- * NYC gold-layer truth only — isolated from France card logic and copy.
+ * NYC gold-layer truth only — US-only styling; no France imports or shared card.
  */
-export function UsNycTruthPropertyCard({ data, currencySymbol }: { data: UsNycTruthCardData; currencySymbol: string }) {
+export function UsNycTruthPropertyCard({
+  data,
+  currencySymbol,
+  apartmentFlowEnabled,
+  showApartmentInput = false,
+  apartmentDraft = "",
+  onApartmentDraftChange,
+  onApartmentSearch,
+  apartmentSearchInFlight = false,
+  submittedApartment,
+  onCheckAnotherApartment,
+}: UsNycTruthPropertyCardProps) {
   const ev = data.estimated_value;
   const price = data.latest_sale_price;
   const dateStr = formatNycSaleDate(data.latest_sale_date ?? null);
   const ppsf = data.price_per_sqft;
   const valueLevel = data.property_result?.value_level;
   const multiUnit = saleIndicatesMultipleUnits(data.latest_sale_total_units ?? null);
+  const topLine = nycTopMetadataLine(valueLevel);
+  const showConfidenceGreen = valueLevel === "property-level";
 
-  const sectionClass =
-    "rounded-lg border border-violet-500/15 bg-zinc-950/60 px-2 py-1.5 sm:px-2.5 sm:py-2";
+  const onAptKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onApartmentSearch?.();
+    }
+  };
 
   return (
-    <div className="space-y-1.5">
-      <div className={sectionClass}>
-        <div className="text-[8px] uppercase tracking-wider text-violet-400/90">Estimated value for this property</div>
-        <div className="mt-0.5 text-sm font-semibold text-violet-200">
-          {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "—"}
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-500/15 pb-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/90" aria-hidden />
+          <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-500/80">{topLine}</span>
         </div>
-        <div className="mt-0.5 text-[9px] text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
+        {showConfidenceGreen ? (
+          <span className="text-[9px] font-medium text-emerald-400/90">High match confidence</span>
+        ) : (
+          <span className="text-[9px] font-medium text-zinc-500">Conservative disclosure</span>
+        )}
       </div>
 
-      <div className={sectionClass}>
-        <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Last transaction</div>
-        <div className="mt-0.5 text-[11px] font-medium text-zinc-200">
+      {apartmentFlowEnabled && showApartmentInput ? (
+        <div className="rounded-md border border-amber-500/30 bg-black/55 px-2.5 py-2 sm:px-3">
+          <div className="text-[11px] font-semibold tracking-tight text-amber-100/95">What&apos;s your apartment number?</div>
+          <p className="mt-1 text-[9px] leading-snug text-zinc-500">
+            Use the official unit designator from NYC records. Results depend on what the pipeline returns for that unit.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <input
+              type="text"
+              value={apartmentDraft}
+              onChange={(e) => onApartmentDraftChange?.(e.target.value)}
+              onKeyDown={onAptKeyDown}
+              placeholder="e.g. 4B"
+              disabled={apartmentSearchInFlight}
+              className="min-w-[6rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-2 py-1.5 text-[11px] text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              disabled={apartmentSearchInFlight || !apartmentDraft.trim()}
+              onClick={() => onApartmentSearch?.()}
+              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+            >
+              {apartmentSearchInFlight ? "…" : "Apply"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {apartmentFlowEnabled && !showApartmentInput && (submittedApartment ?? "").trim() ? (
+        <div className="text-[9px] text-zinc-500">
+          Unit filter: <span className="font-medium text-amber-200/90">{(submittedApartment ?? "").trim()}</span>
+        </div>
+      ) : null}
+
+      <div className={block}>
+        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Estimated value for this property</div>
+        <div className="mt-1 text-lg font-semibold tracking-tight text-amber-100 sm:text-xl">
+          {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "—"}
+        </div>
+        <div className="mt-1 text-[9px] leading-snug text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
+      </div>
+
+      <div className={block}>
+        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Last transaction</div>
+        <div className="mt-1 text-[12px] font-medium leading-snug text-zinc-100">
           {price != null && price > 0 ? (
             <>
               {formatCurrency(price, currencySymbol)}
@@ -124,29 +225,51 @@ export function UsNycTruthPropertyCard({ data, currencySymbol }: { data: UsNycTr
           )}
         </div>
         {multiUnit ? (
-          <div className="mt-1 text-[9px] text-amber-400/95">Transaction includes multiple units</div>
+          <div className="mt-1.5 border-t border-amber-500/10 pt-1.5 text-[9px] font-medium text-emerald-400/90">
+            Transaction includes multiple units
+          </div>
         ) : null}
       </div>
 
-      <div className={sectionClass}>
-        <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Price per ft²</div>
-        <div className="mt-0.5 text-[11px] font-medium text-zinc-200">
+      <div className={block}>
+        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Price per ft²</div>
+        <div className="mt-1 text-[12px] font-medium text-zinc-100">
           {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "—"}
         </div>
-        <div className="mt-0.5 text-[9px] text-zinc-500">Per square foot (matched property record)</div>
+        <div className="mt-1 text-[9px] text-zinc-500">Per square foot (matched property record)</div>
       </div>
 
-      <div className={sectionClass}>
-        <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Local market context</div>
-        <div className="mt-0.5 text-[10px] text-zinc-300">NYC — borough-level demand is not computed in this view.</div>
-        <div className="mt-0.5 text-[9px] text-zinc-500">Broader market indicators are omitted until wired from official feeds.</div>
+      <div className={block}>
+        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Local market context</div>
+        <div className="mt-1 text-[10px] leading-snug text-zinc-300">NYC — borough-level demand is not computed in this view.</div>
+        <div className="mt-1 text-[9px] leading-snug text-zinc-500">Broader market indicators are omitted until wired from official feeds.</div>
       </div>
 
-      <div className={sectionClass}>
-        <div className="text-[8px] uppercase tracking-wider text-zinc-400/90">Source & confidence</div>
-        <div className="mt-0.5 text-[10px] text-zinc-300">Official NYC gold-layer truth (exact address match).</div>
-        <div className="mt-0.5 text-[9px] text-zinc-500">Conservative: values reflect the matched NYC API truth row only.</div>
+      <div className={block}>
+        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Source &amp; confidence</div>
+        <div className="mt-1 text-[10px] leading-snug text-zinc-300">Official NYC gold-layer truth (address match to the NYC API truth table).</div>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <span className="text-[9px] leading-snug text-zinc-500">
+            Figures reflect the matched row only; we do not extrapolate or estimate beyond that record.
+          </span>
+          {showConfidenceGreen ? (
+            <span className="rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider text-emerald-400/95">
+              Verified row
+            </span>
+          ) : null}
+        </div>
       </div>
+
+      {apartmentFlowEnabled ? (
+        <button
+          type="button"
+          onClick={() => onCheckAnotherApartment?.()}
+          disabled={apartmentSearchInFlight}
+          className="mt-1 w-full rounded-md border border-amber-500/40 bg-amber-500/[0.08] py-2.5 text-[11px] font-semibold tracking-wide text-amber-100/95 transition-colors hover:bg-amber-500/15 disabled:pointer-events-none disabled:opacity-45"
+        >
+          Check another apartment
+        </button>
+      ) : null}
     </div>
   );
 }
