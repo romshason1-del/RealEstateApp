@@ -1,13 +1,15 @@
 /**
- * US BigQuery access — scaffold only.
- * Future: wire official/public US datasets here. Do not import France BigQuery services.
+ * US BigQuery access — NYC uses the same app BigQuery client/env as other routes.
+ * Do not import France BigQuery query services (`bigquery-france-service`).
  */
+
+import { isBigQueryConfigured } from "@/lib/bigquery-client";
 
 export type USQueryParams = Record<string, string | number | boolean | null | undefined>;
 
-/** Returns whether US BigQuery env/config is present (stub: always false until implemented). */
+/** True when the shared data project env is set (required to run NYC truth-table queries). */
 export function isUSBigQueryConfigured(): boolean {
-  return false;
+  return isBigQueryConfigured();
 }
 
 /**

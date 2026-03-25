@@ -35,3 +35,21 @@ export interface USPropertyValueResponse {
   success: boolean;
   message: string | null;
 }
+
+/**
+ * NYC: response built only from BigQuery `streetiq_gold.us_nyc_api_truth` (exact address match).
+ */
+export interface USNYCApiTruthResponse {
+  success: boolean;
+  message: string | null;
+  estimated_value: number | null;
+  latest_sale_price: number | null;
+  latest_sale_date: string | null;
+  avg_street_price: number | null;
+  avg_street_price_per_sqft: number | null;
+  transaction_count: number | null;
+  price_per_sqft: number | null;
+  sales_address: string | null;
+  pluto_address: string | null;
+  street_name: string | null;
+}
