@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Calendar, Database, Star, X } from "lucide-react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { usePropertyValueInsights } from "@/hooks/use-property-value-insights";
 import type { FrancePropertyResponse } from "@/lib/france-response-contract";
 import {
@@ -111,6 +111,9 @@ export function FranceApartmentSheet({
   const [showOptionalAptInput, setShowOptionalAptInput] = React.useState(false);
   /** Sticky: true once the lot UI controlled by `fr_should_prompt_lot` / `fr_lot_prompt_visible` has been active this address. */
   const [apartmentPromptWasEverShown, setApartmentPromptWasEverShown] = React.useState(false);
+  /** After "Check another apartment": show lot step even when latest API has `fr_should_prompt_lot` false. */
+  const [forceLotPromptScreen, setForceLotPromptScreen] = React.useState(false);
+  const [checkAnotherClickDebug, setCheckAnotherClickDebug] = React.useState<string | null>(null);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
@@ -140,6 +143,8 @@ export function FranceApartmentSheet({
     setResolvedForDisplay(null);
     setIsExpanded(false);
     setApartmentPromptWasEverShown(false);
+    setForceLotPromptScreen(false);
+    setCheckAnotherClickDebug(null);
   }, [addressKey]);
 
   // Prevent any "house-direct" result-card auto-open until we have resolved the initial
@@ -162,9 +167,9 @@ export function FranceApartmentSheet({
   // the card and feel like the reset button did nothing.
   React.useEffect(() => {
     if (!isLoading) return;
-    if (apartmentPromptWasEverShown && !hasSubmittedLotSearch) return;
+    if ((apartmentPromptWasEverShown || forceLotPromptScreen) && !hasSubmittedLotSearch) return;
     setIsResultCardOpen(true);
-  }, [isLoading, apartmentPromptWasEverShown, hasSubmittedLotSearch]);
+  }, [isLoading, apartmentPromptWasEverShown, forceLotPromptScreen, hasSubmittedLotSearch]);
 
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
@@ -342,6 +347,7 @@ export function FranceApartmentSheet({
   const apartmentBlockActive = lotPromptGenuinelyRequired && !hasSubmittedLotSearch;
 
   const lotPromptVisible = backendWantsLotUi;
+  const lotPromptUiOpen = lotPromptVisible || forceLotPromptScreen;
 
   React.useEffect(() => {
     if (lotPromptVisible) setApartmentPromptWasEverShown(true);
@@ -611,6 +617,8 @@ export function FranceApartmentSheet({
     const lot = lotInput.trim();
     // Hard block: when backend requires lot, block until lot is provided.
     if (lotPromptGenuinelyRequired && !lot) return;
+    setForceLotPromptScreen(false);
+    setCheckAnotherClickDebug(null);
     // Do not block lot search while the initial building-level request is still in flight:
     // otherwise Enter / refetch never runs with apt_number and the API stays at submitted_lot=null.
     setRequestedLot(lot || undefined);
@@ -749,7 +757,16 @@ export function FranceApartmentSheet({
 
   const handleCheckAnotherApartment = React.useCallback(() => {
     console.log("CHECK ANOTHER APARTMENT CLICKED");
-    resetToApartmentPrompt();
+    flushSync(() => {
+      resetToApartmentPrompt();
+      if (apartmentPromptWasEverShown) {
+        setForceLotPromptScreen(true);
+        setCheckAnotherClickDebug("BUTTON CLICK HANDLER FIRED\nRESET TO APARTMENT INPUT");
+      } else {
+        setForceLotPromptScreen(false);
+        setCheckAnotherClickDebug("BUTTON CLICK HANDLER FIRED\nRESET TO ADDRESS SEARCH");
+      }
+    });
     if (!apartmentPromptWasEverShown) {
       onClose();
     }
@@ -1486,7 +1503,7 @@ export function FranceApartmentSheet({
             </button>
           </div>
 
-          {lotPromptVisible && phase === "initial_building_state" && availableLots.length > 0 ? (
+          {lotPromptUiOpen && phase === "initial_building_state" && availableLots.length > 0 ? (
             <div className="mt-3">
               <div className="text-[10px] font-medium text-zinc-400">Try one of these lot numbers</div>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -1507,7 +1524,13 @@ export function FranceApartmentSheet({
             </div>
           ) : null}
 
-          {lotPromptVisible ? (
+          {checkAnotherClickDebug ? (
+            <div className="mt-2 whitespace-pre-wrap text-[10px] font-mono text-lime-200/90" role="status">
+              {checkAnotherClickDebug}
+            </div>
+          ) : null}
+
+          {lotPromptUiOpen ? (
             <div className="mt-3 rounded-xl border border-zinc-500/20 bg-black/35 px-3 py-2.5">
               <div className="text-[10px] font-medium text-zinc-400">
                 {!hasSubmittedLotSearch ? "What's your apartment number?" : "Apartment / lot number"}
