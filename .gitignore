@@ -61,3 +61,8 @@ output/*.ndjson
 output/*.ndjson
 
 output/*.ndjson
+data/
+*.csv
+*.txt
+*.ndjson
+*.zip
