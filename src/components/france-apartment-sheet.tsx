@@ -1159,7 +1159,7 @@ export function FranceApartmentSheet({
             : "border-rose-400/20 bg-rose-400/10 text-rose-200";
 
     // Position above the input sheet, like the old floating property card.
-    const bottomOffset = isMobileViewport ? `calc(6rem + ${keyboardInsetPx}px + 1rem)` : "10.5rem";
+    const bottomOffset = isMobileViewport ? `calc(6rem + ${keyboardInsetPx}px + 1rem)` : "9.25rem";
     const side = "0.5rem";
 
     return createPortal(
@@ -1178,34 +1178,34 @@ export function FranceApartmentSheet({
           }}
         >
           <div
-            className="pointer-events-auto max-h-[min(72vh,560px)] shrink-0 overflow-y-auto overflow-x-hidden rounded-[10px] border border-white/10 bg-[#0b0d10] shadow-md"
+            className="pointer-events-auto max-h-[min(82vh,620px)] shrink-0 overflow-y-auto overflow-x-hidden rounded-[10px] border border-white/10 bg-[#0b0d10] shadow-md"
             style={{
               width: 320,
               maxWidth: 320,
-              padding: 10,
+              padding: 8,
             }}
           >
             {/* Row 1 – Header */}
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start justify-between gap-2">
               <div className="min-w-0 flex-1">
-                <div className="mt-0.5 truncate text-sm font-semibold leading-tight text-white">{address}</div>
+                <div className="truncate text-[13px] font-semibold leading-tight text-white">{address}</div>
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
+              <div className="flex shrink-0 items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setIsResultCardOpen(false)}
                   aria-label="Close result"
-                  className="rounded-full border border-white/10 p-1.5 text-zinc-400 hover:text-white"
+                  className="rounded-full border border-white/10 p-1 text-zinc-400 hover:text-white"
                 >
-                  <X className="size-4" />
+                  <X className="size-3.5" />
                 </button>
               </div>
             </div>
 
             {/* Row 1b – Result title + optional subtitle */}
-            <div className="mt-1.5">
-              <div className="flex items-center gap-2">
-                <div className="text-xs font-semibold text-white/90">{title}</div>
+            <div className="mt-1">
+              <div className="flex items-center gap-1.5">
+                <div className="text-[11px] font-semibold leading-snug text-white/90">{title}</div>
                 {isSuspiciousFallback ? (
                   <div className="truncate rounded-[10px] border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold text-amber-200 max-w-[170px]">
                     Caution: unusually high price per m². Treat this result with care.
@@ -1217,7 +1217,7 @@ export function FranceApartmentSheet({
               standardContextExplanation &&
               (frDisplayContext === "exact_address" ||
                 ((frDisplayContext == null || frDisplayContext === "unknown") && normalized?.resultType === "exact_address")) ? (
-                <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{standardContextExplanation}</div>
+                <div className="mt-0.5 text-[10px] leading-snug text-zinc-400/90">{standardContextExplanation}</div>
               ) : !isLoadingNow &&
                   subtitle.trim() &&
                   frDisplayContext !== "building_level" &&
@@ -1225,31 +1225,31 @@ export function FranceApartmentSheet({
                   frDisplayContext !== "area_level" &&
                   frDisplayContext !== "exact_unit" &&
                   frDisplayContext !== "exact_address" ? (
-                <div className="mt-1 text-[10px] leading-snug text-zinc-400/90">{subtitle}</div>
+                <div className="mt-0.5 text-[10px] leading-snug text-zinc-400/90">{subtitle}</div>
               ) : null}
             </div>
 
             {/* Core summary – premium layout */}
-            <div className="mt-1.5 space-y-[6px]">
+            <div className="mt-1 space-y-1">
               {/* 1) Estimated value – hero */}
-              <div className="rounded-[10px] border border-amber-400/15 bg-gradient-to-b from-black/30 to-black/50 p-3 shadow-inner shadow-black/40">
-                <div className="flex items-start justify-between gap-2">
+              <div className="rounded-[10px] border border-amber-400/15 bg-gradient-to-b from-black/30 to-black/50 p-2.5 shadow-inner shadow-black/40">
+                <div className="flex items-start justify-between gap-1.5">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] leading-tight text-zinc-400">
+                    <div className="text-[9px] font-semibold uppercase tracking-[0.14em] leading-tight text-zinc-400">
                       Estimated True Value
                     </div>
                     <div
                       className={
                         isLoadingNow
-                          ? `mt-1.5 flex items-center gap-2 whitespace-nowrap text-[20px] font-medium leading-tight ${goldTextClass}`
+                          ? `mt-1 flex items-center gap-1.5 whitespace-nowrap text-[18px] font-medium leading-tight ${goldTextClass}`
                           : isNoResult
-                            ? "mt-1.5 text-sm font-semibold whitespace-nowrap leading-tight text-zinc-100"
-                            : `mt-1.5 text-[28px] sm:text-[30px] whitespace-nowrap font-bold leading-[1.05] tracking-tight ${goldTextClass}`
+                            ? "mt-1 text-[13px] font-semibold whitespace-nowrap leading-tight text-zinc-100"
+                            : `mt-1 text-[24px] sm:text-[26px] whitespace-nowrap font-bold leading-[1.05] tracking-tight ${goldTextClass}`
                       }
                     >
                       {isLoadingNow ? (
                         <>
-                          <span className={`inline-flex size-3.5 animate-spin rounded-full border-2 border-white/15 border-t-amber-200`} aria-hidden="true" />
+                          <span className={`inline-flex size-3 animate-spin rounded-full border-2 border-white/15 border-t-amber-200`} aria-hidden="true" />
                           <span>Searching...</span>
                         </>
                       ) : (
@@ -1262,32 +1262,32 @@ export function FranceApartmentSheet({
                       <div
                         className={
                           pctSinceLastSaleUi.tone === "up"
-                            ? "mt-1.5 text-[13px] font-semibold text-emerald-400"
+                            ? "mt-1 text-[12px] font-semibold text-emerald-400"
                             : pctSinceLastSaleUi.tone === "down"
-                              ? "mt-1.5 text-[13px] font-semibold text-rose-400"
-                              : "mt-1.5 text-[13px] font-semibold text-zinc-400"
+                              ? "mt-1 text-[12px] font-semibold text-rose-400"
+                              : "mt-1 text-[12px] font-semibold text-zinc-400"
                         }
                       >
                         {pctSinceLastSaleUi.text}
                       </div>
                     ) : null}
-                    <div className="mt-2 text-[11px] font-medium leading-snug text-zinc-400/95">
+                    <div className="mt-1.5 text-[10px] font-medium leading-snug text-zinc-400/95">
                       Data source: Official government records
                     </div>
                   </div>
                   {!isLoadingNow && !isNoResult ? (
-                    <div className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${confidenceTone}`}>
+                    <div className={`shrink-0 rounded-full border px-1.5 py-px text-[9px] font-semibold ${confidenceTone}`}>
                       {confidenceText}
                     </div>
                   ) : null}
                 </div>
                 {valueRange != null && !isLoadingNow && !isNoResult ? (
-                  <div className="mt-1.5 text-xs font-medium text-zinc-400/90">
+                  <div className="mt-1 text-[11px] font-medium text-zinc-400/90">
                     Market range: {formatFranceEuroTotal(valueRange.min)} – {formatFranceEuroTotal(valueRange.max)}
                   </div>
                 ) : null}
                 {!isLoadingNow && !isNoResult && hasValue && fv?.surface_source_label && fv?.surface_m2_used != null ? (
-                  <div className="mt-1 text-[10px] text-zinc-400/80">
+                  <div className="mt-0.5 text-[10px] text-zinc-400/80">
                     Based on ~{Math.round(fv.surface_m2_used)} m² ({fv.surface_source_label})
                   </div>
                 ) : null}
@@ -1296,32 +1296,32 @@ export function FranceApartmentSheet({
                 (hasValue || ppm2Display != null) &&
                 frDisplayContext === "exact_unit" &&
                 fv?.source_unit_display?.trim() ? (
-                  <div className="mt-1 text-[10px] text-zinc-400/80">Source unit: {fv.source_unit_display.trim()}</div>
+                  <div className="mt-0.5 text-[10px] text-zinc-400/80">Source unit: {fv.source_unit_display.trim()}</div>
                 ) : null}
                 {dataFreshnessYear != null && !isLoadingNow && !isNoResult ? (
-                  <div className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+                  <div className="mt-1 text-[10px] leading-snug text-zinc-500">
                     Data updated: {dataFreshnessYear}, may be delayed
                   </div>
                 ) : null}
               </div>
 
               {/* 2) Last transaction – human wording */}
-              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2 py-1.5">
+                <div className="text-[10px] font-medium uppercase tracking-[0.12em] leading-tight text-zinc-400/70">
                   {lastTransactionSectionTitle}
                 </div>
-                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
+                <div className="mt-0.5 text-[13px] font-semibold leading-snug text-white">
                   {lastTransactionSummaryLine}
                 </div>
                 {showMultiUnitTransactionNote ? (
-                  <div className="mt-1 text-[11px] font-medium text-amber-200/90">
+                  <div className="mt-0.5 text-[10px] font-medium text-amber-200/90">
                     Transaction includes multiple units
                   </div>
                 ) : null}
                 {(frDisplayContext === "exact_unit" || frDisplayContext === "exact_address") &&
                 txSourceAddress &&
                 txSourceAddress.trim() ? (
-                  <div className="mt-0.5 text-[11px] text-zinc-400/90">
+                  <div className="mt-0.5 text-[10px] leading-snug text-zinc-400/90">
                     Recorded at: {txSourceAddress}
                   </div>
                 ) : null}
@@ -1329,11 +1329,11 @@ export function FranceApartmentSheet({
 
               {/* 3) Price per m² (boxed) */}
               {displayPricePerSqm != null && (hasValue || valueRange != null) ? (
-                <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                  <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+                <div className="rounded-[10px] border border-white/10 bg-black/20 px-2 py-1.5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.12em] leading-tight text-zinc-400/70">
                     Price per m²
                   </div>
-                  <div className="mt-1 text-[14px] font-semibold leading-tight text-white">
+                  <div className="mt-0.5 text-[13px] font-semibold leading-snug text-white">
                     {formatFranceEuroPerSqmFromUnknown(displayPricePerSqm, { medianSuffix: false })}
                   </div>
                 </div>
@@ -1341,8 +1341,8 @@ export function FranceApartmentSheet({
 
               {/* 4) Explanation */}
               {!isLoadingNow && (basedOnExplainer || (frDetect === "unclear" && isNoResult)) ? (
-                <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                  <div className="text-xs font-medium leading-tight text-zinc-400/90">
+                <div className="rounded-[10px] border border-white/10 bg-black/20 px-2 py-1.5">
+                  <div className="text-[11px] font-medium leading-snug text-zinc-400/90">
                     {frDetect === "unclear" && isNoResult
                       ? "Try another address with confirmed France DVF coverage."
                       : basedOnExplainer}
@@ -1351,11 +1351,11 @@ export function FranceApartmentSheet({
               ) : null}
 
               {/* 5) Area demand (wording only) */}
-              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2.5 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.14em] leading-tight text-zinc-400/70">
+              <div className="rounded-[10px] border border-white/10 bg-black/20 px-2 py-1.5">
+                <div className="text-[10px] font-medium uppercase tracking-[0.12em] leading-tight text-zinc-400/70">
                   Area demand
                 </div>
-                <div className="mt-1 text-[14px] font-semibold leading-tight text-white">{livabilityText}</div>
+                <div className="mt-0.5 text-[13px] font-semibold leading-snug text-white">{livabilityText}</div>
                 {(() => {
                   const priceLevel = rd?.fr_area_price_level as string | null | undefined;
                   const trend = rd?.fr_area_trend as string | null | undefined;
@@ -1372,7 +1372,7 @@ export function FranceApartmentSheet({
                   else if (liquidity === "low") parts.push("Fewer transactions");
                   if (parts.length === 0) return null;
                   return (
-                    <div className="mt-1.5 text-[11px] font-medium leading-tight text-zinc-400/90">
+                    <div className="mt-1 text-[10px] font-medium leading-snug text-zinc-400/90">
                       {parts.join(" • ")}
                     </div>
                   );
@@ -1380,11 +1380,11 @@ export function FranceApartmentSheet({
               </div>
 
               {showCheckAnotherApartmentButton ? (
-                <div className="mt-1 border-t border-white/10 pt-2">
+                <div className="mt-0.5 border-t border-white/10 pt-1.5">
                   <button
                     type="button"
                     onClick={handleCheckAnotherApartment}
-                    className="w-full rounded-lg border border-white/15 bg-white/5 py-2 text-center text-[12px] font-medium text-zinc-200 hover:border-amber-400/30 hover:bg-white/10"
+                    className="w-full rounded-lg border border-white/15 bg-white/5 py-1.5 text-center text-[11px] font-medium text-zinc-200 hover:border-amber-400/30 hover:bg-white/10"
                   >
                     Check another apartment
                   </button>
