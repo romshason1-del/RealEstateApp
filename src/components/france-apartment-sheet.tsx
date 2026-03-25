@@ -113,7 +113,6 @@ export function FranceApartmentSheet({
   const [apartmentPromptWasEverShown, setApartmentPromptWasEverShown] = React.useState(false);
   /** After "Check another apartment": show lot step even when latest API has `fr_should_prompt_lot` false. */
   const [forceLotPromptScreen, setForceLotPromptScreen] = React.useState(false);
-  const [checkAnotherClickDebug, setCheckAnotherClickDebug] = React.useState<string | null>(null);
   const dragStartYRef = React.useRef<number | null>(null);
   const dragToggledRef = React.useRef(false);
 
@@ -146,7 +145,6 @@ export function FranceApartmentSheet({
     setIsExpanded(false);
     setApartmentPromptWasEverShown(false);
     setForceLotPromptScreen(false);
-    setCheckAnotherClickDebug(null);
   }, [addressKey]);
 
   // Prevent any "house-direct" result-card auto-open until we have resolved the initial
@@ -163,15 +161,6 @@ export function FranceApartmentSheet({
   React.useEffect(() => {
     if (frAddressFetchStarted && !isLoading) setFrAddressFetchDone(true);
   }, [frAddressFetchStarted, isLoading]);
-
-  // Open the floating result card while a fetch is in flight — unless the user stepped back to the
-  // apartment/lot step (prompt was shown and they cleared the unit); otherwise refetch would reopen
-  // the card and feel like the reset button did nothing.
-  React.useEffect(() => {
-    if (!isLoading) return;
-    if ((apartmentPromptWasEverShown || forceLotPromptScreen) && !hasSubmittedLotSearch) return;
-    setIsResultCardOpen(true);
-  }, [isLoading, apartmentPromptWasEverShown, forceLotPromptScreen, hasSubmittedLotSearch]);
 
   const isFranceBuildingPayload = React.useCallback((d: typeof data) => {
     if (!d || typeof d !== "object") return false;
@@ -350,6 +339,21 @@ export function FranceApartmentSheet({
 
   const lotPromptVisible = backendWantsLotUi;
   const lotPromptUiOpen = lotPromptVisible || forceLotPromptScreen;
+
+  // Open the floating result card while a fetch is in flight — never while the lot/apartment entry
+  // block is showing (initial prompt or after "Check another apartment").
+  React.useEffect(() => {
+    if (!isLoading) return;
+    if (lotPromptUiOpen && !hasSubmittedLotSearch) return;
+    setIsResultCardOpen(true);
+  }, [isLoading, lotPromptUiOpen, hasSubmittedLotSearch]);
+
+  // Keep result card closed in apartment-entry-only mode so nothing stays "open" behind the prompt.
+  React.useEffect(() => {
+    if (lotPromptUiOpen && !hasSubmittedLotSearch && isResultCardOpen) {
+      setIsResultCardOpen(false);
+    }
+  }, [lotPromptUiOpen, hasSubmittedLotSearch, isResultCardOpen]);
 
   React.useEffect(() => {
     if (lotPromptVisible) setApartmentPromptWasEverShown(true);
@@ -620,7 +624,6 @@ export function FranceApartmentSheet({
     // Hard block: when backend requires lot, block until lot is provided.
     if (lotPromptGenuinelyRequired && !lot) return;
     setForceLotPromptScreen(false);
-    setCheckAnotherClickDebug(null);
     // Do not block lot search while the initial building-level request is still in flight:
     // otherwise Enter / refetch never runs with apt_number and the API stays at submitted_lot=null.
     setRequestedLot(lot || undefined);
@@ -763,10 +766,8 @@ export function FranceApartmentSheet({
       resetToApartmentPrompt();
       if (apartmentPromptWasEverShown) {
         setForceLotPromptScreen(true);
-        setCheckAnotherClickDebug("BUTTON CLICK HANDLER FIRED\nRESET TO APARTMENT INPUT");
       } else {
         setForceLotPromptScreen(false);
-        setCheckAnotherClickDebug("BUTTON CLICK HANDLER FIRED\nRESET TO ADDRESS SEARCH");
       }
     });
     if (!apartmentPromptWasEverShown) {
@@ -779,8 +780,8 @@ export function FranceApartmentSheet({
   const resultCardNode = (() => {
     if (typeof document === "undefined") return null;
     if (!isResultCardOpen) return null;
-    // After "Check another apartment": stay on lot input only — never keep the floating result mounted.
-    if (forceLotPromptScreen && !hasSubmittedLotSearch) return null;
+    // Apartment / lot entry (initial or after "Check another"): never mount the floating result card.
+    if (lotPromptUiOpen && !hasSubmittedLotSearch) return null;
 
     const houseFlowActive = isHouseDirectFlow;
     const apartmentBlockActiveNow = apartmentBlockActive;
@@ -1525,12 +1526,6 @@ export function FranceApartmentSheet({
                   <span className="self-center text-[11px] text-zinc-500">+{availableLots.length - 18} more</span>
                 ) : null}
               </div>
-            </div>
-          ) : null}
-
-          {checkAnotherClickDebug ? (
-            <div className="mt-2 whitespace-pre-wrap text-[10px] font-mono text-lime-200/90" role="status">
-              {checkAnotherClickDebug}
             </div>
           ) : null}
 
