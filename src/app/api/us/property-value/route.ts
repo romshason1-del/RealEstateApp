@@ -6,7 +6,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
-import { queryUSNYCApiTruthByAddress } from "@/lib/us/us-nyc-api-truth";
+import { buildNycTruthLookupCandidates } from "@/lib/us/us-nyc-address-normalize";
+import { queryUSNYCApiTruthWithCandidates } from "@/lib/us/us-nyc-api-truth";
 import { createEmptyUSNYCApiTruthResponse } from "@/lib/us/us-response-shape";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +36,17 @@ async function handle(addressRaw: string) {
   }
 
   try {
-    const body = await queryUSNYCApiTruthByAddress(line);
+    const candidates = buildNycTruthLookupCandidates(line);
+    if (candidates.length === 0) {
+      return NextResponse.json(
+        createEmptyUSNYCApiTruthResponse({
+          success: false,
+          message: "address could not be normalized for lookup",
+        }),
+        { status: 400 }
+      );
+    }
+    const body = await queryUSNYCApiTruthWithCandidates(candidates);
     return NextResponse.json(body);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "BigQuery query failed";

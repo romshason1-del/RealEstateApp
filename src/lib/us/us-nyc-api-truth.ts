@@ -5,10 +5,26 @@
 
 import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
+import { buildNycTruthLookupCandidates } from "./us-nyc-address-normalize";
 
 const NYC_TRUTH_TABLE = "`streetiq-bigquery.streetiq_gold.us_nyc_api_truth`";
 
 const NYC_TRUTH_QUERY_LOCATION = "EU";
+
+const EMPTY_TRUTH: USNYCApiTruthResponse = {
+  success: true,
+  message: null,
+  estimated_value: null,
+  latest_sale_price: null,
+  latest_sale_date: null,
+  avg_street_price: null,
+  avg_street_price_per_sqft: null,
+  transaction_count: null,
+  price_per_sqft: null,
+  sales_address: null,
+  pluto_address: null,
+  street_name: null,
+};
 
 function toNumberOrNull(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -68,39 +84,41 @@ const SELECT_FIELDS = `
   street_name
 `.trim();
 
+const MATCH_QUERY = `
+  SELECT ${SELECT_FIELDS}
+  FROM ${NYC_TRUTH_TABLE}
+  WHERE pluto_address = @address OR sales_address = @address
+  LIMIT 1
+`;
+
 /**
- * Exact match: input must equal pluto_address or sales_address (after caller trim only).
+ * Try each candidate in order (exact equality on pluto_address or sales_address).
  */
-export async function queryUSNYCApiTruthByAddress(address: string): Promise<USNYCApiTruthResponse> {
+export async function queryUSNYCApiTruthWithCandidates(candidates: readonly string[]): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
-  const query = `
-    SELECT ${SELECT_FIELDS}
-    FROM ${NYC_TRUTH_TABLE}
-    WHERE pluto_address = @address OR sales_address = @address
-    LIMIT 1
-  `;
-  const params = { address };
-  const [rows] = await client.query({ query, params, location: NYC_TRUTH_QUERY_LOCATION });
-  const row = (rows as Record<string, unknown>[] | null | undefined)?.[0];
-  if (!row) {
-    return {
-      success: true,
-      message: null,
-      estimated_value: null,
-      latest_sale_price: null,
-      latest_sale_date: null,
-      avg_street_price: null,
-      avg_street_price_per_sqft: null,
-      transaction_count: null,
-      price_per_sqft: null,
-      sales_address: null,
-      pluto_address: null,
-      street_name: null,
-    };
+  for (const address of candidates) {
+    const trimmed = address.trim();
+    if (!trimmed) continue;
+    const [rows] = await client.query({
+      query: MATCH_QUERY,
+      params: { address: trimmed },
+      location: NYC_TRUTH_QUERY_LOCATION,
+    });
+    const row = (rows as Record<string, unknown>[] | null | undefined)?.[0];
+    if (row) {
+      return {
+        success: true,
+        message: null,
+        ...mapTruthRow(row),
+      };
+    }
   }
-  return {
-    success: true,
-    message: null,
-    ...mapTruthRow(row),
-  };
+  return { ...EMPTY_TRUTH };
+}
+
+/** Builds NYC candidates then queries BigQuery (same as /api/us/property-value). */
+export async function queryUSNYCApiTruthByAddress(address: string): Promise<USNYCApiTruthResponse> {
+  const candidates = buildNycTruthLookupCandidates(address);
+  if (candidates.length === 0) return { ...EMPTY_TRUTH };
+  return queryUSNYCApiTruthWithCandidates(candidates);
 }
