@@ -97,12 +97,19 @@ function buildingLineWithoutUnit(normalizedWithPossibleUnit: string): string | n
   return stripped.length > 0 ? collapseSpaces(stripped) : null;
 }
 
+export type NycTruthNormalizationDebug = {
+  /** Normalized line including unit suffix when present. */
+  normalized_full_address: string;
+  /** Building line (unit stripped); same as full when no unit. */
+  normalized_building_address: string;
+  /** Candidates passed to BigQuery in order. */
+  candidates: string[];
+};
+
 /**
- * Ordered list of strings to try against pluto_address / sales_address (exact equality).
- * 1) Full normalized line (includes unit if present)
- * 2) Building-only line if unit was present and differs
+ * Computes normalized labels + candidate list (single source of truth).
  */
-export function buildNycTruthLookupCandidates(rawInput: string): string[] {
+export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTruthNormalizationDebug | null {
   const upper = collapseSpaces(rawInput.toUpperCase());
   const commaParts = upper.split(",").map((p) => p.trim()).filter(Boolean);
 
@@ -122,14 +129,32 @@ export function buildNycTruthLookupCandidates(rawInput: string): string[] {
   core = stripTrailingGeoFromUncommaLine(core);
   core = collapseSpaces(core);
 
-  if (!core) return [];
+  if (!core) return null;
 
   const buildingOnly = buildingLineWithoutUnit(core);
+  const normalized_full_address = core;
+  const normalized_building_address = buildingOnly ?? core;
+
   const out: string[] = [];
   if (buildingOnly && buildingOnly !== core) {
     out.push(core, buildingOnly);
   } else {
     out.push(core);
   }
-  return [...new Set(out)];
+  const candidates = [...new Set(out)];
+
+  return {
+    normalized_full_address,
+    normalized_building_address,
+    candidates,
+  };
+}
+
+/**
+ * Ordered list of strings to try against pluto_address / sales_address (exact equality).
+ * 1) Full normalized line (includes unit if present)
+ * 2) Building-only line if unit was present and differs
+ */
+export function buildNycTruthLookupCandidates(rawInput: string): string[] {
+  return buildNycTruthLookupNormalizationDebug(rawInput)?.candidates ?? [];
 }

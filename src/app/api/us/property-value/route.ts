@@ -6,57 +6,109 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
-import { buildNycTruthLookupCandidates } from "@/lib/us/us-nyc-address-normalize";
-import { queryUSNYCApiTruthWithCandidates } from "@/lib/us/us-nyc-api-truth";
+import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
+import {
+  queryUSNYCApiTruthWithCandidatesDebug,
+  US_NYC_API_TRUTH_SQL_WHERE,
+  US_NYC_API_TRUTH_TABLE_REFERENCE,
+} from "@/lib/us/us-nyc-api-truth";
 import { createEmptyUSNYCApiTruthResponse } from "@/lib/us/us-response-shape";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+function logUsNycDebug(label: string, payload: object): void {
+  try {
+    console.log(`[US /api/us/property-value] ${label}`, JSON.stringify(payload));
+  } catch {
+    console.log(`[US /api/us/property-value] ${label}`, payload);
+  }
+}
+
 async function handle(addressRaw: string) {
   const { line } = normalizeUSAddressLine(addressRaw);
   if (!line) {
-    return NextResponse.json(
-      createEmptyUSNYCApiTruthResponse({
-        success: false,
-        message: "address is required",
-      }),
-      { status: 400 }
-    );
+    const empty = createEmptyUSNYCApiTruthResponse({
+      success: false,
+      message: "address is required",
+    });
+    const us_nyc_debug = {
+      original_input: addressRaw,
+      normalized_full_address: null,
+      normalized_building_address: null,
+      table_name_used: US_NYC_API_TRUTH_TABLE_REFERENCE,
+      sql_where_used: US_NYC_API_TRUTH_SQL_WHERE,
+      rows_found_count: 0,
+      first_row_if_any: null,
+      note: "empty address after trim",
+    };
+    logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
+    return NextResponse.json({ ...empty, us_nyc_debug }, { status: 400 });
   }
 
   if (!isUSBigQueryConfigured()) {
-    return NextResponse.json(
-      createEmptyUSNYCApiTruthResponse({
-        success: false,
-        message: "BigQuery is not configured (set BIGQUERY_PROJECT_ID or GOOGLE_CLOUD_PROJECT_ID)",
-      }),
-      { status: 503 }
-    );
+    const empty = createEmptyUSNYCApiTruthResponse({
+      success: false,
+      message: "BigQuery is not configured (set BIGQUERY_PROJECT_ID or GOOGLE_CLOUD_PROJECT_ID)",
+    });
+    const us_nyc_debug = {
+      original_input: addressRaw,
+      normalized_full_address: null,
+      normalized_building_address: null,
+      table_name_used: US_NYC_API_TRUTH_TABLE_REFERENCE,
+      sql_where_used: US_NYC_API_TRUTH_SQL_WHERE,
+      rows_found_count: 0,
+      first_row_if_any: null,
+      note: "BigQuery project env missing",
+    };
+    logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
+    return NextResponse.json({ ...empty, us_nyc_debug }, { status: 503 });
   }
 
   try {
-    const candidates = buildNycTruthLookupCandidates(line);
-    if (candidates.length === 0) {
-      return NextResponse.json(
-        createEmptyUSNYCApiTruthResponse({
-          success: false,
-          message: "address could not be normalized for lookup",
-        }),
-        { status: 400 }
-      );
+    const norm = buildNycTruthLookupNormalizationDebug(line);
+    if (!norm) {
+      const empty = createEmptyUSNYCApiTruthResponse({
+        success: false,
+        message: "address could not be normalized for lookup",
+      });
+      const us_nyc_debug = {
+        original_input: addressRaw,
+        normalized_full_address: null,
+        normalized_building_address: null,
+        table_name_used: US_NYC_API_TRUTH_TABLE_REFERENCE,
+        sql_where_used: US_NYC_API_TRUTH_SQL_WHERE,
+        rows_found_count: 0,
+        first_row_if_any: null,
+        candidates_tried: [] as string[],
+        attempts: [] as { candidate: string; rows_returned: number }[],
+        note: "normalization produced empty core",
+      };
+      logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
+      return NextResponse.json({ ...empty, us_nyc_debug }, { status: 400 });
     }
-    const body = await queryUSNYCApiTruthWithCandidates(candidates);
-    return NextResponse.json(body);
+
+    const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm);
+    logUsNycDebug("TEMP_DEBUG", { ...debug });
+    return NextResponse.json({ ...response, us_nyc_debug: debug });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "BigQuery query failed";
-    return NextResponse.json(
-      createEmptyUSNYCApiTruthResponse({
-        success: false,
-        message: msg,
-      }),
-      { status: 500 }
-    );
+    const empty = createEmptyUSNYCApiTruthResponse({
+      success: false,
+      message: msg,
+    });
+    const us_nyc_debug = {
+      original_input: addressRaw,
+      normalized_full_address: null,
+      normalized_building_address: null,
+      table_name_used: US_NYC_API_TRUTH_TABLE_REFERENCE,
+      sql_where_used: US_NYC_API_TRUTH_SQL_WHERE,
+      rows_found_count: 0,
+      first_row_if_any: null,
+      error: msg,
+    };
+    logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
+    return NextResponse.json({ ...empty, us_nyc_debug }, { status: 500 });
   }
 }
 
