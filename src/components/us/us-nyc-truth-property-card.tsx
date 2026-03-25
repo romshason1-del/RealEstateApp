@@ -91,22 +91,6 @@ function saleIndicatesMultipleUnits(totalUnits: number | null | undefined): bool
   return totalUnits > 1;
 }
 
-function nycTopMetadataLine(valueLevel: string | undefined): string {
-  switch (valueLevel) {
-    case "building-level":
-      return "Official record — building / multi-unit context";
-    case "street-level":
-      return "Official record — street-level match";
-    case "area-level":
-      return "Official record — area context";
-    case "no_match":
-      return "NYC lookup — no exact record";
-    case "property-level":
-    default:
-      return "Official record — property level";
-  }
-}
-
 export type UsNycTruthPropertyCardProps = {
   data: UsNycTruthCardData;
   currencySymbol: string;
@@ -123,6 +107,9 @@ export type UsNycTruthPropertyCardProps = {
 
 const block =
   "rounded-md border border-amber-500/20 bg-zinc-950/90 px-2.5 py-2 sm:px-3 sm:py-2.5 shadow-sm shadow-black/40";
+
+const badgeBase =
+  "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none tracking-tight";
 
 /**
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
@@ -145,8 +132,7 @@ export function UsNycTruthPropertyCard({
   const ppsf = data.price_per_sqft;
   const valueLevel = data.property_result?.value_level;
   const multiUnit = saleIndicatesMultipleUnits(data.latest_sale_total_units ?? null);
-  const topLine = nycTopMetadataLine(valueLevel);
-  const showConfidenceGreen = valueLevel === "property-level";
+  const isPropertyLevel = valueLevel === "property-level";
 
   const onAptKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -157,16 +143,19 @@ export function UsNycTruthPropertyCard({
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-500/15 pb-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/90" aria-hidden />
-          <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-500/80">{topLine}</span>
+      <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2.5 py-2.5 sm:px-3">
+        <div className="text-[11px] font-semibold tracking-tight text-zinc-100">NYC property record</div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {isPropertyLevel ? (
+            <span className={`${badgeBase} border-[#C6A85B]/50 bg-[#C6A85B]/12 text-[#C6A85B]`}>Property-level</span>
+          ) : null}
+          <span className={`${badgeBase} border-[#C6A85B]/28 bg-black/40 text-zinc-200`}>Official record</span>
+          <span
+            className={`${badgeBase} border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-400/95`}
+          >
+            Conservative
+          </span>
         </div>
-        {showConfidenceGreen ? (
-          <span className="text-[9px] font-medium text-emerald-400/90">High match confidence</span>
-        ) : (
-          <span className="text-[9px] font-medium text-zinc-500">Conservative disclosure</span>
-        )}
       </div>
 
       {apartmentFlowEnabled && showApartmentInput ? (
@@ -243,21 +232,6 @@ export function UsNycTruthPropertyCard({
         <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Local market context</div>
         <div className="mt-1 text-[10px] leading-snug text-zinc-300">NYC — borough-level demand is not computed in this view.</div>
         <div className="mt-1 text-[9px] leading-snug text-zinc-500">Broader market indicators are omitted until wired from official feeds.</div>
-      </div>
-
-      <div className={block}>
-        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Source &amp; confidence</div>
-        <div className="mt-1 text-[10px] leading-snug text-zinc-300">Official NYC gold-layer truth (address match to the NYC API truth table).</div>
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          <span className="text-[9px] leading-snug text-zinc-500">
-            Figures reflect the matched row only; we do not extrapolate or estimate beyond that record.
-          </span>
-          {showConfidenceGreen ? (
-            <span className="rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider text-emerald-400/95">
-              Verified row
-            </span>
-          ) : null}
-        </div>
       </div>
 
       {apartmentFlowEnabled ? (
