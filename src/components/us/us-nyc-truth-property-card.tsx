@@ -106,10 +106,12 @@ export type UsNycTruthPropertyCardProps = {
 };
 
 const block =
-  "rounded-md border border-amber-500/20 bg-zinc-950/90 px-2.5 py-2 sm:px-3 sm:py-2.5 shadow-sm shadow-black/40";
+  "rounded-md border border-amber-500/20 bg-zinc-950/90 px-2 py-1.5 sm:px-2.5 sm:py-1.5 shadow-sm shadow-black/40";
 
 const badgeBase =
-  "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none tracking-tight";
+  "inline-flex items-center rounded-full border px-1.5 py-[2px] text-[9px] font-medium leading-none tracking-tight";
+
+const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-amber-400/85 leading-none";
 
 /**
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
@@ -142,10 +144,10 @@ export function UsNycTruthPropertyCard({
   };
 
   return (
-    <div className="space-y-2">
-      <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2.5 py-2.5 sm:px-3">
-        <div className="text-[11px] font-semibold tracking-tight text-zinc-100">NYC property record</div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
+    <div className="space-y-1">
+      <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2 py-1.5 sm:px-2.5">
+        <div className="text-[10px] font-semibold leading-tight tracking-tight text-zinc-100">NYC property record</div>
+        <div className="mt-1 flex flex-wrap gap-1">
           {isPropertyLevel ? (
             <span className={`${badgeBase} border-[#C6A85B]/50 bg-[#C6A85B]/12 text-[#C6A85B]`}>Property-level</span>
           ) : null}
@@ -159,12 +161,12 @@ export function UsNycTruthPropertyCard({
       </div>
 
       {apartmentFlowEnabled && showApartmentInput ? (
-        <div className="rounded-md border border-amber-500/30 bg-black/55 px-2.5 py-2 sm:px-3">
-          <div className="text-[11px] font-semibold tracking-tight text-amber-100/95">What&apos;s your apartment number?</div>
-          <p className="mt-1 text-[9px] leading-snug text-zinc-500">
+        <div className="rounded-md border border-amber-500/30 bg-black/55 px-2 py-1.5 sm:px-2.5">
+          <div className="text-[10px] font-semibold leading-tight tracking-tight text-amber-100/95">What&apos;s your apartment number?</div>
+          <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
             Use the official unit designator from NYC records. Results depend on what the pipeline returns for that unit.
           </p>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
             <input
               type="text"
               value={apartmentDraft}
@@ -172,14 +174,14 @@ export function UsNycTruthPropertyCard({
               onKeyDown={onAptKeyDown}
               placeholder="e.g. 4B"
               disabled={apartmentSearchInFlight}
-              className="min-w-[6rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-2 py-1.5 text-[11px] text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+              className="min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-1 text-[10px] leading-tight text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
               autoComplete="off"
             />
             <button
               type="button"
               disabled={apartmentSearchInFlight || !apartmentDraft.trim()}
               onClick={() => onApartmentSearch?.()}
-              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
             >
               {apartmentSearchInFlight ? "…" : "Apply"}
             </button>
@@ -188,22 +190,22 @@ export function UsNycTruthPropertyCard({
       ) : null}
 
       {apartmentFlowEnabled && !showApartmentInput && (submittedApartment ?? "").trim() ? (
-        <div className="text-[9px] text-zinc-500">
+        <div className="text-[8px] leading-tight text-zinc-500">
           Unit filter: <span className="font-medium text-amber-200/90">{(submittedApartment ?? "").trim()}</span>
         </div>
       ) : null}
 
       <div className={block}>
-        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Estimated value for this property</div>
-        <div className="mt-1 text-lg font-semibold tracking-tight text-amber-100 sm:text-xl">
+        <div className={sectionLabel}>Estimated value for this property</div>
+        <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
           {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "—"}
         </div>
-        <div className="mt-1 text-[9px] leading-snug text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
+        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
       </div>
 
       <div className={block}>
-        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Last transaction</div>
-        <div className="mt-1 text-[12px] font-medium leading-snug text-zinc-100">
+        <div className={sectionLabel}>Last transaction</div>
+        <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
           {price != null && price > 0 ? (
             <>
               {formatCurrency(price, currencySymbol)}
@@ -214,24 +216,24 @@ export function UsNycTruthPropertyCard({
           )}
         </div>
         {multiUnit ? (
-          <div className="mt-1.5 border-t border-amber-500/10 pt-1.5 text-[9px] font-medium text-emerald-400/90">
+          <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
             Transaction includes multiple units
           </div>
         ) : null}
       </div>
 
       <div className={block}>
-        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Price per ft²</div>
-        <div className="mt-1 text-[12px] font-medium text-zinc-100">
+        <div className={sectionLabel}>Price per ft²</div>
+        <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
           {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "—"}
         </div>
-        <div className="mt-1 text-[9px] text-zinc-500">Per square foot (matched property record)</div>
+        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot (matched property record)</div>
       </div>
 
       <div className={block}>
-        <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-amber-400/85">Local market context</div>
-        <div className="mt-1 text-[10px] leading-snug text-zinc-300">NYC — borough-level demand is not computed in this view.</div>
-        <div className="mt-1 text-[9px] leading-snug text-zinc-500">Broader market indicators are omitted until wired from official feeds.</div>
+        <div className={sectionLabel}>Local market context</div>
+        <div className="mt-0.5 text-[9px] leading-tight text-zinc-300">NYC — borough-level demand is not computed in this view.</div>
+        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Broader market indicators are omitted until wired from official feeds.</div>
       </div>
 
       {apartmentFlowEnabled ? (
@@ -239,7 +241,7 @@ export function UsNycTruthPropertyCard({
           type="button"
           onClick={() => onCheckAnotherApartment?.()}
           disabled={apartmentSearchInFlight}
-          className="mt-1 w-full rounded-md border border-amber-500/40 bg-amber-500/[0.08] py-2.5 text-[11px] font-semibold tracking-wide text-amber-100/95 transition-colors hover:bg-amber-500/15 disabled:pointer-events-none disabled:opacity-45"
+          className="w-full rounded-md border border-amber-500/40 bg-amber-500/[0.08] py-1.5 text-[10px] font-semibold leading-tight tracking-wide text-amber-100/95 transition-colors hover:bg-amber-500/15 disabled:pointer-events-none disabled:opacity-45"
         >
           Check another apartment
         </button>
