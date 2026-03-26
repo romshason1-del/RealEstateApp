@@ -4,6 +4,7 @@
  */
 
 import { fetchAcrisNycTruthDeedHistory } from "@/lib/us/acris/acris-truth";
+import { fetchDobNycBuildingInsights } from "@/lib/us/dob/dob-truth";
 import { shouldIncludeUsNycDebugInApiResponse } from "@/lib/us/us-nyc-api-response-debug";
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 
@@ -52,6 +53,10 @@ function normalizeStreetNameForAcrisLegals(raw: string): string {
  * NYC UI uses `data_source === "us_nyc_truth"` and reads top-level metrics (no street-average presentation).
  *
  * Enrichment: optional ACRIS deed history (secondary validation vs truth `latest_sale_*`; does not replace them).
+ * Enrichment: optional DOB job filings summary (`dob_*`; does not replace truth or ACRIS).
+ *
+ * Fallback: when BigQuery truth returns no property row (`rows_found_count === 0`), enrich from
+ * street pricing + ACRIS so the card is not fully empty when either source has data.
  */
 export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   us: Record<string, unknown>,
@@ -100,6 +105,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     data_source: "us_nyc_truth",
     message: null,
     address: { city, street, house_number: houseNumber },
+    ...(typeof us.has_truth_property_row === "boolean" ? { has_truth_property_row: us.has_truth_property_row } : {}),
     estimated_value,
     latest_sale_price,
     latest_sale_date,
@@ -157,16 +163,113 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     }
   }
 
+  let dob_has_filings = false;
+  let dob_filing_count = 0;
+  let dob_building_type: string | null = null;
+  let dob_existing_units: number | null = null;
+  let dob_proposed_units: number | null = null;
+
+  let dob_debug: {
+    success: boolean;
+    has_filings: boolean | null;
+    filing_count: number | null;
+    building_type: string | null;
+    existing_units: number | null;
+    proposed_units: number | null;
+  } = {
+    success: false,
+    has_filings: null,
+    filing_count: null,
+    building_type: null,
+    existing_units: null,
+    proposed_units: null,
+  };
+
+  if (acrisStreetNumber && acrisStreetNameRaw) {
+    const dob = await fetchDobNycBuildingInsights({
+      houseNumber: acrisStreetNumber,
+      streetName: acrisStreetNameRaw,
+    });
+
+    if (dob.success) {
+      dob_has_filings = dob.has_filings;
+      dob_filing_count = dob.filing_count;
+      dob_building_type = dob.building_type;
+      dob_existing_units = dob.existing_units;
+      dob_proposed_units = dob.proposed_units;
+      dob_debug = {
+        success: true,
+        has_filings: dob.has_filings,
+        filing_count: dob.filing_count,
+        building_type: dob.building_type,
+        existing_units: dob.existing_units,
+        proposed_units: dob.proposed_units,
+      };
+    } else {
+      dob_debug = {
+        success: false,
+        has_filings: null,
+        filing_count: null,
+        building_type: null,
+        existing_units: null,
+        proposed_units: null,
+      };
+    }
+  }
+
   out.acris_last_sale_price = acris_last_sale_price;
   out.acris_last_sale_date = acris_last_sale_date;
   out.acris_has_multiple_deeds = acris_has_multiple_deeds;
+
+  out.dob_has_filings = dob_has_filings;
+  out.dob_filing_count = dob_filing_count;
+  out.dob_building_type = dob_building_type;
+  out.dob_existing_units = dob_existing_units;
+  out.dob_proposed_units = dob_proposed_units;
+
+  /** Only explicit `false` from `/api/us/property-value` enables fallback; missing flag does not. */
+  const noTruthPropertyRow = us.has_truth_property_row === false;
+
+  const hasStreetPricing = avg_street_price != null && avg_street_price > 0;
+  const hasAcrisSale = acris_last_sale_price != null && acris_last_sale_price > 0;
+
+  if (noTruthPropertyRow && (hasStreetPricing || hasAcrisSale)) {
+    const estimatedValueFallback = hasStreetPricing ? avg_street_price : acris_last_sale_price;
+    const lastTxAmt = hasAcrisSale ? acris_last_sale_price! : 0;
+    const lastTxDate = hasAcrisSale ? acris_last_sale_date : null;
+
+    out.estimated_value = estimatedValueFallback;
+    out.latest_sale_price = hasAcrisSale ? acris_last_sale_price : null;
+    out.latest_sale_date = hasAcrisSale ? acris_last_sale_date : null;
+
+    if (hasAcrisSale && lastTxDate) {
+      out.last_sale = { price: lastTxAmt, date: lastTxDate };
+    } else {
+      delete out.last_sale;
+    }
+
+    out.property_result = {
+      exact_value: estimatedValueFallback,
+      exact_value_message:
+        estimatedValueFallback != null && estimatedValueFallback > 0 ? null : "Unavailable",
+      value_level: "street-level" as const,
+      last_transaction: {
+        amount: lastTxAmt,
+        date: lastTxDate,
+        message: hasAcrisSale ? undefined : "No official sale recorded",
+      },
+      street_average: hasStreetPricing ? avg_street_price : null,
+      street_average_message: hasStreetPricing ? null : "No street average",
+      livability_rating: "FAIR" as const,
+    };
+  }
 
   if (shouldIncludeUsNycDebugInApiResponse()) {
     const priorDebug =
       us.us_nyc_debug != null && typeof us.us_nyc_debug === "object" && !Array.isArray(us.us_nyc_debug)
         ? { ...(us.us_nyc_debug as Record<string, unknown>) }
         : {};
-    out.us_nyc_debug = { ...priorDebug, acris_debug };
+    out.us_nyc_debug = { ...priorDebug, acris_debug, dob_debug };
   }
 
   return out;

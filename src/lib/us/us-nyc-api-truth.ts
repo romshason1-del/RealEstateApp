@@ -26,6 +26,7 @@ const NYC_TRUTH_QUERY_LOCATION = "EU";
 const EMPTY_TRUTH: USNYCApiTruthResponse = {
   success: true,
   message: null,
+  has_truth_property_row: false,
   estimated_value: null,
   latest_sale_price: null,
   latest_sale_date: null,
@@ -114,6 +115,7 @@ function mapTruthRow(row: Record<string, unknown>): Omit<USNYCApiTruthResponse, 
   const totalUnitsRaw =
     row.total_units ?? row.TOTAL_UNITS ?? row.latest_sale_total_units ?? row.LATEST_SALE_TOTAL_UNITS;
   return {
+    has_truth_property_row: true,
     estimated_value: toNumberOrNull(row.estimated_value),
     latest_sale_price: toNumberOrNull(row.latest_sale_price),
     latest_sale_date: toDateStringOrNull(row.latest_sale_date),

@@ -26,6 +26,7 @@ export function createEmptyUSNYCApiTruthResponse(partial?: Partial<USNYCApiTruth
   const base: USNYCApiTruthResponse = {
     success: true,
     message: null,
+    has_truth_property_row: false,
     estimated_value: null,
     latest_sale_price: null,
     latest_sale_date: null,

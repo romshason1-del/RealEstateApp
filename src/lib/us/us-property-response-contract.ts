@@ -42,6 +42,8 @@ export interface USPropertyValueResponse {
 export interface USNYCApiTruthResponse {
   success: boolean;
   message: string | null;
+  /** True iff BigQuery returned a matching row from `us_nyc_api_truth` (deterministic; not debug-only). */
+  has_truth_property_row: boolean;
   estimated_value: number | null;
   latest_sale_price: number | null;
   latest_sale_date: string | null;
