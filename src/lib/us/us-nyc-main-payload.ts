@@ -61,6 +61,49 @@ function fullAddressForUnitClassifier(
   return [st, c].filter(Boolean).join(", ").trim();
 }
 
+/** Always present on adapted NYC payloads; JSON omits `undefined` — never assign undefined. */
+const NYC_UNIT_FIELD_DEFAULTS = {
+  unit_classification: "unknown" as const,
+  should_prompt_for_unit: false,
+  unit_prompt_reason: "insufficient_evidence",
+};
+
+function applyNycUnitClassificationToPayload(
+  out: Record<string, unknown>,
+  classification: Awaited<ReturnType<typeof classifyNycAddressUnitType>> | null
+): void {
+  if (classification == null) {
+    out.unit_classification = NYC_UNIT_FIELD_DEFAULTS.unit_classification;
+    out.should_prompt_for_unit = NYC_UNIT_FIELD_DEFAULTS.should_prompt_for_unit;
+    out.unit_prompt_reason = NYC_UNIT_FIELD_DEFAULTS.unit_prompt_reason;
+    return;
+  }
+  const cls = classification.classification;
+  out.unit_classification =
+    cls === "single_property" || cls === "multi_unit_building" || cls === "unknown" ? cls : "unknown";
+  out.should_prompt_for_unit = classification.should_prompt_for_unit === true;
+  const reason = classification.reason;
+  out.unit_prompt_reason =
+    typeof reason === "string" && reason.trim() !== "" ? reason.trim() : NYC_UNIT_FIELD_DEFAULTS.unit_prompt_reason;
+}
+
+/**
+ * Idempotent: guarantees the three unit fields exist with JSON-safe values (never undefined).
+ */
+function ensureNycUnitFieldsOnPayload(out: Record<string, unknown>): void {
+  const c = out.unit_classification;
+  if (c !== "single_property" && c !== "multi_unit_building" && c !== "unknown") {
+    out.unit_classification = NYC_UNIT_FIELD_DEFAULTS.unit_classification;
+  }
+  if (typeof out.should_prompt_for_unit !== "boolean") {
+    out.should_prompt_for_unit = NYC_UNIT_FIELD_DEFAULTS.should_prompt_for_unit;
+  }
+  const r = out.unit_prompt_reason;
+  if (typeof r !== "string" || r.trim() === "") {
+    out.unit_prompt_reason = NYC_UNIT_FIELD_DEFAULTS.unit_prompt_reason;
+  }
+}
+
 function normalizeStreetNameForAcrisLegals(raw: string): string {
   const s = raw.trim().replace(/\s+/g, " ").toUpperCase();
   if (!s) return "";
@@ -170,6 +213,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
           : {};
       outStreet.us_nyc_debug = { ...priorDebug, acris_debug: skippedAcrisDebug, dob_debug: skippedDobDebug };
     }
+    ensureNycUnitFieldsOnPayload(outStreet);
     return outStreet;
   }
 
@@ -321,14 +365,17 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   out.dob_existing_units = dob_existing_units;
   out.dob_proposed_units = dob_proposed_units;
 
-  const unitClass = await classifyNycAddressUnitType({
-    fullAddress: fullAddressForUnitClassifier(us, ctx),
-    houseNumber: acrisStreetNumber,
-    streetName: acrisStreetNameRaw,
-  });
-  out.unit_classification = unitClass.classification;
-  out.should_prompt_for_unit = unitClass.should_prompt_for_unit;
-  out.unit_prompt_reason = unitClass.reason;
+  let unitClass: Awaited<ReturnType<typeof classifyNycAddressUnitType>> | null = null;
+  try {
+    unitClass = await classifyNycAddressUnitType({
+      fullAddress: fullAddressForUnitClassifier(us, ctx),
+      houseNumber: acrisStreetNumber,
+      streetName: acrisStreetNameRaw,
+    });
+  } catch {
+    unitClass = null;
+  }
+  applyNycUnitClassificationToPayload(out, unitClass);
 
   /** Only explicit `false` from `/api/us/property-value` enables fallback; missing flag does not. */
   const noTruthPropertyRow = us.has_truth_property_row === false;
@@ -375,5 +422,6 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     out.us_nyc_debug = { ...priorDebug, acris_debug, dob_debug };
   }
 
+  ensureNycUnitFieldsOnPayload(out);
   return out;
 }
