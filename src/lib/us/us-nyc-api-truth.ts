@@ -112,8 +112,24 @@ function streetOnlyLineForPricing(
 }
 
 /**
+ * `us_nyc_street_pricing.street_name` keys omit ordinal suffixes (42ND → 42). This runs only for
+ * street-pricing BigQuery lookups in this module (not ACRIS/DOB/UI).
+ */
+function stripOrdinalStreetNumberSuffixes(upper: string): string {
+  return upper.replace(/\b(\d+)(ST|ND|RD|TH)\b/gi, "$1");
+}
+
+/**
+ * DOB-style suffix abbreviations, then ordinal stripping for `us_nyc_street_pricing` equality match.
+ */
+function normalizeStreetNameForStreetPricingLookup(raw: string): string {
+  const dob = normalizeStreetNameForDobQuery(raw);
+  return stripOrdinalStreetNumberSuffixes(dob);
+}
+
+/**
  * After no `us_nyc_api_truth` match: if the request is street-only, query `us_nyc_street_pricing`
- * by DOB-normalized `street_name` (same abbreviations as DOB layer).
+ * using {@link normalizeStreetNameForStreetPricingLookup}.
  */
 async function streetOnlyTruthResponseFromNorm(
   norm: Pick<NycTruthNormalizationDebug, "normalized_full_address" | "normalized_building_address">
@@ -121,7 +137,7 @@ async function streetOnlyTruthResponseFromNorm(
   const rawStreetLine = streetOnlyLineForPricing(norm);
   if (rawStreetLine == null) return null;
 
-  const normalizedStreetName = normalizeStreetNameForDobQuery(rawStreetLine);
+  const normalizedStreetName = normalizeStreetNameForStreetPricingLookup(rawStreetLine);
   const sp = await queryUSNycStreetPricingByStreetName(normalizedStreetName);
   if (!sp) {
     return {
@@ -150,9 +166,10 @@ async function applyStreetPricingTable(base: USNYCApiTruthResponse): Promise<{
   if (!sn) {
     return { merged: base, streetNameTried: null, streetPricingRowFound: false };
   }
-  const sp = await queryUSNycStreetPricingByStreetName(sn);
+  const lookupKey = normalizeStreetNameForStreetPricingLookup(sn);
+  const sp = await queryUSNycStreetPricingByStreetName(lookupKey);
   if (!sp) {
-    return { merged: base, streetNameTried: sn, streetPricingRowFound: false };
+    return { merged: base, streetNameTried: lookupKey, streetPricingRowFound: false };
   }
   return {
     merged: {
@@ -160,7 +177,7 @@ async function applyStreetPricingTable(base: USNYCApiTruthResponse): Promise<{
       avg_street_price: sp.avg_street_price,
       avg_street_price_per_sqft: sp.avg_street_price_per_sqft,
     },
-    streetNameTried: sn,
+    streetNameTried: lookupKey,
     streetPricingRowFound: true,
   };
 }
