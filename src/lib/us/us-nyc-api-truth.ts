@@ -6,7 +6,12 @@
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
-import { buildNycTruthLookupCandidates } from "./us-nyc-address-normalize";
+import { normalizeStreetNameForDobQuery } from "./dob/dob-street-normalize";
+import {
+  buildNycTruthLookupCandidates,
+  buildNycTruthLookupNormalizationDebug,
+  type NycTruthNormalizationDebug,
+} from "./us-nyc-address-normalize";
 import {
   queryUSNycStreetPricingByStreetName,
   streetPricingQueryTemplate,
@@ -82,6 +87,55 @@ function toStringOrNull(v: unknown): string | null {
 
 function toDateStringOrNull(v: unknown): string | null {
   return coerceBigQueryDateToYyyyMmDd(v);
+}
+
+/** Leading NYC house number token (deterministic; street-only queries have no such token). */
+function looksLikeHouseNumberToken(token: string): boolean {
+  const t = token.trim();
+  if (!t) return false;
+  return /^\d+[A-Z]?$/i.test(t) || /^\d+-\d+$/.test(t) || /^\d+\/\d+$/.test(t);
+}
+
+/**
+ * When the normalized line has no leading house number, the whole line is the street name for pricing.
+ * When a house number is present, returns null (not a street-only query).
+ */
+function streetOnlyLineForPricing(
+  norm: Pick<NycTruthNormalizationDebug, "normalized_full_address" | "normalized_building_address">
+): string | null {
+  const line = norm.normalized_building_address.trim() || norm.normalized_full_address.trim();
+  if (!line) return null;
+  const parts = line.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  if (looksLikeHouseNumberToken(parts[0]!)) return null;
+  return line;
+}
+
+/**
+ * After no `us_nyc_api_truth` match: if the request is street-only, query `us_nyc_street_pricing`
+ * by DOB-normalized `street_name` (same abbreviations as DOB layer).
+ */
+async function streetOnlyTruthResponseFromNorm(
+  norm: Pick<NycTruthNormalizationDebug, "normalized_full_address" | "normalized_building_address">
+): Promise<USNYCApiTruthResponse | null> {
+  const rawStreetLine = streetOnlyLineForPricing(norm);
+  if (rawStreetLine == null) return null;
+
+  const normalizedStreetName = normalizeStreetNameForDobQuery(rawStreetLine);
+  const sp = await queryUSNycStreetPricingByStreetName(normalizedStreetName);
+  if (!sp) {
+    return {
+      ...EMPTY_TRUTH,
+      street_name: normalizedStreetName,
+    };
+  }
+  return {
+    ...EMPTY_TRUTH,
+    street_name: normalizedStreetName,
+    avg_street_price: sp.avg_street_price,
+    avg_street_price_per_sqft: sp.avg_street_price_per_sqft,
+    transaction_count: sp.transaction_count,
+  };
 }
 
 async function applyStreetPricingTable(base: USNYCApiTruthResponse): Promise<{
@@ -167,7 +221,10 @@ const MATCH_QUERY = `
 /**
  * Try each candidate in order (exact equality on pluto_address or sales_address).
  */
-export async function queryUSNYCApiTruthWithCandidates(candidates: readonly string[]): Promise<USNYCApiTruthResponse> {
+export async function queryUSNYCApiTruthWithCandidates(
+  candidates: readonly string[],
+  rawInput?: string
+): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
   for (const address of candidates) {
     const trimmed = address.trim();
@@ -185,6 +242,13 @@ export async function queryUSNYCApiTruthWithCandidates(candidates: readonly stri
         ...mapTruthRow(row),
       });
       return merged;
+    }
+  }
+  if (rawInput) {
+    const norm = buildNycTruthLookupNormalizationDebug(rawInput);
+    if (norm) {
+      const streetOnly = await streetOnlyTruthResponseFromNorm(norm);
+      if (streetOnly) return streetOnly;
     }
   }
   return { ...EMPTY_TRUTH };
@@ -250,6 +314,33 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     }
   }
 
+  const streetOnlyResponse = await streetOnlyTruthResponseFromNorm(norm);
+  if (streetOnlyResponse) {
+    const pricingFound =
+      streetOnlyResponse.avg_street_price != null || streetOnlyResponse.avg_street_price_per_sqft != null;
+    return {
+      response: streetOnlyResponse,
+      debug: {
+        original_input: originalInput,
+        normalized_full_address: norm.normalized_full_address,
+        normalized_building_address: norm.normalized_building_address,
+        table_name_used: US_NYC_API_TRUTH_TABLE_REFERENCE,
+        sql_where_used: US_NYC_API_TRUTH_SQL_WHERE,
+        rows_found_count: 0,
+        first_row_if_any: null,
+        candidates_tried: norm.candidates,
+        attempts,
+        bigquery_location: NYC_TRUTH_QUERY_LOCATION,
+        full_sql_template: MATCH_QUERY,
+        street_pricing_table_used: US_NYC_STREET_PRICING_TABLE_REFERENCE,
+        street_pricing_sql_where: US_NYC_STREET_PRICING_SQL_WHERE,
+        street_pricing_street_name_used: streetOnlyResponse.street_name ?? undefined,
+        street_pricing_rows_found: pricingFound ? 1 : 0,
+        street_pricing_full_sql_template: streetPricingQueryTemplate(),
+      },
+    };
+  }
+
   return {
     response: { ...EMPTY_TRUTH },
     debug: {
@@ -272,5 +363,5 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
 export async function queryUSNYCApiTruthByAddress(address: string): Promise<USNYCApiTruthResponse> {
   const candidates = buildNycTruthLookupCandidates(address);
   if (candidates.length === 0) return { ...EMPTY_TRUTH };
-  return queryUSNYCApiTruthWithCandidates(candidates);
+  return queryUSNYCApiTruthWithCandidates(candidates, address);
 }

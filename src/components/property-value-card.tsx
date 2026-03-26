@@ -804,8 +804,8 @@ export function PropertyValueCard({
       className={[
         "pointer-events-none transition-all duration-300 ease-out",
         isLotInputFocused && isMobileViewport
-          ? "fixed inset-x-2 z-50 flex flex-col justify-end"
-          : "fixed right-4 top-[120px] z-50 w-[90vw] max-w-[360px]",
+          ? "fixed inset-x-2 z-50"
+          : "fixed right-3 bottom-[100px] z-50 w-[80vw] max-w-[300px]",
         mounted ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
       ].join(" ")}
       style={{
@@ -821,7 +821,7 @@ export function PropertyValueCard({
         "pointer-events-auto flex min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-xl border border-amber-400/20 bg-black/85 shadow-[0_12px_40px_-8px_rgba(0,0,0,0.55)] backdrop-blur-xl",
         isLotInputFocused && isMobileViewport
           ? "max-h-[calc(100dvh-1rem)]"
-          : "max-h-[calc(100vh-9rem)]",
+          : "max-h-[calc(100vh-8rem)]",
       ].join(" ")}>
         <div className="flex shrink-0 items-start justify-between gap-1.5 border-b border-amber-400/15 bg-black/90 px-2 py-1 sm:px-2.5 sm:py-1">
           <div className="min-w-0 flex-1">
