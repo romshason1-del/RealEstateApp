@@ -55,8 +55,10 @@ function normalizeStreetNameForAcrisLegals(raw: string): string {
  * Enrichment: optional ACRIS deed history (secondary validation vs truth `latest_sale_*`; does not replace them).
  * Enrichment: optional DOB job filings summary (`dob_*`; does not replace truth or ACRIS).
  *
- * Fallback: when BigQuery truth returns no property row (`rows_found_count === 0`), enrich from
+ * Fallback: when BigQuery truth returns no property row (`has_truth_property_row === false`), enrich from
  * street pricing + ACRIS so the card is not fully empty when either source has data.
+ *
+ * Street-only query (no `ctx.houseNumber`): street pricing only, no ACRIS/DOB/property-level truth.
  */
 export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   us: Record<string, unknown>,
@@ -65,6 +67,8 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   const city = ctx.city.trim() || "—";
   const street = ctx.street.trim() || "—";
   const houseNumber = ctx.houseNumber.trim() || "—";
+  const rawHouse = ctx.houseNumber.trim();
+  const isStreetOnlyQuery = rawHouse === "" || rawHouse === "—";
 
   const estimated_value = num(us.estimated_value);
   const latest_sale_price = num(us.latest_sale_price);
@@ -78,6 +82,66 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   const pluto_address = str(us.pluto_address);
   const street_name = str(us.street_name);
   const truthHouseNumber = str(us.house_number);
+
+  if (isStreetOnlyQuery) {
+    const ev = avg_street_price != null && avg_street_price > 0 ? avg_street_price : null;
+    const skippedAcrisDebug = { success: false, deed_count: 0, matched: null };
+    const skippedDobDebug = {
+      success: false,
+      has_filings: null,
+      filing_count: null,
+      building_type: null,
+      existing_units: null,
+      proposed_units: null,
+    };
+    const outStreet: Record<string, unknown> = {
+      success: us.success === true,
+      data_source: "us_nyc_truth",
+      message: null,
+      address: { city, street, house_number: houseNumber },
+      ...(typeof us.has_truth_property_row === "boolean" ? { has_truth_property_row: us.has_truth_property_row } : {}),
+      estimated_value: ev,
+      latest_sale_price: null,
+      latest_sale_date: null,
+      latest_sale_total_units: null,
+      avg_street_price,
+      avg_street_price_per_sqft,
+      transaction_count,
+      price_per_sqft,
+      sales_address,
+      pluto_address,
+      street_name,
+      property_result: {
+        exact_value: ev,
+        exact_value_message: ev != null && ev > 0 ? null : "Unavailable",
+        value_level: "street-level" as const,
+        last_transaction: {
+          amount: 0,
+          date: null,
+          message: "No specific property selected",
+        },
+        street_average: ev,
+        street_average_message: ev != null && ev > 0 ? null : "No street average",
+        livability_rating: "FAIR" as const,
+      },
+      acris_last_sale_price: null,
+      acris_last_sale_date: null,
+      acris_has_multiple_deeds: false,
+      dob_has_filings: false,
+      dob_filing_count: 0,
+      dob_building_type: null,
+      dob_existing_units: null,
+      dob_proposed_units: null,
+    };
+    if (shouldIncludeUsNycDebugInApiResponse()) {
+      const priorDebug =
+        us.us_nyc_debug != null && typeof us.us_nyc_debug === "object" && !Array.isArray(us.us_nyc_debug)
+          ? { ...(us.us_nyc_debug as Record<string, unknown>) }
+          : {};
+      outStreet.us_nyc_debug = { ...priorDebug, acris_debug: skippedAcrisDebug, dob_debug: skippedDobDebug };
+    }
+    return outStreet;
+  }
 
   const lastAmt = latest_sale_price != null && latest_sale_price > 0 ? latest_sale_price : 0;
 
