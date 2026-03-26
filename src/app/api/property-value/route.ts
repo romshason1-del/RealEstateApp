@@ -22,6 +22,7 @@ import { fetchEPCFloorArea, fetchEPCFloorAreasForArea, isEPCConfigured } from "@
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 import { emptyFranceResponse, type FrancePropertyResponse } from "@/lib/france-response-contract";
 import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
+import { omitUsNycDebugFromPayload } from "@/lib/us/us-nyc-api-response-debug";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -513,9 +514,9 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
-      return NextResponse.json(adapted, { status: 200 });
+      return NextResponse.json(omitUsNycDebugFromPayload(adapted as Record<string, unknown>), { status: 200 });
     }
-    return NextResponse.json(data, { status: usRes.status });
+    return NextResponse.json(omitUsNycDebugFromPayload(data as Record<string, unknown>), { status: usRes.status });
   }
 
   if (isIL) {

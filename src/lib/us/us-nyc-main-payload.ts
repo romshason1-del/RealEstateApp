@@ -4,6 +4,7 @@
  */
 
 import { fetchAcrisNycTruthDeedHistory } from "@/lib/us/acris/acris-truth";
+import { shouldIncludeUsNycDebugInApiResponse } from "@/lib/us/us-nyc-api-response-debug";
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 
 function num(v: unknown): number | null {
@@ -47,7 +48,7 @@ function normalizeStreetNameForAcrisLegals(raw: string): string {
 
 /**
  * When `success` is true, merges truth fields + `address` + minimal `property_result` for legacy checks.
- * Preserves `us_nyc_debug` if present.
+ * Attaches `us_nyc_debug` only in non-production API responses.
  * NYC UI uses `data_source === "us_nyc_truth"` and reads top-level metrics (no street-average presentation).
  *
  * Enrichment: optional ACRIS deed history (secondary validation vs truth `latest_sale_*`; does not replace them).
@@ -82,12 +83,12 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
         ? null
         : lastAmt > 0
           ? null
-          : "No separate estimate in NYC truth table for this row",
+          : "Unavailable",
     value_level: "property-level" as const,
     last_transaction: {
       amount: lastAmt,
       date: latest_sale_date,
-      message: lastAmt > 0 ? undefined : "No recorded sale amount in NYC truth table",
+      message: lastAmt > 0 ? undefined : "No official sale recorded",
     },
     street_average: null,
     street_average_message: null,
@@ -160,11 +161,13 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   out.acris_last_sale_date = acris_last_sale_date;
   out.acris_has_multiple_deeds = acris_has_multiple_deeds;
 
-  const priorDebug =
-    us.us_nyc_debug != null && typeof us.us_nyc_debug === "object" && !Array.isArray(us.us_nyc_debug)
-      ? { ...(us.us_nyc_debug as Record<string, unknown>) }
-      : {};
-  out.us_nyc_debug = { ...priorDebug, acris_debug };
+  if (shouldIncludeUsNycDebugInApiResponse()) {
+    const priorDebug =
+      us.us_nyc_debug != null && typeof us.us_nyc_debug === "object" && !Array.isArray(us.us_nyc_debug)
+        ? { ...(us.us_nyc_debug as Record<string, unknown>) }
+        : {};
+    out.us_nyc_debug = { ...priorDebug, acris_debug };
+  }
 
   return out;
 }

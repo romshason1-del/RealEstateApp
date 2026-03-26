@@ -69,7 +69,7 @@ function formatNycSaleDate(dateStr: string | null | undefined): string {
 }
 
 function formatPricePerSqFt(value: number, symbol: string): string {
-  if (!Number.isFinite(value) || value <= 0) return "—";
+  if (!Number.isFinite(value) || value <= 0) return "Unavailable";
   const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
   return `${symbol}${rounded.toLocaleString("en-US")}/sq ft`;
 }
@@ -83,10 +83,10 @@ function nycEstimatedSubtitle(valueLevel: string | undefined): string {
     case "area-level":
       return "Based on area market data";
     case "no_match":
-      return "Map location found; no property record";
+      return "No property record at this location";
     case "property-level":
     default:
-      return "Based on exact property transaction history";
+      return "Based on this property's transaction history";
   }
 }
 
@@ -232,7 +232,7 @@ export function UsNycTruthPropertyCard({
       <div className={block}>
         <div className={sectionLabel}>Estimated value for this property</div>
         <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
-          {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "—"}
+          {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "Unavailable"}
         </div>
         <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
       </div>
@@ -246,7 +246,7 @@ export function UsNycTruthPropertyCard({
               {dateStr ? ` · ${dateStr}` : ""}
             </>
           ) : (
-            "No recorded transaction in truth data"
+            "No official sale recorded"
           )}
         </div>
         {multiUnit ? (
@@ -259,15 +259,15 @@ export function UsNycTruthPropertyCard({
       <div className={block}>
         <div className={sectionLabel}>Price per ft²</div>
         <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-          {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "—"}
+          {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "Unavailable"}
         </div>
-        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot (matched property record)</div>
+        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
       </div>
 
       <div className={block}>
         <div className={sectionLabel}>Local market context</div>
-        <div className="mt-0.5 text-[9px] leading-tight text-zinc-300">NYC — borough-level demand is not computed in this view.</div>
-        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Broader market indicators are omitted until wired from official feeds.</div>
+        <div className="mt-0.5 text-[9px] leading-tight text-zinc-300">Neighborhood demand and trends are not shown here.</div>
+        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Broader market context will appear when available.</div>
       </div>
 
       {apartmentFlowEnabled ? (

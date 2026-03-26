@@ -885,10 +885,12 @@ export function PropertyValueCard({
             <div className="space-y-0.5">
               <div className="flex items-center gap-1 text-amber-300/90">
                 <FileText className="size-2.5 shrink-0" aria-hidden />
-                <span className="text-[11px] font-medium">No Data Available</span>
+                <span className="text-[11px] font-medium">{isUS ? "No estimate available" : "No Data Available"}</span>
               </div>
               <p className="text-[10px] text-zinc-400">
-                No AVM estimate or sale history could be retrieved for this address.
+                {isUS
+                  ? "We couldn't retrieve an estimate or official sale for this address."
+                  : "No AVM estimate or sale history could be retrieved for this address."}
               </p>
             </div>
           ) : isFranceData && multipleUnits ? (
@@ -1197,14 +1199,16 @@ export function PropertyValueCard({
                 <span className="text-xs font-medium">
                   {isUK
                     ? "No exact UK property record found for this address"
-                    : "No property data found for this address"}
+                    : isUS
+                      ? "No NYC property record found"
+                      : "No property data found for this address"}
                 </span>
               </div>
               <p className="text-[11px] text-zinc-400">
                 {isUK
                   ? "Map location found, but no Land Registry or EPC record matches this address."
                   : isUS
-                    ? insightsData?.message ?? "No property record could be retrieved for this address."
+                    ? "We couldn't match this address to a property in our NYC records. It may be outside current coverage, or the address may need a small correction."
                     : "We only show data when there is a high-confidence match for the exact address."}
               </p>
               {insightsData?.debug && (

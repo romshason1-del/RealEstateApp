@@ -12,6 +12,7 @@ import {
   US_NYC_API_TRUTH_SQL_WHERE,
   US_NYC_API_TRUTH_TABLE_REFERENCE,
 } from "@/lib/us/us-nyc-api-truth";
+import { omitUsNycDebugFromPayload } from "@/lib/us/us-nyc-api-response-debug";
 import { createEmptyUSNYCApiTruthResponse } from "@/lib/us/us-response-shape";
 
 export const dynamic = "force-dynamic";
@@ -43,13 +44,13 @@ async function handle(addressRaw: string) {
       note: "empty address after trim",
     };
     logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
-    return NextResponse.json({ ...empty, us_nyc_debug }, { status: 400 });
+    return NextResponse.json(omitUsNycDebugFromPayload({ ...empty, us_nyc_debug } as Record<string, unknown>), { status: 400 });
   }
 
   if (!isUSBigQueryConfigured()) {
     const empty = createEmptyUSNYCApiTruthResponse({
       success: false,
-      message: "BigQuery is not configured (set BIGQUERY_PROJECT_ID or GOOGLE_CLOUD_PROJECT_ID)",
+      message: "Property records are temporarily unavailable.",
     });
     const us_nyc_debug = {
       original_input: addressRaw,
@@ -62,7 +63,7 @@ async function handle(addressRaw: string) {
       note: "BigQuery project env missing",
     };
     logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
-    return NextResponse.json({ ...empty, us_nyc_debug }, { status: 503 });
+    return NextResponse.json(omitUsNycDebugFromPayload({ ...empty, us_nyc_debug } as Record<string, unknown>), { status: 503 });
   }
 
   try {
@@ -70,7 +71,7 @@ async function handle(addressRaw: string) {
     if (!norm) {
       const empty = createEmptyUSNYCApiTruthResponse({
         success: false,
-        message: "address could not be normalized for lookup",
+        message: "We couldn't read this address. Check the format and try again.",
       });
       const us_nyc_debug = {
         original_input: addressRaw,
@@ -85,17 +86,19 @@ async function handle(addressRaw: string) {
         note: "normalization produced empty core",
       };
       logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
-      return NextResponse.json({ ...empty, us_nyc_debug }, { status: 400 });
+      return NextResponse.json(omitUsNycDebugFromPayload({ ...empty, us_nyc_debug } as Record<string, unknown>), { status: 400 });
     }
 
     const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm);
     logUsNycDebug("TEMP_DEBUG", { ...debug });
-    return NextResponse.json({ ...response, us_nyc_debug: debug });
+    return NextResponse.json(omitUsNycDebugFromPayload({ ...response, us_nyc_debug: debug } as Record<string, unknown>), {
+      status: 200,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "BigQuery query failed";
     const empty = createEmptyUSNYCApiTruthResponse({
       success: false,
-      message: msg,
+      message: process.env.NODE_ENV === "production" ? "Something went wrong loading property records." : msg,
     });
     const us_nyc_debug = {
       original_input: addressRaw,
@@ -108,7 +111,7 @@ async function handle(addressRaw: string) {
       error: msg,
     };
     logUsNycDebug("TEMP_DEBUG", us_nyc_debug);
-    return NextResponse.json({ ...empty, us_nyc_debug }, { status: 500 });
+    return NextResponse.json(omitUsNycDebugFromPayload({ ...empty, us_nyc_debug } as Record<string, unknown>), { status: 500 });
   }
 }
 
