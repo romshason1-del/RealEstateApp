@@ -57,3 +57,12 @@ export interface USNYCApiTruthResponse {
   pluto_address: string | null;
   street_name: string | null;
 }
+
+/** NYC main `/api/property-value` payload extensions (after {@link adaptUsNycTruthJsonForMainPropertyValueRoute}). */
+export type USNycUnitClassification = "single_property" | "multi_unit_building" | "unknown";
+
+export interface USNycMainPropertyValueUnitFields {
+  unit_classification: USNycUnitClassification;
+  should_prompt_for_unit: boolean;
+  unit_prompt_reason: string;
+}

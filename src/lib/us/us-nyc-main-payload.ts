@@ -5,6 +5,7 @@
 
 import { fetchAcrisNycTruthDeedHistory } from "@/lib/us/acris/acris-truth";
 import { fetchDobNycBuildingInsights } from "@/lib/us/dob/dob-truth";
+import { classifyNycAddressUnitType } from "@/lib/us/nyc-building-unit-truth";
 import { shouldIncludeUsNycDebugInApiResponse } from "@/lib/us/us-nyc-api-response-debug";
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 
@@ -33,6 +34,32 @@ const ACRIS_STREET_SUFFIX_MAP: Record<string, string> = {
   TER: "TERRACE",
   PKWY: "PARKWAY",
 };
+
+/** Address string for BigQuery truth lookup in {@link classifyNycAddressUnitType} (matches `/api/us/property-value` candidates). */
+function fullAddressForUnitClassifier(
+  us: Record<string, unknown>,
+  ctx: { city: string; street: string; houseNumber: string }
+): string {
+  const dbg = us.us_nyc_debug;
+  if (dbg && typeof dbg === "object" && !Array.isArray(dbg)) {
+    const o = dbg as Record<string, unknown>;
+    const norm = typeof o.normalized_full_address === "string" ? o.normalized_full_address.trim() : "";
+    if (norm) return norm;
+    const orig = typeof o.original_input === "string" ? o.original_input.trim() : "";
+    if (orig) return orig;
+  }
+  const pluto = typeof us.pluto_address === "string" ? us.pluto_address.trim() : "";
+  const sales = typeof us.sales_address === "string" ? us.sales_address.trim() : "";
+  if (pluto) return pluto;
+  if (sales) return sales;
+  const hn = ctx.houseNumber.trim();
+  const st = ctx.street.trim();
+  const c = ctx.city.trim();
+  if (hn && hn !== "—" && st && st !== "—") {
+    return [hn, st, c].filter(Boolean).join(", ").trim();
+  }
+  return [st, c].filter(Boolean).join(", ").trim();
+}
 
 function normalizeStreetNameForAcrisLegals(raw: string): string {
   const s = raw.trim().replace(/\s+/g, " ").toUpperCase();
@@ -132,6 +159,9 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
       dob_building_type: null,
       dob_existing_units: null,
       dob_proposed_units: null,
+      unit_classification: "unknown",
+      should_prompt_for_unit: false,
+      unit_prompt_reason: "insufficient_evidence",
     };
     if (shouldIncludeUsNycDebugInApiResponse()) {
       const priorDebug =
@@ -290,6 +320,15 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   out.dob_building_type = dob_building_type;
   out.dob_existing_units = dob_existing_units;
   out.dob_proposed_units = dob_proposed_units;
+
+  const unitClass = await classifyNycAddressUnitType({
+    fullAddress: fullAddressForUnitClassifier(us, ctx),
+    houseNumber: acrisStreetNumber,
+    streetName: acrisStreetNameRaw,
+  });
+  out.unit_classification = unitClass.classification;
+  out.should_prompt_for_unit = unitClass.should_prompt_for_unit;
+  out.unit_prompt_reason = unitClass.reason;
 
   /** Only explicit `false` from `/api/us/property-value` enables fallback; missing flag does not. */
   const noTruthPropertyRow = us.has_truth_property_row === false;

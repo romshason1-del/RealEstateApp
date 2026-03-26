@@ -508,7 +508,7 @@ export async function GET(request: NextRequest) {
     usUrl.searchParams.set("address", usAddress);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const data = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
-    if (usRes.ok && data.success === true) {
+    if (usRes.ok) {
       const adapted = await adaptUsNycTruthJsonForMainPropertyValueRoute(data, {
         city: city.trim(),
         street: street.trim(),
