@@ -158,7 +158,9 @@ export function UsNycTruthPropertyCard({
     nycPricesMatchForAcris(data.latest_sale_price, data.acris_last_sale_price) &&
     nycSaleDateKeyForCompare(data.latest_sale_date) !== "" &&
     nycSaleDateKeyForCompare(data.latest_sale_date) === nycSaleDateKeyForCompare(data.acris_last_sale_date);
-  const showAcrisMultipleDeedsLine = data.acris_has_multiple_deeds === true;
+  const showAcrisMultipleDeedsLine =
+    data.acris_has_multiple_deeds === true &&
+    (data.acris_last_sale_price != null || data.acris_last_sale_date != null);
 
   const onAptKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
