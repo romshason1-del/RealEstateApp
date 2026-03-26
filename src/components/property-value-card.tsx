@@ -20,7 +20,6 @@ import {
   UsNycTruthPropertyCard,
   type UsNycTruthCardData,
 } from "@/components/us/us-nyc-truth-property-card";
-import { usNycPayloadSupportsApartmentFlow } from "@/components/us/us-nyc-multiunit-detect";
 
 export type PropertyValueCardProps = {
   address: string;
@@ -403,6 +402,9 @@ export function PropertyValueCard({
   const [aptNumber, setAptNumber] = React.useState("");
   const [searchApt, setSearchApt] = React.useState<string | undefined>(undefined);
   const [aptSearchTrigger, setAptSearchTrigger] = React.useState(0);
+  /** NYC only: apartment/lot from API prompt — local until backend unit lookup exists. */
+  const [nycUnitDraft, setNycUnitDraft] = React.useState("");
+  const [nycUnitSubmitted, setNycUnitSubmitted] = React.useState<string | null>(null);
   const { data: insightsData, isLoading, refetch } = usePropertyValueInsights(addressForApi, countryCode, {
     latitude: position?.lat,
     longitude: position?.lng,
@@ -512,13 +514,19 @@ export function PropertyValueCard({
         ? (lastGoodFrancePayloadRef.current as typeof insightsData)
         : insightsData;
 
-  /** No client heuristics: only when US payload sets `supports_apartment_requery` (not emitted yet). */
+  /** NYC: main API `should_prompt_for_unit` only — no client heuristics. */
   const usNycApartmentFlowEnabled = React.useMemo(() => {
     if (!isUS || !activeInsightsData || typeof activeInsightsData !== "object") return false;
-    const d = activeInsightsData as { data_source?: string; success?: boolean; supports_apartment_requery?: boolean };
+    const d = activeInsightsData as { data_source?: string; success?: boolean; should_prompt_for_unit?: boolean };
     if (d.data_source !== "us_nyc_truth" || d.success !== true) return false;
-    return usNycPayloadSupportsApartmentFlow(d);
+    return d.should_prompt_for_unit === true;
   }, [isUS, activeInsightsData]);
+
+  React.useEffect(() => {
+    if (!isUS) return;
+    setNycUnitDraft("");
+    setNycUnitSubmitted(null);
+  }, [address, isUS]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -1230,6 +1238,19 @@ export function PropertyValueCard({
                 data={activeInsightsData as UsNycTruthCardData}
                 currencySymbol={currencySymbol}
                 apartmentFlowEnabled={usNycApartmentFlowEnabled}
+                showApartmentInput={usNycApartmentFlowEnabled && nycUnitSubmitted == null}
+                apartmentDraft={nycUnitDraft}
+                onApartmentDraftChange={setNycUnitDraft}
+                onApartmentSearch={() => {
+                  const t = nycUnitDraft.trim();
+                  if (t) setNycUnitSubmitted(t);
+                }}
+                apartmentSearchInFlight={false}
+                submittedApartment={nycUnitSubmitted ?? undefined}
+                onCheckAnotherApartment={() => {
+                  setNycUnitSubmitted(null);
+                  setNycUnitDraft("");
+                }}
               />
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">

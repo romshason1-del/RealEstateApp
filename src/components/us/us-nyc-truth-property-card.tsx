@@ -14,6 +14,10 @@ export type UsNycTruthCardData = {
   property_result?: { value_level?: string };
   /** When true, UI may show apartment re-query (set by US pipeline only; no client heuristics). */
   supports_apartment_requery?: boolean;
+  /** Main NYC API: deterministic multi-unit prompt (no client heuristics). */
+  should_prompt_for_unit?: boolean;
+  unit_classification?: string;
+  unit_prompt_reason?: string;
   /** ACRIS cross-check (main route); display-only. */
   acris_last_sale_price?: number | null;
   acris_last_sale_date?: string | null;
@@ -112,7 +116,7 @@ function nycPricesMatchForAcris(a: number | null | undefined, b: number | null |
 export type UsNycTruthPropertyCardProps = {
   data: UsNycTruthCardData;
   currencySymbol: string;
-  /** Apartment prompt + CTA only when API sets `supports_apartment_requery`. */
+  /** Apartment prompt + CTA only when main API sets `should_prompt_for_unit`. */
   apartmentFlowEnabled: boolean;
   showApartmentInput?: boolean;
   apartmentDraft?: string;
@@ -198,9 +202,11 @@ export function UsNycTruthPropertyCard({
 
       {apartmentFlowEnabled && showApartmentInput ? (
         <div className="rounded-md border border-amber-500/30 bg-black/55 px-2 py-1.5 sm:px-2.5">
-          <div className="text-[10px] font-semibold leading-tight tracking-tight text-amber-100/95">What&apos;s your apartment number?</div>
+          <div className="text-[10px] font-semibold leading-tight tracking-tight text-amber-100/95">
+            What&apos;s your apartment / lot number?
+          </div>
           <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
-            Use the official unit designator from NYC records. Results depend on what the pipeline returns for that unit.
+            Enter the official unit or lot designator. Unit-specific valuation is not applied until the backend supports it.
           </p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <input
@@ -227,7 +233,7 @@ export function UsNycTruthPropertyCard({
 
       {apartmentFlowEnabled && !showApartmentInput && (submittedApartment ?? "").trim() ? (
         <div className="text-[8px] leading-tight text-zinc-500">
-          Unit filter: <span className="font-medium text-amber-200/90">{(submittedApartment ?? "").trim()}</span>
+          Apartment / lot saved: <span className="font-medium text-amber-200/90">{(submittedApartment ?? "").trim()}</span>
         </div>
       ) : null}
 
