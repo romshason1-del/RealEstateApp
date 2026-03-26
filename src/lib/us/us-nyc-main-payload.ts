@@ -139,8 +139,8 @@ function normalizeStreetNameForAcrisLegals(raw: string): string {
  * Enrichment: optional ACRIS deed history (secondary validation vs truth `latest_sale_*`; does not replace them).
  * Enrichment: optional DOB job filings summary (`dob_*`; does not replace truth or ACRIS).
  *
- * Fallback: when BigQuery truth returns no property row (`has_truth_property_row === false`), enrich from
- * street pricing + ACRIS so the card is not fully empty when either source has data.
+ * Fallback: when there is no usable property-level truth (no row, or row with no `latest_sale_price` /
+ * `estimated_value`), enrich from street pricing + ACRIS so the card is not fully empty when either source has data.
  *
  * Street-only query (no `ctx.houseNumber`): street pricing only, no ACRIS/DOB/property-level truth.
  */
@@ -393,13 +393,14 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   }
   applyNycUnitClassificationToPayload(out, unitClass);
 
-  /** Only explicit `false` from `/api/us/property-value` enables fallback; missing flag does not. */
-  const noTruthPropertyRow = us.has_truth_property_row === false;
+  const hasValidPropertyData =
+    us.has_truth_property_row === true &&
+    (latest_sale_price !== null || estimated_value !== null);
 
   const hasStreetPricing = avg_street_price != null && avg_street_price > 0;
   const hasAcrisSale = acris_last_sale_price != null && acris_last_sale_price > 0;
 
-  if (noTruthPropertyRow && (hasStreetPricing || hasAcrisSale)) {
+  if (!hasValidPropertyData && (hasStreetPricing || hasAcrisSale)) {
     const estimatedValueFallback = hasStreetPricing ? avg_street_price : acris_last_sale_price;
     const lastTxAmt = hasAcrisSale ? acris_last_sale_price! : 0;
     const lastTxDate = hasAcrisSale ? acris_last_sale_date : null;
