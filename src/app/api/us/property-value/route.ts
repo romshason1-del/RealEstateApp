@@ -26,7 +26,7 @@ function logUsNycDebug(label: string, payload: object): void {
   }
 }
 
-async function handle(addressRaw: string) {
+async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
   const { line } = normalizeUSAddressLine(addressRaw);
   if (!line) {
     const empty = createEmptyUSNYCApiTruthResponse({
@@ -89,7 +89,11 @@ async function handle(addressRaw: string) {
       return NextResponse.json(omitUsNycDebugFromPayload({ ...empty, us_nyc_debug } as Record<string, unknown>), { status: 400 });
     }
 
-    const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm);
+    const unitOrLot =
+      typeof unitOrLotRaw === "string" && unitOrLotRaw.trim() !== "" ? unitOrLotRaw.trim() : null;
+    const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm, {
+      unitOrLot,
+    });
     logUsNycDebug("TEMP_DEBUG", { ...debug });
     return NextResponse.json(omitUsNycDebugFromPayload({ ...response, us_nyc_debug: debug } as Record<string, unknown>), {
       status: 200,
@@ -117,16 +121,19 @@ async function handle(addressRaw: string) {
 
 export async function GET(req: NextRequest) {
   const address = req.nextUrl.searchParams.get("address") ?? "";
-  return handle(address);
+  const unitOrLot = req.nextUrl.searchParams.get("unit_or_lot");
+  return handle(address, unitOrLot);
 }
 
 export async function POST(req: NextRequest) {
   let address = "";
+  let unitOrLot: string | null = null;
   try {
-    const body = (await req.json()) as { address?: string };
+    const body = (await req.json()) as { address?: string; unit_or_lot?: string };
     address = typeof body.address === "string" ? body.address : "";
+    unitOrLot = typeof body.unit_or_lot === "string" ? body.unit_or_lot : null;
   } catch {
     address = "";
   }
-  return handle(address);
+  return handle(address, unitOrLot);
 }

@@ -405,6 +405,10 @@ export function PropertyValueCard({
   /** NYC only: apartment/lot from API prompt — local until backend unit lookup exists. */
   const [nycUnitDraft, setNycUnitDraft] = React.useState("");
   const [nycUnitSubmitted, setNycUnitSubmitted] = React.useState<string | null>(null);
+  /** NYC: full `/api/property-value` JSON after Apply with `unit_or_lot` (hook does not send that param). */
+  const [nycUnitApplyPayload, setNycUnitApplyPayload] = React.useState<Record<string, unknown> | null>(null);
+  const [nycUnitApplyLoading, setNycUnitApplyLoading] = React.useState(false);
+  const [nycUnitApplyError, setNycUnitApplyError] = React.useState<string | null>(null);
   const { data: insightsData, isLoading, refetch } = usePropertyValueInsights(addressForApi, countryCode, {
     latitude: position?.lat,
     longitude: position?.lng,
@@ -526,7 +530,48 @@ export function PropertyValueCard({
     if (!isUS) return;
     setNycUnitDraft("");
     setNycUnitSubmitted(null);
+    setNycUnitApplyPayload(null);
+    setNycUnitApplyError(null);
   }, [address, isUS]);
+
+  const submitNycUnitApply = React.useCallback(async () => {
+    const t = nycUnitDraft.trim();
+    if (!t || !isUS) return;
+    setNycUnitApplyLoading(true);
+    setNycUnitApplyError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("address", addressForApi.trim());
+      params.set("countryCode", "US");
+      if (position?.lat != null && Number.isFinite(position.lat)) params.set("latitude", String(position.lat));
+      if (position?.lng != null && Number.isFinite(position.lng)) params.set("longitude", String(position.lng));
+      params.set("unit_or_lot", t);
+      const res = await fetch(`/api/property-value?${params.toString()}`, { signal: AbortSignal.timeout(20000) });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setNycUnitApplyError(typeof data.message === "string" ? data.message : "Request failed");
+        return;
+      }
+      setNycUnitApplyPayload(data);
+      const norm =
+        typeof data.unit_or_lot_submitted === "string" && data.unit_or_lot_submitted.trim() !== ""
+          ? data.unit_or_lot_submitted.trim()
+          : t;
+      setNycUnitSubmitted(norm);
+    } catch (e) {
+      setNycUnitApplyError(e instanceof Error ? e.message : "Request failed");
+    } finally {
+      setNycUnitApplyLoading(false);
+    }
+  }, [addressForApi, isUS, nycUnitDraft, position?.lat, position?.lng]);
+
+  const nycTruthDisplay =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth"
+      ? (nycUnitApplyPayload ?? (activeInsightsData as Record<string, unknown>))
+      : null;
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -1235,23 +1280,49 @@ export function PropertyValueCard({
             (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <UsNycTruthPropertyCard
-                data={activeInsightsData as UsNycTruthCardData}
+                data={(nycTruthDisplay ?? activeInsightsData) as UsNycTruthCardData}
                 currencySymbol={currencySymbol}
                 apartmentFlowEnabled={usNycApartmentFlowEnabled}
                 showApartmentInput={usNycApartmentFlowEnabled && nycUnitSubmitted == null}
                 apartmentDraft={nycUnitDraft}
                 onApartmentDraftChange={setNycUnitDraft}
                 onApartmentSearch={() => {
-                  const t = nycUnitDraft.trim();
-                  if (t) setNycUnitSubmitted(t);
+                  void submitNycUnitApply();
                 }}
-                apartmentSearchInFlight={false}
+                apartmentSearchInFlight={nycUnitApplyLoading || isLoading}
                 submittedApartment={nycUnitSubmitted ?? undefined}
                 onCheckAnotherApartment={() => {
                   setNycUnitSubmitted(null);
                   setNycUnitDraft("");
+                  setNycUnitApplyPayload(null);
+                  setNycUnitApplyError(null);
+                  refetch();
                 }}
               />
+              {nycUnitApplyError ? (
+                <p className="text-[9px] text-amber-400/90">{nycUnitApplyError}</p>
+              ) : null}
+              {(() => {
+                if (!nycUnitApplyPayload || typeof nycUnitApplyPayload !== "object") return null;
+                const st = nycUnitApplyPayload.unit_lookup_status;
+                const sub = nycUnitApplyPayload.unit_or_lot_submitted;
+                const subStr = typeof sub === "string" && sub.trim() !== "" ? sub.trim() : null;
+                if (st === "matched") {
+                  return (
+                    <p className="text-[9px] text-emerald-400/90">
+                      Unit or lot matched in NYC records{subStr ? ` (${subStr})` : ""}.
+                    </p>
+                  );
+                }
+                if (st === "not_found") {
+                  return (
+                    <p className="text-[9px] text-zinc-400">
+                      No unit-specific record{subStr ? ` for ${subStr}` : ""} — showing building-level value.
+                    </p>
+                  );
+                }
+                return null;
+              })()}
               {debugMode && hasOfficialProvider && (
                 <CollapsibleSection title="Debug Info">
                   <DebugPanel

@@ -56,6 +56,9 @@ export interface USNYCApiTruthResponse {
   sales_address: string | null;
   pluto_address: string | null;
   street_name: string | null;
+  /** Optional apartment/lot refinement: exact BigQuery address match on `pluto_address`/`sales_address` with `, UNIT`. */
+  unit_lookup_status: "not_requested" | "matched" | "not_found";
+  unit_or_lot_submitted: string | null;
 }
 
 /** NYC main `/api/property-value` payload extensions (after {@link adaptUsNycTruthJsonForMainPropertyValueRoute}). */

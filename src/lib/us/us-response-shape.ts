@@ -38,6 +38,8 @@ export function createEmptyUSNYCApiTruthResponse(partial?: Partial<USNYCApiTruth
     sales_address: null,
     pluto_address: null,
     street_name: null,
+    unit_lookup_status: "not_requested",
+    unit_or_lot_submitted: null,
   };
   return { ...base, ...partial };
 }

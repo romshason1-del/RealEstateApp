@@ -506,6 +506,8 @@ export async function GET(request: NextRequest) {
     }
     const usUrl = new URL("/api/us/property-value", request.nextUrl.origin);
     usUrl.searchParams.set("address", usAddress);
+    const unitOrLot = (searchParams.get("unit_or_lot") ?? "").trim();
+    if (unitOrLot) usUrl.searchParams.set("unit_or_lot", unitOrLot);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const data = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
     if (usRes.ok) {

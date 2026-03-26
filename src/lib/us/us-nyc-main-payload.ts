@@ -68,6 +68,20 @@ const NYC_UNIT_FIELD_DEFAULTS = {
   unit_prompt_reason: "insufficient_evidence",
 };
 
+function unitLookupFieldsFromUs(us: Record<string, unknown>): {
+  unit_lookup_status: "not_requested" | "matched" | "not_found";
+  unit_or_lot_submitted: string | null;
+} {
+  const s = us.unit_lookup_status;
+  const status =
+    s === "matched" || s === "not_found" || s === "not_requested" ? s : "not_requested";
+  const sub = us.unit_or_lot_submitted;
+  return {
+    unit_lookup_status: status,
+    unit_or_lot_submitted: typeof sub === "string" ? sub : null,
+  };
+}
+
 function applyNycUnitClassificationToPayload(
   out: Record<string, unknown>,
   classification: Awaited<ReturnType<typeof classifyNycAddressUnitType>> | null
@@ -205,6 +219,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
       unit_classification: "unknown",
       should_prompt_for_unit: false,
       unit_prompt_reason: "insufficient_evidence",
+      ...unitLookupFieldsFromUs(us),
     };
     if (shouldIncludeUsNycDebugInApiResponse()) {
       const priorDebug =
@@ -256,6 +271,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     pluto_address,
     street_name,
     property_result,
+    ...unitLookupFieldsFromUs(us),
   };
 
   if (lastAmt > 0 && latest_sale_date) {

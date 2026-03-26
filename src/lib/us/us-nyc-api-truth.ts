@@ -43,7 +43,26 @@ const EMPTY_TRUTH: USNYCApiTruthResponse = {
   sales_address: null,
   pluto_address: null,
   street_name: null,
+  unit_lookup_status: "not_requested",
+  unit_or_lot_submitted: null,
 };
+
+function collapseSpaces(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Deterministic unit token for `pluto_address` / `sales_address` equality (same line as NYC truth rows). */
+export function normalizeUnitOrLotForTruthLookup(raw: string): string {
+  return collapseSpaces(raw.toUpperCase());
+}
+
+function withUnitLookup(
+  r: USNYCApiTruthResponse,
+  status: USNYCApiTruthResponse["unit_lookup_status"],
+  submitted: string | null
+): USNYCApiTruthResponse {
+  return { ...r, unit_lookup_status: status, unit_or_lot_submitted: submitted };
+}
 
 /** TEMPORARY: remove after production debugging. */
 export type USNYCApiTruthQueryDebug = {
@@ -143,6 +162,8 @@ async function streetOnlyTruthResponseFromNorm(
     return {
       ...EMPTY_TRUTH,
       street_name: normalizedStreetName,
+      unit_lookup_status: "not_requested",
+      unit_or_lot_submitted: null,
     };
   }
   return {
@@ -151,6 +172,8 @@ async function streetOnlyTruthResponseFromNorm(
     avg_street_price: sp.avg_street_price,
     avg_street_price_per_sqft: sp.avg_street_price_per_sqft,
     transaction_count: sp.transaction_count,
+    unit_lookup_status: "not_requested",
+    unit_or_lot_submitted: null,
   };
 }
 
@@ -198,6 +221,8 @@ function mapTruthRow(row: Record<string, unknown>): Omit<USNYCApiTruthResponse, 
     sales_address: toStringOrNull(row.sales_address),
     pluto_address: toStringOrNull(row.pluto_address),
     street_name: toStringOrNull(row.street_name),
+    unit_lookup_status: "not_requested",
+    unit_or_lot_submitted: null,
   };
 }
 
@@ -235,29 +260,83 @@ const MATCH_QUERY = `
   LIMIT 1
 `.trim();
 
+async function queryFirstTruthRowForAddress(
+  client: ReturnType<typeof getUSBigQueryClient>,
+  address: string
+): Promise<{ row: Record<string, unknown> | null; rowsReturned: number }> {
+  const trimmed = address.trim();
+  if (!trimmed) return { row: null, rowsReturned: 0 };
+  const [rows] = await client.query({
+    query: MATCH_QUERY,
+    params: { address: trimmed },
+    location: NYC_TRUTH_QUERY_LOCATION,
+  });
+  const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
+  return { row: list[0] ?? null, rowsReturned: list.length };
+}
+
+function parseUnitOrLotOptions(options?: { unitOrLot?: string | null }): {
+  hasUnit: boolean;
+  submitted: string | null;
+} {
+  const raw = options?.unitOrLot?.trim();
+  if (!raw) return { hasUnit: false, submitted: null };
+  const normalized = normalizeUnitOrLotForTruthLookup(raw);
+  if (!normalized) return { hasUnit: false, submitted: null };
+  return { hasUnit: true, submitted: normalized };
+}
+
 /**
  * Try each candidate in order (exact equality on pluto_address or sales_address).
+ * When `unitOrLot` is set, tries `"{candidate}, {normalized unit}"` first, then building-level candidates.
  */
 export async function queryUSNYCApiTruthWithCandidates(
   candidates: readonly string[],
-  rawInput?: string
+  rawInput?: string,
+  options?: { unitOrLot?: string | null }
 ): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
+  const { hasUnit, submitted } = parseUnitOrLotOptions(options);
+
+  if (hasUnit && submitted) {
+    for (const address of candidates) {
+      const trimmed = address.trim();
+      if (!trimmed) continue;
+      const suffixed = `${trimmed}, ${submitted}`;
+      const { row } = await queryFirstTruthRowForAddress(client, suffixed);
+      if (row) {
+        const { merged } = await applyStreetPricingTable(
+          withUnitLookup(
+            {
+              success: true,
+              message: null,
+              ...mapTruthRow(row),
+            },
+            "matched",
+            submitted
+          )
+        );
+        return merged;
+      }
+    }
+  }
+
   for (const address of candidates) {
     const trimmed = address.trim();
     if (!trimmed) continue;
-    const [rows] = await client.query({
-      query: MATCH_QUERY,
-      params: { address: trimmed },
-      location: NYC_TRUTH_QUERY_LOCATION,
-    });
-    const row = (rows as Record<string, unknown>[] | null | undefined)?.[0];
+    const { row } = await queryFirstTruthRowForAddress(client, trimmed);
     if (row) {
-      const { merged } = await applyStreetPricingTable({
-        success: true,
-        message: null,
-        ...mapTruthRow(row),
-      });
+      const { merged } = await applyStreetPricingTable(
+        withUnitLookup(
+          {
+            success: true,
+            message: null,
+            ...mapTruthRow(row),
+          },
+          hasUnit ? "not_found" : "not_requested",
+          submitted
+        )
+      );
       return merged;
     }
   }
@@ -265,10 +344,10 @@ export async function queryUSNYCApiTruthWithCandidates(
     const norm = buildNycTruthLookupNormalizationDebug(rawInput);
     if (norm) {
       const streetOnly = await streetOnlyTruthResponseFromNorm(norm);
-      if (streetOnly) return streetOnly;
+      if (streetOnly) return withUnitLookup(streetOnly, hasUnit ? "not_found" : "not_requested", submitted);
     }
   }
-  return { ...EMPTY_TRUTH };
+  return withUnitLookup({ ...EMPTY_TRUTH }, hasUnit ? "not_found" : "not_requested", submitted);
 }
 
 /**
@@ -276,31 +355,79 @@ export async function queryUSNYCApiTruthWithCandidates(
  */
 export async function queryUSNYCApiTruthWithCandidatesDebug(
   originalInput: string,
-  norm: { normalized_full_address: string; normalized_building_address: string; candidates: readonly string[] }
+  norm: { normalized_full_address: string; normalized_building_address: string; candidates: readonly string[] },
+  options?: { unitOrLot?: string | null }
 ): Promise<{ response: USNYCApiTruthResponse; debug: USNYCApiTruthQueryDebug }> {
   const client = getUSBigQueryClient();
   const attempts: { candidate: string; rows_returned: number }[] = [];
   let firstRow: Record<string, unknown> | null = null;
+  const { hasUnit, submitted } = parseUnitOrLotOptions(options);
+
+  if (hasUnit && submitted) {
+    for (const address of norm.candidates) {
+      const trimmed = address.trim();
+      if (!trimmed) continue;
+      const suffixed = `${trimmed}, ${submitted}`;
+      const { row, rowsReturned: n } = await queryFirstTruthRowForAddress(client, suffixed);
+      attempts.push({ candidate: suffixed, rows_returned: n });
+      if (row) {
+        firstRow = rowToJsonSafe(row);
+        const truthResponse: USNYCApiTruthResponse = withUnitLookup(
+          {
+            success: true,
+            message: null,
+            ...mapTruthRow(row),
+          },
+          "matched",
+          submitted
+        );
+        const { merged: response, streetNameTried, streetPricingRowFound } = await applyStreetPricingTable(truthResponse);
+
+        return {
+          response,
+          debug: {
+            original_input: originalInput,
+            normalized_full_address: norm.normalized_full_address,
+            normalized_building_address: norm.normalized_building_address,
+            table_name_used: US_NYC_API_TRUTH_TABLE_REFERENCE,
+            sql_where_used: US_NYC_API_TRUTH_SQL_WHERE,
+            rows_found_count: n,
+            first_row_if_any: firstRow,
+            candidates_tried: norm.candidates,
+            attempts,
+            bigquery_location: NYC_TRUTH_QUERY_LOCATION,
+            full_sql_template: MATCH_QUERY,
+            ...(streetNameTried
+              ? {
+                  street_pricing_table_used: US_NYC_STREET_PRICING_TABLE_REFERENCE,
+                  street_pricing_sql_where: US_NYC_STREET_PRICING_SQL_WHERE,
+                  street_pricing_street_name_used: streetNameTried,
+                  street_pricing_rows_found: streetPricingRowFound ? 1 : 0,
+                  street_pricing_full_sql_template: streetPricingQueryTemplate(),
+                }
+              : {}),
+          },
+        };
+      }
+    }
+  }
 
   for (const address of norm.candidates) {
     const trimmed = address.trim();
     if (!trimmed) continue;
-    const [rows] = await client.query({
-      query: MATCH_QUERY,
-      params: { address: trimmed },
-      location: NYC_TRUTH_QUERY_LOCATION,
-    });
-    const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
-    const n = list.length;
+    const { row, rowsReturned: n } = await queryFirstTruthRowForAddress(client, trimmed);
     attempts.push({ candidate: trimmed, rows_returned: n });
-    const row = list[0];
     if (row) {
       firstRow = rowToJsonSafe(row);
-      const truthResponse: USNYCApiTruthResponse = {
-        success: true,
-        message: null,
-        ...mapTruthRow(row),
-      };
+      const truthResponse: USNYCApiTruthResponse = withUnitLookup(
+        {
+          success: true,
+          message: null,
+          ...mapTruthRow(row),
+        },
+        hasUnit ? "not_found" : "not_requested",
+        submitted
+      );
       const { merged: response, streetNameTried, streetPricingRowFound } = await applyStreetPricingTable(truthResponse);
 
       return {
@@ -333,10 +460,10 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
 
   const streetOnlyResponse = await streetOnlyTruthResponseFromNorm(norm);
   if (streetOnlyResponse) {
-    const pricingFound =
-      streetOnlyResponse.avg_street_price != null || streetOnlyResponse.avg_street_price_per_sqft != null;
+    const response = withUnitLookup(streetOnlyResponse, hasUnit ? "not_found" : "not_requested", submitted);
+    const pricingFound = response.avg_street_price != null || response.avg_street_price_per_sqft != null;
     return {
-      response: streetOnlyResponse,
+      response,
       debug: {
         original_input: originalInput,
         normalized_full_address: norm.normalized_full_address,
@@ -351,7 +478,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         full_sql_template: MATCH_QUERY,
         street_pricing_table_used: US_NYC_STREET_PRICING_TABLE_REFERENCE,
         street_pricing_sql_where: US_NYC_STREET_PRICING_SQL_WHERE,
-        street_pricing_street_name_used: streetOnlyResponse.street_name ?? undefined,
+        street_pricing_street_name_used: response.street_name ?? undefined,
         street_pricing_rows_found: pricingFound ? 1 : 0,
         street_pricing_full_sql_template: streetPricingQueryTemplate(),
       },
@@ -359,7 +486,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
   }
 
   return {
-    response: { ...EMPTY_TRUTH },
+    response: withUnitLookup({ ...EMPTY_TRUTH }, hasUnit ? "not_found" : "not_requested", submitted),
     debug: {
       original_input: originalInput,
       normalized_full_address: norm.normalized_full_address,
