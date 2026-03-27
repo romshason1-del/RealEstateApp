@@ -4,9 +4,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { parseUSAddressFromFullString } from "@/lib/address-parse";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
 import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
+import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
 import {
   queryUSNYCApiTruthWithCandidatesDebug,
   US_NYC_API_TRUTH_SQL_WHERE,
@@ -95,6 +97,46 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
       unitOrLot,
     });
     logUsNycDebug("TEMP_DEBUG", { ...debug });
+
+    if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
+      const row = debug.first_row_if_any as Record<string, unknown> | null | undefined;
+      const ups = parseUSAddressFromFullString(addressRaw);
+      const adapted = await adaptUsNycTruthJsonForMainPropertyValueRoute(
+        { ...response, us_nyc_debug: debug } as Record<string, unknown>,
+        { city: ups.city, street: ups.street, houseNumber: ups.houseNumber }
+      );
+      const pr = adapted.property_result as Record<string, unknown> | undefined;
+      try {
+        console.log(
+          "[NYC_PROPERTY_VALUE_FIELDS]",
+          JSON.stringify({
+            route: "us_property_value",
+            address_searched: addressRaw,
+            zip_from_input: norm.zip_from_input ?? null,
+            normalized_candidates: norm.candidates,
+            final_selected_candidate: debug.final_selected_candidate ?? null,
+            precomputed_row_matched: debug.precomputed_row_matched ?? null,
+            matched_full_address: (row?.full_address as string | undefined) ?? response.nyc_card_full_address ?? null,
+            building_type: row?.building_type ?? null,
+            unit_count: row?.unit_count ?? null,
+            nyc_pending_unit_prompt: response.nyc_pending_unit_prompt ?? null,
+            should_prompt_for_unit: adapted.should_prompt_for_unit ?? null,
+            unit_prompt_reason: adapted.unit_prompt_reason ?? null,
+            unit_lookup_status: response.unit_lookup_status ?? null,
+            nyc_final_match_level: response.nyc_final_match_level ?? null,
+            nyc_final_transaction_match_level: response.nyc_final_transaction_match_level ?? null,
+            estimated_value: response.estimated_value ?? null,
+            latest_sale_price: response.latest_sale_price ?? null,
+            latest_sale_date: response.latest_sale_date ?? null,
+            property_result_value_level: pr?.value_level ?? null,
+            property_result_exact_value_message: pr?.exact_value_message ?? null,
+          })
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+
     return NextResponse.json(omitUsNycDebugFromPayload({ ...response, us_nyc_debug: debug } as Record<string, unknown>), {
       status: 200,
     });

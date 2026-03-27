@@ -10,7 +10,10 @@ import type { USNYCApiTruthResponse } from "./us-property-response-contract";
 export const US_NYC_CARD_OUTPUT_V5_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_card_output_v5";
 export const US_NYC_LAST_TX_ENGINE_V3_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_last_transaction_engine_v3";
 
-/** Primary lookup predicate (card table). */
+/**
+ * Primary lookup predicate (card table) — one candidate per query.
+ * Callers iterate {@link buildNycTruthLookupCandidates} in deterministic order until the first row matches.
+ */
 export const US_NYC_PRECOMPUTED_CARD_SQL_WHERE = "c.full_address = @address";
 
 const CARD = `\`${US_NYC_CARD_OUTPUT_V5_REFERENCE}\``;
@@ -18,6 +21,7 @@ const ENGINE = `\`${US_NYC_LAST_TX_ENGINE_V3_REFERENCE}\``;
 
 const NYC_PRECOMPUTED_LOCATION = "EU";
 
+/** Template for debug; runtime matching is sequential equality on each generated candidate string. */
 export const US_NYC_PRECOMPUTED_JOIN_QUERY = `
 SELECT
   c.full_address AS full_address,

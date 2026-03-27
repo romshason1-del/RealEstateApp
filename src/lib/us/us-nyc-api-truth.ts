@@ -47,6 +47,15 @@ function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+function logNycPrecomputedLookupMiss(payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV === "test") return;
+  try {
+    console.log("[NYC_PRECOMPUTED_LOOKUP_MISS]", JSON.stringify(payload));
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Deterministic unit/lot token for `full_address` equality (uppercase, strip APT/UNIT/LOT/#, collapse space/hyphens).
  */
@@ -77,12 +86,17 @@ export type USNYCApiTruthQueryDebug = {
   original_input: string;
   normalized_full_address: string;
   normalized_building_address: string;
+  zip_from_input?: string | null;
   table_name_used: string;
   sql_where_used: string;
   rows_found_count: number;
   first_row_if_any: Record<string, unknown> | null;
   candidates_tried: readonly string[];
   attempts: readonly { candidate: string; rows_returned: number }[];
+  /** First BigQuery candidate that returned a card row (exact `full_address` match). */
+  final_selected_candidate?: string | null;
+  matched_full_address?: string | null;
+  precomputed_row_matched?: boolean;
   bigquery_location: string;
   full_sql_template: string;
   nyc_last_transaction_engine_table?: string;
@@ -123,13 +137,15 @@ export async function queryUSNYCApiTruthWithCandidates(
 ): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
+  const attempts: { candidate: string; rows_returned: number }[] = [];
 
   if (hasUnit && submitted) {
     for (const address of candidates) {
       const trimmed = address.trim();
       if (!trimmed) continue;
       const suffixed = `${trimmed}, ${submitted}`;
-      const { row } = await queryPrecomputedNycCardJoinRow(client, suffixed);
+      const { row, rowsReturned } = await queryPrecomputedNycCardJoinRow(client, suffixed);
+      attempts.push({ candidate: suffixed, rows_returned: rowsReturned });
       if (row) {
         return withUnitLookup(
           {
@@ -149,7 +165,8 @@ export async function queryUSNYCApiTruthWithCandidates(
   for (const address of candidates) {
     const trimmed = address.trim();
     if (!trimmed) continue;
-    const { row } = await queryPrecomputedNycCardJoinRow(client, trimmed);
+    const { row, rowsReturned } = await queryPrecomputedNycCardJoinRow(client, trimmed);
+    attempts.push({ candidate: trimmed, rows_returned: rowsReturned });
     if (row) {
       const needPrompt =
         !hasUnit &&
@@ -182,6 +199,15 @@ export async function queryUSNYCApiTruthWithCandidates(
     }
   }
 
+  logNycPrecomputedLookupMiss({
+    searched_address: rawInput ?? "",
+    generated_candidates: [...candidates],
+    matched_full_address: null,
+    final_selected_candidate: null,
+    precomputed_row_matched: false,
+    attempts,
+  });
+
   return withUnitLookup({ ...EMPTY_TRUTH }, hasUnit ? "not_found" : "not_requested", submitted);
 }
 
@@ -190,7 +216,12 @@ export async function queryUSNYCApiTruthWithCandidates(
  */
 export async function queryUSNYCApiTruthWithCandidatesDebug(
   originalInput: string,
-  norm: { normalized_full_address: string; normalized_building_address: string; candidates: readonly string[] },
+  norm: {
+    normalized_full_address: string;
+    normalized_building_address: string;
+    candidates: readonly string[];
+    zip_from_input?: string | null;
+  },
   options?: { unitOrLot?: string | null }
 ): Promise<{ response: USNYCApiTruthResponse; debug: USNYCApiTruthQueryDebug }> {
   const client = getUSBigQueryClient();
@@ -216,18 +247,23 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           "matched",
           submitted
         );
+        const matchedAddr = firstRow.full_address != null ? String(firstRow.full_address) : null;
         return {
           response,
           debug: {
             original_input: originalInput,
             normalized_full_address: norm.normalized_full_address,
             normalized_building_address: norm.normalized_building_address,
+            zip_from_input: norm.zip_from_input ?? null,
             table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
             sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
             rows_found_count: n,
             first_row_if_any: firstRow,
             candidates_tried: norm.candidates,
             attempts,
+            final_selected_candidate: suffixed,
+            matched_full_address: matchedAddr,
+            precomputed_row_matched: true,
             bigquery_location: NYC_TRUTH_QUERY_LOCATION,
             full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
             nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
@@ -266,18 +302,23 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         needPrompt ? "not_requested" : hasUnit ? "not_found" : "not_requested",
         needPrompt ? null : submitted
       );
+      const matchedAddr = firstRow.full_address != null ? String(firstRow.full_address) : null;
       return {
         response,
         debug: {
           original_input: originalInput,
           normalized_full_address: norm.normalized_full_address,
           normalized_building_address: norm.normalized_building_address,
+          zip_from_input: norm.zip_from_input ?? null,
           table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
           sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
           rows_found_count: n,
           first_row_if_any: firstRow,
           candidates_tried: norm.candidates,
           attempts,
+          final_selected_candidate: trimmed,
+          matched_full_address: matchedAddr,
+          precomputed_row_matched: true,
           bigquery_location: NYC_TRUTH_QUERY_LOCATION,
           full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
           nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
@@ -286,18 +327,31 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     }
   }
 
+  logNycPrecomputedLookupMiss({
+    searched_address: originalInput,
+    generated_candidates: [...norm.candidates],
+    matched_full_address: null,
+    final_selected_candidate: null,
+    precomputed_row_matched: false,
+    attempts,
+  });
+
   return {
     response: withUnitLookup({ ...EMPTY_TRUTH }, hasUnit ? "not_found" : "not_requested", submitted),
     debug: {
       original_input: originalInput,
       normalized_full_address: norm.normalized_full_address,
       normalized_building_address: norm.normalized_building_address,
+      zip_from_input: norm.zip_from_input ?? null,
       table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
       sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
       rows_found_count: 0,
       first_row_if_any: null,
       candidates_tried: norm.candidates,
       attempts,
+      final_selected_candidate: null,
+      matched_full_address: null,
+      precomputed_row_matched: false,
       bigquery_location: NYC_TRUTH_QUERY_LOCATION,
       full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
       nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,

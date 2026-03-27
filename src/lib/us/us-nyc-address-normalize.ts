@@ -34,6 +34,16 @@ const STREET_ABBREV: readonly [RegExp, string][] = [
 const UNIT_SUFFIX_RE =
   /\s+(?:(?:APARTMENT|UNIT|SUITE|STE|APT|FLOOR|FL|RM|ROOM)\s+#?\s*|[#])\s*[A-Z0-9-]+$/i;
 
+/** Bidirectional long ↔ short (word-boundary). Order: try long form first in generator where relevant. */
+const NYC_STREET_TYPE_PAIRS: readonly [string, string][] = [
+  ["STREET", "ST"],
+  ["AVENUE", "AVE"],
+  ["ROAD", "RD"],
+  ["BOULEVARD", "BLVD"],
+  ["PLACE", "PL"],
+  ["PARKWAY", "PKWY"],
+];
+
 function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
@@ -97,12 +107,142 @@ function buildingLineWithoutUnit(normalizedWithPossibleUnit: string): string | n
   return stripped.length > 0 ? collapseSpaces(stripped) : null;
 }
 
+/** Extract 5-digit (or ZIP+4) ZIP from raw input for NYC suffix candidates. */
+export function extractNycZipFromRawInput(raw: string): string | null {
+  const m = raw.match(/\b(\d{5})(?:-(\d{4}))?\b/);
+  if (!m) return null;
+  return m[2] ? `${m[1]}-${m[2]}` : m[1];
+}
+
+function pushUniqueOrdered(out: string[], s: string): void {
+  const t = collapseSpaces(s);
+  if (!t || out.includes(t)) return;
+  out.push(t);
+}
+
+/**
+ * W ↔ WEST, E ↔ EAST, N ↔ NORTH, S ↔ SOUTH (Manhattan grid); Central Park W/E ↔ spelled out.
+ */
+function expandNycGridDirectionalAliasesBothWays(line: string): string[] {
+  const s = line.trim();
+  if (!s) return [];
+  const acc: string[] = [];
+  pushUniqueOrdered(acc, s);
+
+  const westLong = s.replace(/^(\d+)\s+W\s+(?=\d)/i, "$1 WEST ");
+  if (westLong !== s) pushUniqueOrdered(acc, westLong);
+  const westShort = s.replace(/^(\d+)\s+WEST\s+(?=\d)/i, "$1 W ");
+  if (westShort !== s) pushUniqueOrdered(acc, westShort);
+
+  const eastLong = s.replace(/^(\d+)\s+E\s+(?=\d)/i, "$1 EAST ");
+  if (eastLong !== s) pushUniqueOrdered(acc, eastLong);
+  const eastShort = s.replace(/^(\d+)\s+EAST\s+(?=\d)/i, "$1 E ");
+  if (eastShort !== s) pushUniqueOrdered(acc, eastShort);
+
+  const northLong = s.replace(/^(\d+)\s+N\s+(?=\d)/i, "$1 NORTH ");
+  if (northLong !== s) pushUniqueOrdered(acc, northLong);
+  const northShort = s.replace(/^(\d+)\s+NORTH\s+(?=\d)/i, "$1 N ");
+  if (northShort !== s) pushUniqueOrdered(acc, northShort);
+
+  const southLong = s.replace(/^(\d+)\s+S\s+(?=\d)/i, "$1 SOUTH ");
+  if (southLong !== s) pushUniqueOrdered(acc, southLong);
+  const southShort = s.replace(/^(\d+)\s+SOUTH\s+(?=\d)/i, "$1 S ");
+  if (southShort !== s) pushUniqueOrdered(acc, southShort);
+
+  const cpwLong = s.replace(/\bCENTRAL\s+PARK\s+W\b/i, "CENTRAL PARK WEST");
+  if (cpwLong !== s) pushUniqueOrdered(acc, cpwLong);
+  const cpwShort = s.replace(/\bCENTRAL\s+PARK\s+WEST\b/i, "CENTRAL PARK W");
+  if (cpwShort !== s) pushUniqueOrdered(acc, cpwShort);
+
+  const cpeLong = s.replace(/\bCENTRAL\s+PARK\s+E\b/i, "CENTRAL PARK EAST");
+  if (cpeLong !== s) pushUniqueOrdered(acc, cpeLong);
+  const cpeShort = s.replace(/\bCENTRAL\s+PARK\s+EAST\b/i, "CENTRAL PARK E");
+  if (cpeShort !== s) pushUniqueOrdered(acc, cpeShort);
+
+  return acc;
+}
+
+/**
+ * ST ↔ STREET, AVE ↔ AVENUE, etc. (word-boundary; avoids touching unrelated tokens).
+ */
+function expandNycStreetTypeAliasesBidirectional(line: string): string[] {
+  const acc: string[] = [];
+  pushUniqueOrdered(acc, line);
+  for (const [longForm, shortForm] of NYC_STREET_TYPE_PAIRS) {
+    const snapshot = [...acc];
+    for (const cur of snapshot) {
+      if (new RegExp(`\\b${longForm}\\b`, "i").test(cur)) {
+        pushUniqueOrdered(acc, collapseSpaces(cur.replace(new RegExp(`\\b${longForm}\\b`, "gi"), shortForm)));
+      }
+      if (new RegExp(`\\b${shortForm}\\b`, "i").test(cur)) {
+        pushUniqueOrdered(acc, collapseSpaces(cur.replace(new RegExp(`\\b${shortForm}\\b`, "gi"), longForm)));
+      }
+    }
+  }
+  return acc;
+}
+
+/**
+ * Priority (lookup order):
+ * 1) Address-only: base core + building line, then directional grid aliases, then street-type aliases.
+ * 2) Same lines with ", NEW YORK, NY", then ", NEW YORK, NY {ZIP}" when ZIP known, then ", USA".
+ */
+function buildOrderedAddressOnlyCandidates(core: string, buildingOnly: string | null): string[] {
+  const ordered: string[] = [];
+  const seeds: string[] = [];
+  pushUniqueOrdered(seeds, core);
+  if (buildingOnly && buildingOnly !== core) pushUniqueOrdered(seeds, buildingOnly);
+
+  for (const seed of seeds) {
+    pushUniqueOrdered(ordered, seed);
+    for (const dir of expandNycGridDirectionalAliasesBothWays(seed)) {
+      pushUniqueOrdered(ordered, dir);
+    }
+  }
+
+  const withStreetTypes: string[] = [];
+  for (const line of ordered) {
+    for (const st of expandNycStreetTypeAliasesBidirectional(line)) {
+      pushUniqueOrdered(withStreetTypes, st);
+    }
+  }
+  return withStreetTypes;
+}
+
+/**
+ * Lookup priority (BigQuery tries in order):
+ * 1) All address-only strings (exact + directional + street-type variants).
+ * 2) Same strings + ", NEW YORK, NY".
+ * 3) Same strings + ", NEW YORK, NY {ZIP}" when ZIP known.
+ * 4) Same strings + ", USA".
+ */
+function appendGeoSuffixVariants(streetOnlyLines: readonly string[], zip: string | null): string[] {
+  const out: string[] = [];
+  for (const line of streetOnlyLines) {
+    pushUniqueOrdered(out, line);
+  }
+  for (const line of streetOnlyLines) {
+    pushUniqueOrdered(out, `${line}, NEW YORK, NY`);
+  }
+  if (zip) {
+    for (const line of streetOnlyLines) {
+      pushUniqueOrdered(out, `${line}, NEW YORK, NY ${zip}`);
+    }
+  }
+  for (const line of streetOnlyLines) {
+    pushUniqueOrdered(out, `${line}, USA`);
+  }
+  return out;
+}
+
 export type NycTruthNormalizationDebug = {
   /** Normalized line including unit suffix when present. */
   normalized_full_address: string;
   /** Building line (unit stripped); same as full when no unit. */
   normalized_building_address: string;
-  /** Candidates passed to BigQuery in order. */
+  /** ZIP extracted from input for ", NEW YORK, NY {ZIP}" candidates. */
+  zip_from_input: string | null;
+  /** Candidates passed to BigQuery in deterministic priority order. */
   candidates: string[];
 };
 
@@ -124,7 +264,6 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
     coreRaw = collapseSpaces(parts.join(" "));
   }
 
-  // Expand ST → STREET (etc.) before stripping trailing "state" tokens — otherwise "… ROYCE ST" loses ST as a false "state".
   let core = expandStreetAbbreviations(collapseSpaces(coreRaw));
   core = stripTrailingGeoFromUncommaLine(core);
   core = collapseSpaces(core);
@@ -134,26 +273,21 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
   const buildingOnly = buildingLineWithoutUnit(core);
   const normalized_full_address = core;
   const normalized_building_address = buildingOnly ?? core;
+  const zip = extractNycZipFromRawInput(rawInput);
 
-  const out: string[] = [];
-  if (buildingOnly && buildingOnly !== core) {
-    out.push(core, buildingOnly);
-  } else {
-    out.push(core);
-  }
-  const candidates = [...new Set(out)];
+  const addressOnly = buildOrderedAddressOnlyCandidates(core, buildingOnly);
+  const candidates = appendGeoSuffixVariants(addressOnly, zip);
 
   return {
     normalized_full_address,
     normalized_building_address,
+    zip_from_input: zip,
     candidates,
   };
 }
 
 /**
- * Ordered list of strings to try against pluto_address / sales_address (exact equality).
- * 1) Full normalized line (includes unit if present)
- * 2) Building-only line if unit was present and differs
+ * Ordered list of strings to try against `full_address` (exact equality per attempt).
  */
 export function buildNycTruthLookupCandidates(rawInput: string): string[] {
   return buildNycTruthLookupNormalizationDebug(rawInput)?.candidates ?? [];

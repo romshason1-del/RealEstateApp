@@ -516,6 +516,37 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
+      if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
+        const dbg = data.us_nyc_debug as Record<string, unknown> | undefined;
+        const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
+        const pr = adapted.property_result as Record<string, unknown> | undefined;
+        const raw = data as Record<string, unknown>;
+        try {
+          console.log(
+            "[NYC_PROPERTY_VALUE_FIELDS]",
+            JSON.stringify({
+              route: "main_property_value",
+              address_searched: usAddress,
+              matched_full_address: row?.full_address ?? raw.nyc_card_full_address ?? null,
+              building_type: row?.building_type ?? null,
+              unit_count: row?.unit_count ?? null,
+              nyc_pending_unit_prompt: raw.nyc_pending_unit_prompt ?? null,
+              should_prompt_for_unit: adapted.should_prompt_for_unit ?? null,
+              unit_prompt_reason: adapted.unit_prompt_reason ?? null,
+              unit_lookup_status: raw.unit_lookup_status ?? null,
+              nyc_final_match_level: raw.nyc_final_match_level ?? null,
+              nyc_final_transaction_match_level: raw.nyc_final_transaction_match_level ?? null,
+              estimated_value: raw.estimated_value ?? null,
+              latest_sale_price: raw.latest_sale_price ?? null,
+              latest_sale_date: raw.latest_sale_date ?? null,
+              property_result_value_level: pr?.value_level ?? null,
+              property_result_exact_value_message: pr?.exact_value_message ?? null,
+            })
+          );
+        } catch {
+          /* ignore */
+        }
+      }
       return NextResponse.json(omitUsNycDebugFromPayload(adapted as Record<string, unknown>), { status: 200 });
     }
     return NextResponse.json(omitUsNycDebugFromPayload(data as Record<string, unknown>), { status: usRes.status });
