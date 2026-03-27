@@ -1317,7 +1317,8 @@ export function PropertyValueCard({
                 if (st === "not_found") {
                   return (
                     <p className="text-[9px] text-zinc-400">
-                      No unit-specific record{subStr ? ` for ${subStr}` : ""} — showing building-level value.
+                      No direct data for this unit. Showing similar unit
+                      {subStr ? ` (${subStr})` : ""}.
                     </p>
                   );
                 }

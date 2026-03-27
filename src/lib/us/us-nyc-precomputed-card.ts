@@ -58,6 +58,14 @@ function toStringOrNull(v: unknown): string | null {
 
 const MULTIFAMILY_BUILDING_TYPES = new Set(["large_multifamily", "small_multifamily", "mixed_use"]);
 
+/** Normalize `building_type` (handles hyphen, space, underscore). */
+function normalizeNycBuildingTypeKey(raw: string): string {
+  return raw.replace(/[-\s]+/g, "_").toLowerCase().trim();
+}
+
+/** NYC `us_nyc_card_output_v5.building_type` — condo / co-op / apartment inventory (must ask for unit before unit-specific results). */
+const UNIT_INVENTORY_BUILDING_TYPES = new Set(["condo", "co_op", "coop", "apartment"]);
+
 function addressSuggestsUnitInventory(line: string): boolean {
   if (!line.trim()) return false;
   return /\b(CONDO|CO-OP|COOP|CONDOMINIUM|APARTMENT\s+BUILDING|APT\s+BUILDING|COOPERATIVE)\b/i.test(line);
@@ -75,14 +83,16 @@ export function computeNycNeedsUnitPrompt(
   row: Record<string, unknown>,
   opts: { addressLine: string; candidatesCount: number }
 ): boolean {
-  const bt = String(row.building_type ?? "").toLowerCase().trim();
+  const bt = normalizeNycBuildingTypeKey(String(row.building_type ?? ""));
   if (bt === "single_family") return false;
   if (bt === "two_family") return false;
 
-  if (MULTIFAMILY_BUILDING_TYPES.has(bt)) return true;
+  if (UNIT_INVENTORY_BUILDING_TYPES.has(bt)) return true;
 
   const uc = toNumberOrNull(row.unit_count);
-  if (uc != null && uc > 2) return true;
+  if (uc != null && uc > 1) return true;
+
+  if (MULTIFAMILY_BUILDING_TYPES.has(bt)) return true;
 
   if (addressSuggestsUnitInventory(opts.addressLine)) return true;
 

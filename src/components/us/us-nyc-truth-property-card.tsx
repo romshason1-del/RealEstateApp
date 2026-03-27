@@ -203,7 +203,7 @@ export function UsNycTruthPropertyCard({
       {apartmentFlowEnabled && showApartmentInput ? (
         <div className="rounded-md border border-amber-500/30 bg-black/55 px-2 py-1.5 sm:px-2.5">
           <div className="text-[10px] font-semibold leading-tight tracking-tight text-amber-100/95">
-            What&apos;s your apartment / lot number?
+            Enter apartment / unit number
           </div>
           <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
             Enter the official unit or lot designator. Unit-specific valuation is not applied until the backend supports it.

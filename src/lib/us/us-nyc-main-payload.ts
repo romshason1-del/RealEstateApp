@@ -248,6 +248,14 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
 
   const isNycPrecomputed = us.nyc_precomputed_card === true;
   const isNycPendingUnitPrompt = us.nyc_pending_unit_prompt === true;
+  const unitSubmitted =
+    typeof us.unit_or_lot_submitted === "string" && us.unit_or_lot_submitted.trim() !== ""
+      ? us.unit_or_lot_submitted.trim()
+      : null;
+  const isNycUnitNotFoundFallback =
+    isNycPrecomputed &&
+    us.unit_lookup_status === "not_found" &&
+    unitSubmitted != null;
   const propertyResultValueLevel = isNycPrecomputed
     ? isNycPendingUnitPrompt
       ? "building-level"
@@ -255,8 +263,9 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     : "property-level";
 
   const unavailableReason = str(us.nyc_last_transaction_unavailable_reason);
-  const lastTxMessage =
-    unavailableReason === "similar_property_not_exact_unit"
+  const lastTxMessage = isNycUnitNotFoundFallback
+    ? "No direct data for this unit. Showing similar unit"
+    : unavailableReason === "similar_property_not_exact_unit"
       ? "Comparable sale; not an exact unit sale."
       : lastAmt > 0
         ? undefined
@@ -269,7 +278,9 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
         ? null
         : lastAmt > 0
           ? null
-          : "Unavailable",
+          : isNycPendingUnitPrompt
+            ? null
+            : "Unavailable",
     value_level: propertyResultValueLevel,
     last_transaction: {
       amount: lastAmt,
@@ -441,6 +452,10 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     out.unit_classification = "multi_unit_building";
     out.should_prompt_for_unit = true;
     out.unit_prompt_reason = "apartment_or_lot_required";
+  } else if (us.unit_lookup_status === "not_found" && unitSubmitted != null) {
+    out.unit_classification = "multi_unit_building";
+    out.should_prompt_for_unit = false;
+    out.unit_prompt_reason = "unit_not_found_building_fallback";
   } else {
     out.unit_classification = "single_property";
     out.should_prompt_for_unit = false;
