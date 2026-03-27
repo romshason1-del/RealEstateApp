@@ -1,6 +1,6 @@
 /**
  * US property value API (isolated route).
- * NYC: reads only from BigQuery `streetiq-bigquery.streetiq_gold.us_nyc_api_truth`.
+ * NYC: BigQuery precomputed `us_nyc_card_output_v5` + `us_nyc_last_transaction_engine_v3` (exact `full_address`).
  */
 
 import { NextRequest, NextResponse } from "next/server";

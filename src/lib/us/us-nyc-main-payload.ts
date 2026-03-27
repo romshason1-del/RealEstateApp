@@ -131,16 +131,28 @@ function normalizeStreetNameForAcrisLegals(raw: string): string {
   return parts.join(" ");
 }
 
+/** Maps precomputed `final_match_level` to `property_result.value_level` (UI subtitle only; layout unchanged). */
+function matchLevelToPropertyResultValueLevel(raw: unknown): "property-level" | "building-level" | "street-level" | "area-level" | "no_match" {
+  const s = (raw != null ? String(raw) : "").trim().toLowerCase();
+  if (!s) return "property-level";
+  if (s.includes("similar") || s.includes("property") || s.includes("unit") || s === "exact") return "property-level";
+  if (s.includes("building")) return "building-level";
+  if (s.includes("street")) return "street-level";
+  if (s.includes("area") || s.includes("zip")) return "area-level";
+  if (s.includes("no_match") || s.includes("none") || s === "no match") return "no_match";
+  return "property-level";
+}
+
 /**
  * When `success` is true, merges truth fields + `address` + minimal `property_result` for legacy checks.
  * Attaches `us_nyc_debug` only in non-production API responses.
  * NYC UI uses `data_source === "us_nyc_truth"` and reads top-level metrics (no street-average presentation).
  *
- * Enrichment: optional ACRIS deed history (secondary validation vs truth `latest_sale_*`; does not replace them).
- * Enrichment: optional DOB job filings summary (`dob_*`; does not replace truth or ACRIS).
+ * Precomputed card (`nyc_precomputed_card`): BigQuery v5 + engine v3 only — no runtime ACRIS/DOB or street fallback.
  *
- * Fallback: when there is no usable property-level truth (no row, or row with no `latest_sale_price` /
- * `estimated_value`), enrich from street pricing + ACRIS so the card is not fully empty when either source has data.
+ * Legacy enrichment (non-precomputed): optional ACRIS deed history and DOB filings.
+ *
+ * Fallback (non-precomputed only): when there is no usable property-level truth, enrich from street pricing + ACRIS.
  *
  * Street-only query (no `ctx.houseNumber`): street pricing only, no ACRIS/DOB/property-level truth.
  */
@@ -234,6 +246,22 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
 
   const lastAmt = latest_sale_price != null && latest_sale_price > 0 ? latest_sale_price : 0;
 
+  const isNycPrecomputed = us.nyc_precomputed_card === true;
+  const isNycPendingUnitPrompt = us.nyc_pending_unit_prompt === true;
+  const propertyResultValueLevel = isNycPrecomputed
+    ? isNycPendingUnitPrompt
+      ? "building-level"
+      : matchLevelToPropertyResultValueLevel(us.nyc_final_match_level)
+    : "property-level";
+
+  const unavailableReason = str(us.nyc_last_transaction_unavailable_reason);
+  const lastTxMessage =
+    unavailableReason === "similar_property_not_exact_unit"
+      ? "Comparable sale; not an exact unit sale."
+      : lastAmt > 0
+        ? undefined
+        : "No official sale recorded";
+
   const property_result = {
     exact_value: estimated_value,
     exact_value_message:
@@ -242,11 +270,11 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
         : lastAmt > 0
           ? null
           : "Unavailable",
-    value_level: "property-level" as const,
+    value_level: propertyResultValueLevel,
     last_transaction: {
       amount: lastAmt,
       date: latest_sale_date,
-      message: lastAmt > 0 ? undefined : "No official sale recorded",
+      message: lastTxMessage,
     },
     street_average: null,
     street_average_message: null,
@@ -272,6 +300,22 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     street_name,
     property_result,
     ...unitLookupFieldsFromUs(us),
+    ...(isNycPrecomputed
+      ? {
+          nyc_card_full_address: us.nyc_card_full_address ?? null,
+          nyc_card_badge_1: us.nyc_card_badge_1 ?? null,
+          nyc_card_badge_2: us.nyc_card_badge_2 ?? null,
+          nyc_card_badge_3: us.nyc_card_badge_3 ?? null,
+          nyc_card_badge_4: us.nyc_card_badge_4 ?? null,
+          nyc_estimated_value_subtext: us.nyc_estimated_value_subtext ?? null,
+          nyc_price_per_sqft_text: us.nyc_price_per_sqft_text ?? null,
+          nyc_final_match_level: us.nyc_final_match_level ?? null,
+          nyc_final_last_transaction_text: us.nyc_final_last_transaction_text ?? null,
+          nyc_final_transaction_match_level: us.nyc_final_transaction_match_level ?? null,
+          nyc_pending_unit_prompt: us.nyc_pending_unit_prompt ?? null,
+          nyc_last_transaction_unavailable_reason: us.nyc_last_transaction_unavailable_reason ?? null,
+        }
+      : {}),
   };
 
   if (lastAmt > 0 && latest_sale_date) {
@@ -291,7 +335,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     matched: null,
   };
 
-  if (acrisStreetNumber && acrisStreetName) {
+  if (!isNycPrecomputed && acrisStreetNumber && acrisStreetName) {
     const acris = await fetchAcrisNycTruthDeedHistory({
       streetNumber: acrisStreetNumber,
       streetName: acrisStreetName,
@@ -339,7 +383,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     proposed_units: null,
   };
 
-  if (acrisStreetNumber && acrisStreetNameRaw) {
+  if (!isNycPrecomputed && acrisStreetNumber && acrisStreetNameRaw) {
     const dob = await fetchDobNycBuildingInsights({
       houseNumber: acrisStreetNumber,
       streetName: acrisStreetNameRaw,
@@ -381,17 +425,27 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   out.dob_existing_units = dob_existing_units;
   out.dob_proposed_units = dob_proposed_units;
 
-  let unitClass: Awaited<ReturnType<typeof classifyNycAddressUnitType>> | null = null;
-  try {
-    unitClass = await classifyNycAddressUnitType({
-      fullAddress: fullAddressForUnitClassifier(us, ctx),
-      houseNumber: acrisStreetNumber,
-      streetName: acrisStreetNameRaw,
-    });
-  } catch {
-    unitClass = null;
+  if (!isNycPrecomputed) {
+    let unitClass: Awaited<ReturnType<typeof classifyNycAddressUnitType>> | null = null;
+    try {
+      unitClass = await classifyNycAddressUnitType({
+        fullAddress: fullAddressForUnitClassifier(us, ctx),
+        houseNumber: acrisStreetNumber,
+        streetName: acrisStreetNameRaw,
+      });
+    } catch {
+      unitClass = null;
+    }
+    applyNycUnitClassificationToPayload(out, unitClass);
+  } else if (us.nyc_pending_unit_prompt === true) {
+    out.unit_classification = "multi_unit_building";
+    out.should_prompt_for_unit = true;
+    out.unit_prompt_reason = "apartment_or_lot_required";
+  } else {
+    out.unit_classification = "single_property";
+    out.should_prompt_for_unit = false;
+    out.unit_prompt_reason = "not_multi_unit_or_unit_provided";
   }
-  applyNycUnitClassificationToPayload(out, unitClass);
 
   const hasValidPropertyData =
     us.has_truth_property_row === true &&
@@ -400,7 +454,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   const hasStreetPricing = avg_street_price != null && avg_street_price > 0;
   const hasAcrisSale = acris_last_sale_price != null && acris_last_sale_price > 0;
 
-  if (!hasValidPropertyData && (hasStreetPricing || hasAcrisSale)) {
+  if (!isNycPrecomputed && !hasValidPropertyData && (hasStreetPricing || hasAcrisSale)) {
     const estimatedValueFallback = hasStreetPricing ? avg_street_price : acris_last_sale_price;
     const lastTxAmt = hasAcrisSale ? acris_last_sale_price! : 0;
     const lastTxDate = hasAcrisSale ? acris_last_sale_date : null;

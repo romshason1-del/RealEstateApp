@@ -1,6 +1,6 @@
 /**
  * Deterministic NYC building vs unit classification (US only).
- * Uses existing truth layers only: BigQuery `us_nyc_api_truth`, DOB filings, ACRIS deed history.
+ * Uses BigQuery precomputed NYC card row (via `queryUSNYCApiTruthByAddress`), DOB filings, ACRIS deed history.
  * No UI, routes, or France.
  */
 

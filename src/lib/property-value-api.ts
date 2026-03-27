@@ -167,6 +167,8 @@ export type FetchPropertyValueOptions = {
   aptNumber?: string;
   /** France: postcode from Google address_components (avoids "Postcode required") */
   postcode?: string;
+  /** US NYC: optional apartment/lot for precomputed unit-level lookup (cache key + query param). */
+  unitOrLot?: string;
 };
 
 export async function fetchPropertyValueInsights(
@@ -183,6 +185,10 @@ export async function fetchPropertyValueInsights(
   const frRaw = (isFR && options?.rawInputAddress) ? `|raw:${options.rawInputAddress.trim()}` : "";
   const apt = (options?.aptNumber ?? "").trim();
   const frPostcode = (isFR && options?.postcode) ? `|pc:${options.postcode.trim()}` : "";
+  const usUnitKey =
+    code === "US" && (options?.unitOrLot ?? "").trim()
+      ? `|uol:${(options?.unitOrLot ?? "").trim()}`
+      : "";
   const normalizeFranceAddress = (a: string) =>
     a
       .trim()
@@ -195,8 +201,8 @@ export async function fetchPropertyValueInsights(
   const addrForKey = isFR ? normalizeFranceAddress(address) : address.trim().toLowerCase();
   const key =
     Number.isFinite(lat) && Number.isFinite(lng)
-      ? `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
-      : `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${isFR ? "|final_v1" : ""}`;
+      ? `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${usUnitKey}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
+      : `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${usUnitKey}${isFR ? "|final_v1" : ""}`;
   const cached = CACHE.get(key);
   const frRawPresent = isFR && !!(options?.rawInputAddress ?? "").trim();
   const frCachedNoData =
@@ -306,6 +312,7 @@ export async function fetchPropertyValueInsights(
     if (isFR && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
+    if (code === "US" && options?.unitOrLot?.trim()) params.set("unit_or_lot", options.unitOrLot.trim());
     const res = await fetch(`/api/property-value?${params.toString()}`, {
       signal: options?.signal ?? AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });

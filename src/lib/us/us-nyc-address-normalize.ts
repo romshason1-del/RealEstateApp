@@ -1,5 +1,5 @@
 /**
- * Deterministic NYC address normalization for matching `us_nyc_api_truth` (US only).
+ * Deterministic NYC address normalization for matching precomputed card `full_address` (US only).
  * Not fuzzy — fixed rules only.
  */
 
