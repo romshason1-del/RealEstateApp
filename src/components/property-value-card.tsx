@@ -518,12 +518,17 @@ export function PropertyValueCard({
         ? (lastGoodFrancePayloadRef.current as typeof insightsData)
         : insightsData;
 
-  /** NYC: main API `should_prompt_for_unit` only — no client heuristics. */
+  /** NYC: main API `should_prompt_for_unit` / `nyc_pending_unit_prompt` only — no client heuristics. */
   const usNycApartmentFlowEnabled = React.useMemo(() => {
     if (!isUS || !activeInsightsData || typeof activeInsightsData !== "object") return false;
-    const d = activeInsightsData as { data_source?: string; success?: boolean; should_prompt_for_unit?: boolean };
+    const d = activeInsightsData as {
+      data_source?: string;
+      success?: boolean;
+      should_prompt_for_unit?: boolean;
+      nyc_pending_unit_prompt?: boolean | null;
+    };
     if (d.data_source !== "us_nyc_truth" || d.success !== true) return false;
-    return d.should_prompt_for_unit === true;
+    return d.should_prompt_for_unit === true || d.nyc_pending_unit_prompt === true;
   }, [isUS, activeInsightsData]);
 
   React.useEffect(() => {

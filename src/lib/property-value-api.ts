@@ -6,6 +6,7 @@
  */
 
 import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString } from "./address-parse";
+import { NYC_CANDIDATE_GENERATOR_VERSION } from "./us/us-nyc-address-normalize";
 import { toCanonicalAddress } from "./address-canonical";
 
 export type PropertyValueInsightsResponse = {
@@ -189,6 +190,7 @@ export async function fetchPropertyValueInsights(
     code === "US" && (options?.unitOrLot ?? "").trim()
       ? `|uol:${(options?.unitOrLot ?? "").trim()}`
       : "";
+  const usNycNormKey = code === "US" ? `|nycv:${NYC_CANDIDATE_GENERATOR_VERSION}` : "";
   const normalizeFranceAddress = (a: string) =>
     a
       .trim()
@@ -201,8 +203,8 @@ export async function fetchPropertyValueInsights(
   const addrForKey = isFR ? normalizeFranceAddress(address) : address.trim().toLowerCase();
   const key =
     Number.isFinite(lat) && Number.isFinite(lng)
-      ? `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${usUnitKey}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
-      : `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${usUnitKey}${isFR ? "|final_v1" : ""}`;
+      ? `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${usUnitKey}${usNycNormKey}|${lat}|${lng}${isFR ? "|final_v1" : ""}`
+      : `${addrForKey}${raw}${sel}${frRaw}${apt ? `|apt:${apt}` : ""}${frPostcode}${usUnitKey}${usNycNormKey}${isFR ? "|final_v1" : ""}`;
   const cached = CACHE.get(key);
   const frRawPresent = isFR && !!(options?.rawInputAddress ?? "").trim();
   const frCachedNoData =

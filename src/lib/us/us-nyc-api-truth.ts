@@ -15,7 +15,8 @@ import {
   US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
   US_NYC_PRECOMPUTED_JOIN_QUERY,
 } from "./us-nyc-precomputed-card";
-import { buildNycTruthLookupCandidates } from "./us-nyc-address-normalize";
+import { buildNycTruthLookupCandidates, NYC_CANDIDATE_GENERATOR_VERSION } from "./us-nyc-address-normalize";
+import { shouldApplyNycDebugKnownAddressUnitPromptOverride } from "./us-nyc-debug-known-addresses";
 
 /** @deprecated Use {@link US_NYC_CARD_OUTPUT_V5_REFERENCE}; kept for `/api/us/property-value` debug strings. */
 export const US_NYC_API_TRUTH_TABLE_REFERENCE = US_NYC_CARD_OUTPUT_V5_REFERENCE;
@@ -100,6 +101,7 @@ export type USNYCApiTruthQueryDebug = {
   bigquery_location: string;
   full_sql_template: string;
   nyc_last_transaction_engine_table?: string;
+  candidate_generator_version?: number;
 };
 
 function rowToJsonSafe(row: Record<string, unknown>): Record<string, unknown> {
@@ -168,12 +170,22 @@ export async function queryUSNYCApiTruthWithCandidates(
     const { row, rowsReturned } = await queryPrecomputedNycCardJoinRow(client, trimmed);
     attempts.push({ candidate: trimmed, rows_returned: rowsReturned });
     if (row) {
-      const needPrompt =
+      let needPrompt =
         !hasUnit &&
         computeNycNeedsUnitPrompt(row, {
           addressLine: addressLineForPrompt || trimmed,
           candidatesCount: candidates.length,
         });
+      if (
+        !needPrompt &&
+        !hasUnit &&
+        shouldApplyNycDebugKnownAddressUnitPromptOverride(rawInput ?? "", row, {
+          addressLine: addressLineForPrompt || trimmed,
+          candidatesCount: candidates.length,
+        })
+      ) {
+        needPrompt = true;
+      }
 
       if (needPrompt) {
         return withUnitLookup(
@@ -221,9 +233,11 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     normalized_building_address: string;
     candidates: readonly string[];
     zip_from_input?: string | null;
+    candidate_generator_version?: number;
   },
   options?: { unitOrLot?: string | null }
 ): Promise<{ response: USNYCApiTruthResponse; debug: USNYCApiTruthQueryDebug }> {
+  const cgv = norm.candidate_generator_version ?? NYC_CANDIDATE_GENERATOR_VERSION;
   const client = getUSBigQueryClient();
   const attempts: { candidate: string; rows_returned: number }[] = [];
   let firstRow: Record<string, unknown> | null = null;
@@ -267,6 +281,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
             bigquery_location: NYC_TRUTH_QUERY_LOCATION,
             full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
             nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+            candidate_generator_version: cgv,
           },
         };
       }
@@ -283,12 +298,22 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     attempts.push({ candidate: trimmed, rows_returned: n });
     if (row) {
       firstRow = rowToJsonSafe(row);
-      const needPrompt =
+      let needPrompt =
         !hasUnit &&
         computeNycNeedsUnitPrompt(row, {
           addressLine: addressLineForPrompt || trimmed,
           candidatesCount: norm.candidates.length,
         });
+      if (
+        !needPrompt &&
+        !hasUnit &&
+        shouldApplyNycDebugKnownAddressUnitPromptOverride(originalInput, row, {
+          addressLine: addressLineForPrompt || trimmed,
+          candidatesCount: norm.candidates.length,
+        })
+      ) {
+        needPrompt = true;
+      }
 
       const response = withUnitLookup(
         {
@@ -322,6 +347,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           bigquery_location: NYC_TRUTH_QUERY_LOCATION,
           full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
           nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+          candidate_generator_version: cgv,
         },
       };
     }
@@ -355,6 +381,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
       bigquery_location: NYC_TRUTH_QUERY_LOCATION,
       full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
       nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+      candidate_generator_version: cgv,
     },
   };
 }

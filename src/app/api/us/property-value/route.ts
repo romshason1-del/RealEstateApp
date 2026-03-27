@@ -112,6 +112,7 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
           JSON.stringify({
             route: "us_property_value",
             address_searched: addressRaw,
+            candidate_generator_version: norm.candidate_generator_version ?? null,
             zip_from_input: norm.zip_from_input ?? null,
             normalized_candidates: norm.candidates,
             final_selected_candidate: debug.final_selected_candidate ?? null,

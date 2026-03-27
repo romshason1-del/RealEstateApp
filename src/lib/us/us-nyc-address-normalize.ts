@@ -3,6 +3,9 @@
  * Not fuzzy — fixed rules only.
  */
 
+/** Bump when candidate rules change (client cache key + API debug). */
+export const NYC_CANDIDATE_GENERATOR_VERSION = 3;
+
 const NYC_BOROUGHS_AND_CITY = new Set([
   "BROOKLYN",
   "MANHATTAN",
@@ -242,6 +245,8 @@ export type NycTruthNormalizationDebug = {
   normalized_building_address: string;
   /** ZIP extracted from input for ", NEW YORK, NY {ZIP}" candidates. */
   zip_from_input: string | null;
+  /** Bump when normalization rules change; verify running build includes this version. */
+  candidate_generator_version: number;
   /** Candidates passed to BigQuery in deterministic priority order. */
   candidates: string[];
 };
@@ -282,6 +287,7 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
     normalized_full_address,
     normalized_building_address,
     zip_from_input: zip,
+    candidate_generator_version: NYC_CANDIDATE_GENERATOR_VERSION,
     candidates,
   };
 }
