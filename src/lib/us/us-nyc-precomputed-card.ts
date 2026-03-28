@@ -63,7 +63,7 @@ function toStringOrNull(v: unknown): string | null {
 const MULTIFAMILY_BUILDING_TYPES = new Set(["large_multifamily", "small_multifamily", "mixed_use"]);
 
 /** Normalize `building_type` (handles hyphen, space, underscore). */
-function normalizeNycBuildingTypeKey(raw: string): string {
+export function normalizeNycBuildingTypeKey(raw: string): string {
   return raw.replace(/[-\s]+/g, "_").toLowerCase().trim();
 }
 
@@ -275,7 +275,7 @@ FROM ${CARD} c
 LEFT JOIN ${ENGINE} e
   ON c.full_address = e.full_address
 WHERE __STREET_FALLBACK_WHERE__
-LIMIT 100
+LIMIT 200
 `.trim();
 
 /** Leading house number (first token) for distance scoring vs fallback rows. */
@@ -286,23 +286,96 @@ function parseLeadingHouseNumberFromFullAddress(fa: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function pickBestStreetFallbackRow(
+/**
+ * Comparable street segment (house stripped) for Manhattan-style + Central Park addresses.
+ * Used to prefer candidates on the same normalized street before house-number distance.
+ */
+export function normalizeManhattanStreetPortion(line: string): string {
+  let t = line.split(",")[0]!.trim().toUpperCase();
+  t = t.replace(/^(\d+[A-Z]?)\s+/, "");
+  t = t.replace(/\s+/g, " ");
+  t = t.replace(/\bCENTRAL\s+PARK\s+WEST\b/, "CENTRAL PARK W");
+  t = t.replace(/\bCENTRAL\s+PARK\s+EAST\b/, "CENTRAL PARK E");
+  t = t.replace(/\bWEST\b/g, "W");
+  t = t.replace(/\bEAST\b/g, "E");
+  t = t.replace(/\bNORTH\b/g, "N");
+  t = t.replace(/\bSOUTH\b/g, "S");
+  t = t.replace(/\b(\d{1,3})(ST|ND|RD|TH)\b/g, "$1");
+  t = t.replace(/\bSTREET\b/g, "ST");
+  t = t.replace(/\bAVENUE\b/g, "AVE");
+  t = t.replace(/\bBOULEVARD\b/g, "BLVD");
+  return t.trim();
+}
+
+/** Higher = more desirable for residential / multifamily fallback. Vacant / unknown sink to bottom. */
+function nycBuildingTypeResidentialTier(raw: string): number {
+  const b = normalizeNycBuildingTypeKey(raw);
+  if (!b || b === "unknown") return 5;
+  if (b.includes("vacant")) return 0;
+  if (["large_multifamily", "small_multifamily", "mixed_use"].includes(b)) return 100;
+  if (["condo", "co_op", "coop", "apartment"].includes(b)) return 95;
+  if (["single_family", "two_family"].includes(b)) return 50;
+  return 25;
+}
+
+export type NycFallbackRankResult = {
+  row: Record<string, unknown> | null;
+  fallbackType: "building_fallback" | "street_fallback" | null;
+  scoreReason: string;
+  sameStreetPool: boolean;
+};
+
+/**
+ * Rank fallback rows: same normalized street first, then closest house number, then residential tier, then unit_count.
+ */
+export function rankNycFallbackRows(
   rows: Record<string, unknown>[],
+  normalizedAddressLine: string,
   requestedHouseNumber: number | null
-): Record<string, unknown> | null {
-  if (rows.length === 0) return null;
+): NycFallbackRankResult {
+  if (rows.length === 0) {
+    return { row: null, fallbackType: null, scoreReason: "no_rows", sameStreetPool: false };
+  }
+
+  const searchStreet = normalizeManhattanStreetPortion(normalizedAddressLine);
   const scored = rows.map((row) => {
-    const uc = toNumberOrNull(row.unit_count) ?? 0;
-    const rh = parseLeadingHouseNumberFromFullAddress(String(row.full_address ?? ""));
-    const dist =
+    const fa = String(row.full_address ?? "");
+    const candStreet = normalizeManhattanStreetPortion(fa);
+    const sameStreet = searchStreet.length > 0 && candStreet === searchStreet;
+    const rh = parseLeadingHouseNumberFromFullAddress(fa);
+    const houseDist =
       requestedHouseNumber != null && rh != null ? Math.abs(requestedHouseNumber - rh) : 9999999;
-    return { row, uc, dist };
+    const tier = nycBuildingTypeResidentialTier(String(row.building_type ?? ""));
+    const uc = toNumberOrNull(row.unit_count) ?? 0;
+    return { row, sameStreet, houseDist, tier, uc };
   });
-  scored.sort((a, b) => {
-    if (b.uc !== a.uc) return b.uc - a.uc;
-    return a.dist - b.dist;
+
+  const sameStreetRows = scored.filter((s) => s.sameStreet);
+  const pool = sameStreetRows.length > 0 ? sameStreetRows : scored;
+  const sameStreetPool = sameStreetRows.length > 0;
+
+  pool.sort((a, b) => {
+    if (a.houseDist !== b.houseDist) return a.houseDist - b.houseDist;
+    if (b.tier !== a.tier) return b.tier - a.tier;
+    return b.uc - a.uc;
   });
-  return scored[0]!.row;
+
+  const best = pool[0]!;
+  let fallbackType: "building_fallback" | "street_fallback";
+  let scoreReason: string;
+
+  if (sameStreetPool && best.houseDist === 0) {
+    fallbackType = "building_fallback";
+    scoreReason = `same_normalized_street+house_number_match;ranked_by_residential_tier(${best.tier})_then_unit_count(${best.uc})`;
+  } else if (sameStreetPool) {
+    fallbackType = "street_fallback";
+    scoreReason = `same_normalized_street+closest_house(dist=${best.houseDist});tier_then_unit_count`;
+  } else {
+    fallbackType = "street_fallback";
+    scoreReason = `no_same_street_match_in_pool;best_effort_by_house_distance+tier+unit_count`;
+  }
+
+  return { row: best.row, fallbackType, scoreReason, sameStreetPool };
 }
 
 /**
@@ -359,15 +432,31 @@ export function buildNycStreetFallbackLikePatterns(normalizedAddressLine: string
 }
 
 /**
- * When exact equality on full_address fails: find rows whose full_address contains the street signature.
- * Best row: highest unit_count, then closest leading house number.
+ * When exact equality on full_address fails: find rows whose full_address contains the street signature,
+ * then rank by same street, house proximity, residential tier, unit_count.
  */
 export async function queryPrecomputedNycStreetFallbackRow(
   client: ReturnType<typeof getUSBigQueryClient>,
   normalizedAddressLine: string
-): Promise<{ row: Record<string, unknown> | null; rowsReturned: number; patternsUsed: string[] }> {
+): Promise<{
+  row: Record<string, unknown> | null;
+  rowsReturned: number;
+  patternsUsed: string[];
+  fallbackType: "building_fallback" | "street_fallback" | null;
+  scoreReason: string;
+  sameStreetPool: boolean;
+}> {
   const { patterns, requestedHouseNumber } = buildNycStreetFallbackLikePatterns(normalizedAddressLine);
-  if (patterns.length === 0) return { row: null, rowsReturned: 0, patternsUsed: [] };
+  if (patterns.length === 0) {
+    return {
+      row: null,
+      rowsReturned: 0,
+      patternsUsed: [],
+      fallbackType: null,
+      scoreReason: "no_patterns",
+      sameStreetPool: false,
+    };
+  }
 
   const ors = patterns.map((_, i) => `UPPER(c.full_address) LIKE @p${i}`).join("\n   OR ");
   const params: Record<string, string> = {};
@@ -382,10 +471,13 @@ export async function queryPrecomputedNycStreetFallbackRow(
     location: NYC_PRECOMPUTED_LOCATION,
   });
   const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
-  const best = pickBestStreetFallbackRow(list, requestedHouseNumber);
+  const rank = rankNycFallbackRows(list, normalizedAddressLine, requestedHouseNumber);
   return {
-    row: best,
+    row: rank.row,
     rowsReturned: list.length,
     patternsUsed: patterns,
+    fallbackType: rank.fallbackType,
+    scoreReason: rank.scoreReason,
+    sameStreetPool: rank.sameStreetPool,
   };
 }

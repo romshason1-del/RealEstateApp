@@ -75,6 +75,10 @@ export interface USNYCApiTruthResponse {
   nyc_pending_unit_prompt?: boolean;
   /** When last sale is withheld from top-level fields (e.g. similar-only while unit pending). */
   nyc_last_transaction_unavailable_reason?: string | null;
+  /** Set when BigQuery matched via non-exact street/building fallback (internal / debug-friendly). */
+  nyc_fallback_used?: boolean;
+  nyc_fallback_type?: string | null;
+  nyc_fallback_score_reason?: string | null;
 }
 
 /** NYC main `/api/property-value` payload extensions (after {@link adaptUsNycTruthJsonForMainPropertyValueRoute}). */
