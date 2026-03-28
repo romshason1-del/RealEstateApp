@@ -149,7 +149,7 @@ function logNycPrecomputedLookup(
   try {
     const payload = {
       matched_full_address: toStringOrNull(row.full_address),
-      nyc_final_match_level: toStringOrNull(row.final_match_level) ?? mapped.nyc_final_match_level,
+      nyc_final_match_level: mapped.nyc_final_match_level ?? toStringOrNull(row.final_match_level),
       nyc_final_transaction_match_level:
         toStringOrNull(row.final_transaction_match_level) ?? mapped.nyc_final_transaction_match_level,
       estimated_value_source: "us_nyc_card_output_v5.estimated_value",
@@ -181,6 +181,8 @@ export function parsePricePerSqftNumber(text: string | null | undefined): number
 export type MapPrecomputedJoinOptions = {
   /** Building match before user supplied unit/lot — withhold similar-only sales from top-level until unit is known. */
   pendingUnitPrompt?: boolean;
+  /** When set (e.g. street fallback), overrides card `final_match_level` in the API response. */
+  overrideFinalMatchLevel?: string | null;
 };
 
 export function mapPrecomputedJoinRowToUSNYCApiTruthResponse(
@@ -228,7 +230,7 @@ export function mapPrecomputedJoinRowToUSNYCApiTruthResponse(
     nyc_card_badge_4: toStringOrNull(row.badge_4),
     nyc_estimated_value_subtext: toStringOrNull(row.estimated_value_subtext),
     nyc_price_per_sqft_text: ppsfText,
-    nyc_final_match_level: toStringOrNull(row.final_match_level),
+    nyc_final_match_level: options?.overrideFinalMatchLevel ?? toStringOrNull(row.final_match_level),
     nyc_final_last_transaction_text: txText,
     nyc_final_transaction_match_level: toStringOrNull(row.final_transaction_match_level),
     nyc_pending_unit_prompt: options?.pendingUnitPrompt === true,
@@ -251,4 +253,139 @@ export async function queryPrecomputedNycCardJoinRow(
   });
   const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
   return { row: list[0] ?? null, rowsReturned: list.length };
+}
+
+/** Template for debug; runtime WHERE clause is built from LIKE patterns. */
+export const US_NYC_STREET_FALLBACK_JOIN_QUERY = `
+SELECT
+  c.full_address AS full_address,
+  c.badge_1 AS badge_1,
+  c.badge_2 AS badge_2,
+  c.badge_3 AS badge_3,
+  c.badge_4 AS badge_4,
+  c.estimated_value AS estimated_value,
+  c.estimated_value_subtext AS estimated_value_subtext,
+  c.price_per_sqft_text AS price_per_sqft_text,
+  c.final_match_level AS final_match_level,
+  c.building_type AS building_type,
+  c.unit_count AS unit_count,
+  e.final_last_transaction_text AS final_last_transaction_text,
+  e.final_transaction_match_level AS final_transaction_match_level
+FROM ${CARD} c
+LEFT JOIN ${ENGINE} e
+  ON c.full_address = e.full_address
+WHERE __STREET_FALLBACK_WHERE__
+LIMIT 100
+`.trim();
+
+/** Leading house number (first token) for distance scoring vs fallback rows. */
+function parseLeadingHouseNumberFromFullAddress(fa: string): number | null {
+  const m = fa.trim().match(/^(\d{1,7})\b/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pickBestStreetFallbackRow(
+  rows: Record<string, unknown>[],
+  requestedHouseNumber: number | null
+): Record<string, unknown> | null {
+  if (rows.length === 0) return null;
+  const scored = rows.map((row) => {
+    const uc = toNumberOrNull(row.unit_count) ?? 0;
+    const rh = parseLeadingHouseNumberFromFullAddress(String(row.full_address ?? ""));
+    const dist =
+      requestedHouseNumber != null && rh != null ? Math.abs(requestedHouseNumber - rh) : 9999999;
+    return { row, uc, dist };
+  });
+  scored.sort((a, b) => {
+    if (b.uc !== a.uc) return b.uc - a.uc;
+    return a.dist - b.dist;
+  });
+  return scored[0]!.row;
+}
+
+/**
+ * Build LIKE patterns for street-level fallback when no exact full_address exists.
+ * Deterministic; NYC grid + Central Park West.
+ */
+export function buildNycStreetFallbackLikePatterns(normalizedAddressLine: string): {
+  patterns: string[];
+  requestedHouseNumber: number | null;
+} {
+  const u = normalizedAddressLine.replace(/\s+/g, " ").trim().toUpperCase();
+  if (!u) return { patterns: [], requestedHouseNumber: null };
+
+  const requestedHouse = parseLeadingHouseNumberFromFullAddress(u);
+
+  if (/\bCENTRAL\s+PARK\b/.test(u)) {
+    const patterns = [
+      "%CENTRAL%PARK%WEST%",
+      "%CENTRAL%PARK%W%",
+      "%CENTRAL%PARK%EAST%",
+      "%CENTRAL%PARK%E%",
+      "%CENTRAL%PARK%",
+    ];
+    if (requestedHouse != null) patterns.unshift(`%${requestedHouse}%CENTRAL%`);
+    return { patterns: [...new Set(patterns)], requestedHouseNumber: requestedHouse };
+  }
+
+  const grid = u.match(
+    /^(\d+)\s+(W|E|N|S)\s+(\d{1,3})(?:(ST|ND|RD|TH))?(?:\s|$)/
+  );
+  if (grid) {
+    const dir = grid[2]!;
+    const sn = grid[3]!;
+    const dirLong =
+      dir === "W" ? "WEST" : dir === "E" ? "EAST" : dir === "N" ? "NORTH" : "SOUTH";
+    const patterns = [
+      `%${dir}%${sn}%`,
+      `%${dirLong}%${sn}%`,
+      `%${sn}%STREET%`,
+      `%${sn}%ST%`,
+      `%${sn}ST%`,
+      `%${sn}ND%`,
+      `%${sn}RD%`,
+      `%${sn}TH%`,
+    ];
+    return { patterns: [...new Set(patterns)], requestedHouseNumber: requestedHouse };
+  }
+
+  const tok = u.split(/\s+/).filter(Boolean).slice(0, 6).join("%");
+  if (tok.length >= 4) {
+    return { patterns: [`%${tok}%`], requestedHouseNumber: requestedHouse };
+  }
+  return { patterns: [], requestedHouseNumber: requestedHouse };
+}
+
+/**
+ * When exact equality on full_address fails: find rows whose full_address contains the street signature.
+ * Best row: highest unit_count, then closest leading house number.
+ */
+export async function queryPrecomputedNycStreetFallbackRow(
+  client: ReturnType<typeof getUSBigQueryClient>,
+  normalizedAddressLine: string
+): Promise<{ row: Record<string, unknown> | null; rowsReturned: number; patternsUsed: string[] }> {
+  const { patterns, requestedHouseNumber } = buildNycStreetFallbackLikePatterns(normalizedAddressLine);
+  if (patterns.length === 0) return { row: null, rowsReturned: 0, patternsUsed: [] };
+
+  const ors = patterns.map((_, i) => `UPPER(c.full_address) LIKE @p${i}`).join("\n   OR ");
+  const params: Record<string, string> = {};
+  patterns.forEach((p, i) => {
+    params[`p${i}`] = p;
+  });
+
+  const query = US_NYC_STREET_FALLBACK_JOIN_QUERY.replace("__STREET_FALLBACK_WHERE__", `(${ors})`);
+  const [rows] = await client.query({
+    query,
+    params,
+    location: NYC_PRECOMPUTED_LOCATION,
+  });
+  const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
+  const best = pickBestStreetFallbackRow(list, requestedHouseNumber);
+  return {
+    row: best,
+    rowsReturned: list.length,
+    patternsUsed: patterns,
+  };
 }

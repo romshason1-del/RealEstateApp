@@ -10,12 +10,18 @@ import {
   computeNycNeedsUnitPrompt,
   mapPrecomputedJoinRowToUSNYCApiTruthResponse,
   queryPrecomputedNycCardJoinRow,
+  queryPrecomputedNycStreetFallbackRow,
   US_NYC_CARD_OUTPUT_V5_REFERENCE,
   US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
   US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
   US_NYC_PRECOMPUTED_JOIN_QUERY,
+  US_NYC_STREET_FALLBACK_JOIN_QUERY,
 } from "./us-nyc-precomputed-card";
-import { buildNycTruthLookupCandidates, NYC_CANDIDATE_GENERATOR_VERSION } from "./us-nyc-address-normalize";
+import {
+  buildNycTruthLookupCandidates,
+  buildNycTruthLookupNormalizationDebug,
+  NYC_CANDIDATE_GENERATOR_VERSION,
+} from "./us-nyc-address-normalize";
 import { shouldApplyNycDebugKnownAddressUnitPromptOverride } from "./us-nyc-debug-known-addresses";
 
 /** @deprecated Use {@link US_NYC_CARD_OUTPUT_V5_REFERENCE}; kept for `/api/us/property-value` debug strings. */
@@ -102,6 +108,8 @@ export type USNYCApiTruthQueryDebug = {
   full_sql_template: string;
   nyc_last_transaction_engine_table?: string;
   candidate_generator_version?: number;
+  nyc_street_fallback_used?: boolean;
+  nyc_street_fallback_patterns?: readonly string[];
 };
 
 function rowToJsonSafe(row: Record<string, unknown>): Record<string, unknown> {
@@ -126,6 +134,98 @@ function parseUnitOrLotOptions(options?: { unitOrLot?: string | null }): {
   const normalized = normalizeUnitOrLotForTruthLookup(raw);
   if (!normalized) return { hasUnit: false, submitted: null };
   return { hasUnit: true, submitted: normalized };
+}
+
+/** Street fallback: always prompt when card reports multiple units (even if building_type would skip). */
+function nycRowUnitCountGtOne(row: Record<string, unknown>): boolean {
+  const v = row.unit_count;
+  if (v == null || v === "") return false;
+  const n =
+    typeof v === "number" && Number.isFinite(v) ? v : Number(String(v).replace(/,/g, ""));
+  return Number.isFinite(n) && n > 1;
+}
+
+async function queryNycStreetFallbackTruth(
+  client: ReturnType<typeof getUSBigQueryClient>,
+  rawInput: string | undefined,
+  candidates: readonly string[],
+  hasUnit: boolean,
+  submitted: string | null,
+  addressLineForPrompt: string
+): Promise<{
+  response: USNYCApiTruthResponse | null;
+  patternsUsed: string[];
+  rowsReturned: number;
+  matchedRawRow: Record<string, unknown> | null;
+}> {
+  const norm = buildNycTruthLookupNormalizationDebug(rawInput ?? "");
+  const line =
+    norm?.normalized_building_address?.trim() ||
+    norm?.normalized_full_address?.trim() ||
+    (candidates[0] ?? "").trim();
+  if (!line) {
+    return { response: null, patternsUsed: [], rowsReturned: 0, matchedRawRow: null };
+  }
+
+  const { row, rowsReturned, patternsUsed } = await queryPrecomputedNycStreetFallbackRow(client, line);
+  if (!row || rowsReturned === 0) {
+    return { response: null, patternsUsed, rowsReturned, matchedRawRow: null };
+  }
+
+  let needPrompt =
+    !hasUnit &&
+    (computeNycNeedsUnitPrompt(row, {
+      addressLine: addressLineForPrompt || line,
+      candidatesCount: candidates.length,
+    }) ||
+      nycRowUnitCountGtOne(row));
+  if (
+    !needPrompt &&
+    !hasUnit &&
+    shouldApplyNycDebugKnownAddressUnitPromptOverride(rawInput ?? "", row, {
+      addressLine: addressLineForPrompt || line,
+      candidatesCount: candidates.length,
+    })
+  ) {
+    needPrompt = true;
+  }
+
+  const mapOpts = {
+    overrideFinalMatchLevel: "street_fallback" as const,
+    ...(needPrompt ? { pendingUnitPrompt: true as const } : {}),
+  };
+
+  if (needPrompt) {
+    return {
+      response: withUnitLookup(
+        {
+          success: true,
+          message: null,
+          ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row, mapOpts),
+        },
+        "not_requested",
+        null
+      ),
+      patternsUsed,
+      rowsReturned,
+      matchedRawRow: row,
+    };
+  }
+
+  return {
+    response: withUnitLookup(
+      {
+        success: true,
+        message: null,
+        ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row, mapOpts),
+      },
+      hasUnit ? "not_found" : "not_requested",
+      submitted
+    ),
+    patternsUsed,
+    rowsReturned,
+    matchedRawRow: row,
+  };
 }
 
 /**
@@ -209,6 +309,18 @@ export async function queryUSNYCApiTruthWithCandidates(
         submitted
       );
     }
+  }
+
+  const streetFb = await queryNycStreetFallbackTruth(
+    client,
+    rawInput,
+    candidates,
+    hasUnit,
+    submitted,
+    addressLineForPrompt
+  );
+  if (streetFb.response) {
+    return streetFb.response;
   }
 
   logNycPrecomputedLookupMiss({
@@ -351,6 +463,49 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         },
       };
     }
+  }
+
+  const addressLineForFallback =
+    originalInput.trim() || norm.normalized_full_address.trim() || norm.normalized_building_address.trim();
+  const streetFb = await queryNycStreetFallbackTruth(
+    client,
+    originalInput,
+    norm.candidates,
+    hasUnit,
+    submitted,
+    addressLineForFallback
+  );
+  if (streetFb.response) {
+    const matchedStr =
+      streetFb.matchedRawRow?.full_address != null
+        ? String(streetFb.matchedRawRow.full_address)
+        : null;
+    const firstRowFallback =
+      streetFb.matchedRawRow != null ? rowToJsonSafe(streetFb.matchedRawRow) : null;
+    return {
+      response: streetFb.response,
+      debug: {
+        original_input: originalInput,
+        normalized_full_address: norm.normalized_full_address,
+        normalized_building_address: norm.normalized_building_address,
+        zip_from_input: norm.zip_from_input ?? null,
+        table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
+        sql_where_used: "street_fallback: UPPER(c.full_address) LIKE @pN (OR)",
+        rows_found_count: streetFb.rowsReturned,
+        first_row_if_any: firstRowFallback,
+        candidates_tried: norm.candidates,
+        attempts,
+        final_selected_candidate: matchedStr ? `STREET_FALLBACK:${matchedStr}` : null,
+        matched_full_address: matchedStr,
+        precomputed_row_matched: true,
+        bigquery_location: NYC_TRUTH_QUERY_LOCATION,
+        full_sql_template: US_NYC_STREET_FALLBACK_JOIN_QUERY,
+        nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+        candidate_generator_version: cgv,
+        nyc_street_fallback_used: true,
+        nyc_street_fallback_patterns: streetFb.patternsUsed,
+      },
+    };
   }
 
   logNycPrecomputedLookupMiss({

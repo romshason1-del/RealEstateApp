@@ -4,7 +4,7 @@
  */
 
 /** Bump when candidate rules change (client cache key + API debug). */
-export const NYC_CANDIDATE_GENERATOR_VERSION = 3;
+export const NYC_CANDIDATE_GENERATOR_VERSION = 4;
 
 const NYC_BOROUGHS_AND_CITY = new Set([
   "BROOKLYN",
@@ -185,10 +185,60 @@ function expandNycStreetTypeAliasesBidirectional(line: string): string[] {
   return acc;
 }
 
+/** Street-type token after a grid number (house + W/E/N/S + street number). */
+const NYC_STREET_TYPE_AFTER_GRID = String.raw`(?:STREET|ST|AVE|AVENUE|RD|ROAD|BLVD|BOULEVARD|PL|PLACE|PKWY|PARKWAY|LN|LANE|DR|DRIVE|CT|COURT)`;
+
+/**
+ * "86TH" → "86", "63RD" → "63" (BigQuery sometimes stores plain numbers before street type).
+ */
+function stripStreetOrdinalSuffixTokens(line: string): string {
+  return collapseSpaces(line.replace(/\b(\d{1,3})(ST|ND|RD|TH)\b/gi, "$1"));
+}
+
+/**
+ * "40 W 86 STREET" → "40 W 86TH STREET" (default TH when adding; matches gold tables that use ordinals).
+ */
+function addDefaultOrdinalAfterGridDirection(line: string): string | null {
+  const re = new RegExp(
+    String.raw`\b(W|E|N|S)\s+(\d{1,3})\s+(?=` + NYC_STREET_TYPE_AFTER_GRID + String.raw`\b)`,
+    "gi"
+  );
+  const next = line.replace(re, (_full, dir: string, n: string) => `${dir} ${n}TH `);
+  return next === line ? null : collapseSpaces(next);
+}
+
+/**
+ * After all other address-only variants: append ordinal-stripped and default-TH forms (deterministic; originals first).
+ */
+function appendOrdinalVariants(addressOnly: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const line of addressOnly) {
+    pushUniqueOrdered(out, line);
+  }
+  for (const line of addressOnly) {
+    const stripped = stripStreetOrdinalSuffixTokens(line);
+    if (stripped !== line) {
+      pushUniqueOrdered(out, stripped);
+    }
+    const withTh = addDefaultOrdinalAfterGridDirection(line);
+    if (withTh != null && withTh !== line) {
+      pushUniqueOrdered(out, withTh);
+    }
+    if (stripped !== line) {
+      const withThFromStripped = addDefaultOrdinalAfterGridDirection(stripped);
+      if (withThFromStripped != null && withThFromStripped !== stripped && withThFromStripped !== line) {
+        pushUniqueOrdered(out, withThFromStripped);
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Priority (lookup order):
  * 1) Address-only: base core + building line, then directional grid aliases, then street-type aliases.
- * 2) Same lines with ", NEW YORK, NY", then ", NEW YORK, NY {ZIP}" when ZIP known, then ", USA".
+ * 2) Ordinal variants (plain number ↔ ordinal) for grid streets.
+ * 3) Same lines with ", NEW YORK, NY", then ", NEW YORK, NY {ZIP}" when ZIP known, then ", USA".
  */
 function buildOrderedAddressOnlyCandidates(core: string, buildingOnly: string | null): string[] {
   const ordered: string[] = [];
@@ -209,7 +259,7 @@ function buildOrderedAddressOnlyCandidates(core: string, buildingOnly: string | 
       pushUniqueOrdered(withStreetTypes, st);
     }
   }
-  return withStreetTypes;
+  return appendOrdinalVariants(withStreetTypes);
 }
 
 /**
