@@ -263,13 +263,15 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     : "property-level";
 
   const unavailableReason = str(us.nyc_last_transaction_unavailable_reason);
-  const lastTxMessage = isNycUnitNotFoundFallback
-    ? "No direct data for this unit. Showing similar unit"
-    : unavailableReason === "similar_property_not_exact_unit"
-      ? "Comparable sale; not an exact unit sale."
-      : lastAmt > 0
-        ? undefined
-        : "No official sale recorded";
+  const lastTxMessage = isNycPendingUnitPrompt
+    ? "Enter apartment or lot number to see transaction details"
+    : isNycUnitNotFoundFallback
+      ? "No direct data for this unit. Showing similar unit"
+      : unavailableReason === "similar_property_not_exact_unit"
+        ? "Comparable sale; not an exact unit sale."
+        : lastAmt > 0
+          ? undefined
+          : "No official sale recorded";
 
   const property_result = {
     exact_value: estimated_value,

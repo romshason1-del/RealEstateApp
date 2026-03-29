@@ -66,3 +66,5 @@ data/
 *.txt
 *.ndjson
 *.zip
+data/us/nyc/raw/pluto/*.csv
+tmp_check.sql

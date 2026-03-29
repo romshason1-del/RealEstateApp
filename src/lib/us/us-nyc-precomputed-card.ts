@@ -193,14 +193,29 @@ export function mapPrecomputedJoinRowToUSNYCApiTruthResponse(
   let txText = toStringOrNull(row.final_last_transaction_text);
   let priceFromText = parseFirstUsdAmountFromText(txText);
   let dateFromText = parseSaleDateFromTransactionText(txText);
-  const estimated = toNumberOrNull(row.estimated_value);
-  const ppsfText = toStringOrNull(row.price_per_sqft_text);
-  const ppsfNum = parsePricePerSqftNumber(ppsfText);
+  let estimated: number | null = toNumberOrNull(row.estimated_value);
+  const ppsfTextRaw = toStringOrNull(row.price_per_sqft_text);
+  let ppsfText: string | null = ppsfTextRaw;
+  let ppsfNum: number | null = parsePricePerSqftNumber(ppsfTextRaw);
+  let estSubtext: string | null = toStringOrNull(row.estimated_value_subtext);
 
   let latestSalePrice = priceFromText;
   let lastTxUnavailable: string | null = null;
 
-  if (options?.pendingUnitPrompt === true && transactionLevelIsSimilarOnly(row)) {
+  if (options?.pendingUnitPrompt === true) {
+    // Suppress ALL unit-sensitive display values until the user selects a specific unit/apartment.
+    // Showing building-level values (estimated value, last sale, $/sqft, subtext) as if they
+    // belong to a particular apartment before unit selection would be misleading.
+    estimated = null;
+    estSubtext = null;
+    latestSalePrice = null;
+    dateFromText = null;
+    txText = null;
+    ppsfNum = null;
+    ppsfText = null;
+    lastTxUnavailable = "pending_unit_selection";
+  } else if (transactionLevelIsSimilarOnly(row)) {
+    // Non-pending: suppress similar-only sale references at building level.
     latestSalePrice = null;
     dateFromText = null;
     txText = null;
@@ -228,7 +243,7 @@ export function mapPrecomputedJoinRowToUSNYCApiTruthResponse(
     nyc_card_badge_2: toStringOrNull(row.badge_2),
     nyc_card_badge_3: toStringOrNull(row.badge_3),
     nyc_card_badge_4: toStringOrNull(row.badge_4),
-    nyc_estimated_value_subtext: toStringOrNull(row.estimated_value_subtext),
+    nyc_estimated_value_subtext: estSubtext,
     nyc_price_per_sqft_text: ppsfText,
     nyc_final_match_level: options?.overrideFinalMatchLevel ?? toStringOrNull(row.final_match_level),
     nyc_final_last_transaction_text: txText,
@@ -392,14 +407,49 @@ export function buildNycStreetFallbackLikePatterns(normalizedAddressLine: string
   const requestedHouse = parseLeadingHouseNumberFromFullAddress(u);
 
   if (/\bCENTRAL\s+PARK\b/.test(u)) {
-    const patterns = [
-      "%CENTRAL%PARK%WEST%",
-      "%CENTRAL%PARK%W%",
-      "%CENTRAL%PARK%EAST%",
-      "%CENTRAL%PARK%E%",
-      "%CENTRAL%PARK%",
-    ];
-    if (requestedHouse != null) patterns.unshift(`%${requestedHouse}%CENTRAL%`);
+    // Detect whether the input specifies West (W/WEST) or East (E/EAST) side.
+    const isCpw = /\bCENTRAL\s+PARK\s+(W|WEST)\b/.test(u);
+    const isCpe = /\bCENTRAL\s+PARK\s+(E|EAST)\b/.test(u);
+
+    const patterns: string[] = [];
+
+    // Most specific first: anchored patterns with house number + correct side.
+    if (requestedHouse != null) {
+      if (isCpw) {
+        // '234 CENTRAL PARK W%' matches "234 CENTRAL PARK WEST, ..." and "234 CENTRAL PARK W, ..."
+        patterns.push(`${requestedHouse} CENTRAL PARK W%`);
+        patterns.push(`${requestedHouse} CENTRAL PARK WEST%`);
+      } else if (isCpe) {
+        patterns.push(`${requestedHouse} CENTRAL PARK E%`);
+        patterns.push(`${requestedHouse} CENTRAL PARK EAST%`);
+      } else {
+        // Side unknown — try both
+        patterns.push(`${requestedHouse} CENTRAL PARK W%`);
+        patterns.push(`${requestedHouse} CENTRAL PARK WEST%`);
+        patterns.push(`${requestedHouse} CENTRAL PARK E%`);
+        patterns.push(`${requestedHouse} CENTRAL PARK EAST%`);
+      }
+      // Broader wildcard anchor: any address containing this house number + CENTRAL
+      patterns.push(`%${requestedHouse}%CENTRAL%`);
+    }
+
+    // Street-level patterns (no house anchor)
+    if (isCpw) {
+      patterns.push("%CENTRAL%PARK%WEST%");
+      patterns.push("%CENTRAL%PARK%W%");
+    } else if (isCpe) {
+      patterns.push("%CENTRAL%PARK%EAST%");
+      patterns.push("%CENTRAL%PARK%E%");
+    } else {
+      patterns.push("%CENTRAL%PARK%WEST%");
+      patterns.push("%CENTRAL%PARK%W%");
+      patterns.push("%CENTRAL%PARK%EAST%");
+      patterns.push("%CENTRAL%PARK%E%");
+    }
+
+    // Broadest fallback — any Central Park address
+    patterns.push("%CENTRAL%PARK%");
+
     return { patterns: [...new Set(patterns)], requestedHouseNumber: requestedHouse };
   }
 
@@ -471,6 +521,34 @@ export async function queryPrecomputedNycStreetFallbackRow(
     location: NYC_PRECOMPUTED_LOCATION,
   });
   const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
+
+  if (list.length === 0) {
+    // Pool is empty: data coverage gap. Log for diagnosis.
+    if (process.env.NODE_ENV !== "test") {
+      try {
+        console.log(
+          "[NYC_FALLBACK_POOL_EMPTY]",
+          JSON.stringify({
+            normalized_address_line: normalizedAddressLine,
+            patterns_tried: patterns,
+            requested_house_number: requestedHouseNumber,
+            note: "No rows in us_nyc_card_output_v5 match these LIKE patterns — data coverage gap",
+          })
+        );
+      } catch {
+        /* ignore logging failures */
+      }
+    }
+    return {
+      row: null,
+      rowsReturned: 0,
+      patternsUsed: patterns,
+      fallbackType: null,
+      scoreReason: "no_pool_rows",
+      sameStreetPool: false,
+    };
+  }
+
   const rank = rankNycFallbackRows(list, normalizedAddressLine, requestedHouseNumber);
   return {
     row: rank.row,

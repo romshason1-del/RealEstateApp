@@ -218,6 +218,23 @@ async function queryNycStreetFallbackTruth(
     sameStreetPool,
   } = await queryPrecomputedNycStreetFallbackRow(client, line);
   if (!row || rowsReturned === 0) {
+    // Log diagnostic info even on empty pool (helps confirm data coverage gap vs pattern issue).
+    logNycFallbackDecision({
+      searched_address: rawInput ?? "",
+      fallback_used: false,
+      fallback_type: null,
+      fallback_score_reason: scoreReason,
+      pool_size: rowsReturned,
+      patterns_used: patternsUsed,
+      normalized_line_used_for_patterns: line,
+      matched_full_address: null,
+      matched_building_type: null,
+      matched_unit_count: null,
+      should_prompt_for_unit: false,
+      nyc_pending_unit_prompt: false,
+      unit_prompt_reason: null,
+      note: rowsReturned === 0 ? "pool_empty_data_coverage_gap" : "pool_non_empty_ranking_returned_null",
+    });
     return { response: null, patternsUsed, rowsReturned, matchedRawRow: null, sameStreetPool: false };
   }
 
@@ -257,6 +274,9 @@ async function queryNycStreetFallbackTruth(
     fallback_type: fallbackType,
     fallback_score_reason: scoreReason,
     same_street_pool: sameStreetPool,
+    pool_size: rowsReturned,
+    patterns_used: patternsUsed,
+    normalized_line_used_for_patterns: line,
     matched_building_type: row.building_type,
     matched_unit_count: row.unit_count,
     should_prompt_for_unit: needPrompt,
