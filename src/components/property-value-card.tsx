@@ -899,7 +899,9 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     address;
 
   const data = insightsData;
-  const apiStatus = (data as any)?.status;
+  const apiStatus = isUS
+    ? (usNycMergedStatus ?? (insightsData as { status?: string } | null | undefined)?.status)
+    : (insightsData as { status?: string } | null | undefined)?.status;
   console.log("[PROPERTY_CARD] received status:", apiStatus);
 
   return (
@@ -976,9 +978,14 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
             </div>
-          ) : isUS && apiStatus === "commercial_property" && hasOfficialProvider ? (
+          ) : isUS &&
+            hasOfficialProvider &&
+            (apiStatus === "commercial_property" ||
+              (apiStatus == null && nycUnitSubmitted?.trim())) ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
-              <p>🏢 Commercial property — limited residential data available</p>
+              <p className="text-[10px] leading-tight text-zinc-300">
+                🏢 Commercial Property — No residential data available
+              </p>
             </div>
           ) : isUS && apiStatus === "requires_unit" && hasOfficialProvider ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
@@ -1379,6 +1386,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                 addressForFetch={addressForApi}
                 currencySymbol={currencySymbol}
                 status={resolvedStatus}
+                isCommercial={isUsCommercial}
                 apartmentFlowEnabled={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial)}
                 showApartmentInput={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial && nycUnitSubmitted == null)}
                 apartmentDraft={nycUnitDraft}

@@ -122,6 +122,8 @@ export type UsNycTruthPropertyCardProps = {
   addressForFetch?: string;
   /** Optional; falls back to `data.status`. */
   status?: string;
+  /** When true, commercial-only messaging may apply (US pipeline). */
+  isCommercial?: boolean;
   /** Apartment prompt + CTA only when main API sets `should_prompt_for_unit`. */
   apartmentFlowEnabled: boolean;
   showApartmentInput?: boolean;
@@ -145,11 +147,13 @@ const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
  */
 export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
+  console.log("[NYC_CARD_STATUS]", props.status, "isCommercial:", props.isCommercial);
   const {
     data,
     currencySymbol,
     addressForFetch,
     status: statusProp,
+    isCommercial: isCommercialProp,
     apartmentFlowEnabled,
     showApartmentInput = false,
     apartmentDraft = "",
@@ -161,7 +165,13 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   } = props;
   const effectiveStatus = statusProp ?? data.status;
   const requiresUnitOnly = effectiveStatus === "requires_unit";
-  const commercialPropertyOnly = effectiveStatus === "commercial_property";
+  const commercialPropertyOnly =
+    isCommercialProp === true || effectiveStatus === "commercial_property";
+  const showCommercialOnlyMessage =
+    commercialPropertyOnly ||
+    ((effectiveStatus == null || effectiveStatus === "") &&
+      !!(submittedApartment ?? "").trim() &&
+      !apartmentSearchInFlight);
   const ev = data.estimated_value;
   const price = data.latest_sale_price;
   const dateStr = formatNycSaleDate(data.latest_sale_date ?? null);
@@ -188,12 +198,12 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     }
   };
 
-  if (commercialPropertyOnly) {
+  if (showCommercialOnlyMessage) {
     return (
       <div className="space-y-1">
         <div className={block}>
           <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
-            Commercial property — limited residential data available
+            🏢 Commercial Property — No residential data available
           </p>
         </div>
       </div>

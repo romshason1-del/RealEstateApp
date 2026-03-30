@@ -118,11 +118,8 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       masterNorm,
       combinedUnit
     );
-    console.log(
-      "[COMMERCIAL_CHECK]",
-      masterGate.isCommercial,
-      "bldgclass" in masterGate ? masterGate.bldgclass : undefined
-    );
+    const gateBldgClass = "bldgclass" in masterGate ? masterGate.bldgclass : undefined;
+    console.log("[GATE_BLDGCLASS]", gateBldgClass, "isCommercial:", masterGate.isCommercial);
     if (masterGate.isCommercial) {
       return NextResponse.json(
         {
@@ -135,7 +132,8 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
         { status: 200 }
       );
     }
-    if (masterGate.requiresUnit) {
+    const hasSubmittedUnit = typeof combinedUnit === "string" && combinedUnit.trim() !== "";
+    if (masterGate.requiresUnit && !hasSubmittedUnit) {
       return NextResponse.json(
         {
           status: "requires_unit",

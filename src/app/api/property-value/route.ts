@@ -549,7 +549,9 @@ export async function GET(request: NextRequest) {
                 { status: 200 }
               );
             }
-            if (masterGate.requiresUnit) {
+            const hasSubmittedUnitPrefetch =
+              typeof combinedUnit === "string" && combinedUnit.trim() !== "";
+            if (masterGate.requiresUnit && !hasSubmittedUnitPrefetch) {
               return NextResponse.json(
                 {
                   status: "requires_unit",
@@ -575,8 +577,14 @@ export async function GET(request: NextRequest) {
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const usData = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
 
-    // CRITICAL: Pass through special statuses without adaptation
-    if (usData.status === "commercial_property" || usData.status === "requires_unit") {
+    // CRITICAL: Pass through special statuses without adaptation (no adaptUsNycTruthJsonForMainPropertyValueRoute)
+    if (usData.status === "commercial_property") {
+      console.log("[MAIN_ROUTE_COMMERCIAL]", usData.status, (usData as { isCommercial?: unknown }).isCommercial);
+      const passthrough = { ...(usData as Record<string, unknown>), status: usData.status };
+      console.log("[MAIN_ROUTE] final status being sent to client:", passthrough?.status);
+      return NextResponse.json(passthrough, { status: 200 });
+    }
+    if (usData.status === "requires_unit") {
       const passthrough = { ...(usData as Record<string, unknown>), status: usData?.status ?? null };
       console.log("[MAIN_ROUTE] final status being sent to client:", passthrough?.status);
       return NextResponse.json(passthrough, { status: 200 });
