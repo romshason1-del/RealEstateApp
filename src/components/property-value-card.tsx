@@ -376,20 +376,22 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
   );
 }
 
-export function PropertyValueCard({
-  address,
-  position,
-  currencySymbol = "$",
-  countryCode = "",
-  status: statusProp,
-  onClose,
-  isSaved = false,
-  onToggleSave,
-  rawInputAddress,
-  selectedFormattedAddress,
-  typedAddressForFrance,
-  postcode,
-}: PropertyValueCardProps) {
+export function PropertyValueCard(props: PropertyValueCardProps) {
+  console.log("[CARD_PROPS_FULL]", JSON.stringify(props).substring(0, 500));
+  const {
+    address,
+    position,
+    currencySymbol = "$",
+    countryCode = "",
+    status: statusProp,
+    onClose,
+    isSaved = false,
+    onToggleSave,
+    rawInputAddress,
+    selectedFormattedAddress,
+    typedAddressForFrance,
+    postcode,
+  } = props;
   const isDev = process.env.NODE_ENV !== "production";
   const isIsrael = countryCode === "IL";
   const isUS = countryCode === "US";

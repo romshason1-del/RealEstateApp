@@ -165,7 +165,9 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
       params: { norm: n },
       location: NYC_BQ_LOCATION,
     });
-    const list = (rows as MasterGateRow[] | null | undefined) ?? [];
+    const rowsArr = (rows as MasterGateRow[] | null | undefined) ?? [];
+    console.log("[MASTER_RAW_ROW]", JSON.stringify(rowsArr?.[0] ?? "NO ROWS"));
+    const list = rowsArr;
     row = list[0] ?? null;
   } catch {
     row = null;

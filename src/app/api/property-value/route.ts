@@ -536,6 +536,7 @@ export async function GET(request: NextRequest) {
               masterNorm,
               combinedUnit
             );
+            console.log("[MASTER_GATE_FULL]", JSON.stringify(masterGate));
             if (masterGate.isCommercial) {
               return NextResponse.json(
                 {
@@ -587,7 +588,18 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
-      const adaptedPayload: Record<string, unknown> = { ...(adapted as Record<string, unknown>) };
+      const finalPayload = adapted as Record<string, unknown>;
+
+      // Derive status from existing fields if status is null
+      if (!finalPayload.status) {
+        if (finalPayload.should_prompt_for_unit === true || finalPayload.nyc_pending_unit_prompt === true) {
+          finalPayload.status = "requires_unit";
+        }
+      }
+
+      console.log("[FINAL_STATUS]", finalPayload.status);
+
+      const adaptedPayload: Record<string, unknown> = { ...finalPayload };
 
       // Passthrough critical status flags from US route
       const criticalStatus = usData?.status ?? adaptedPayload?.status ?? null;

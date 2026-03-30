@@ -142,19 +142,21 @@ const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-
 /**
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
  */
-export function UsNycTruthPropertyCard({
-  data,
-  currencySymbol,
-  status: statusProp,
-  apartmentFlowEnabled,
-  showApartmentInput = false,
-  apartmentDraft = "",
-  onApartmentDraftChange,
-  onApartmentSearch,
-  apartmentSearchInFlight = false,
-  submittedApartment,
-  onCheckAnotherApartment,
-}: UsNycTruthPropertyCardProps) {
+export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
+  console.log("[CARD_PROPS_FULL]", JSON.stringify(props).substring(0, 500));
+  const {
+    data,
+    currencySymbol,
+    status: statusProp,
+    apartmentFlowEnabled,
+    showApartmentInput = false,
+    apartmentDraft = "",
+    onApartmentDraftChange,
+    onApartmentSearch,
+    apartmentSearchInFlight = false,
+    submittedApartment,
+    onCheckAnotherApartment,
+  } = props;
   const effectiveStatus = statusProp ?? data.status;
   const requiresUnitOnly = effectiveStatus === "requires_unit";
   const commercialPropertyOnly = effectiveStatus === "commercial_property";
