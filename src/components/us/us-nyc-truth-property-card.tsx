@@ -3,6 +3,8 @@
 import * as React from "react";
 
 export type UsNycTruthCardData = {
+  /** Top-level `/api/property-value` status (e.g. requires_unit). */
+  status?: string;
   /** Parsed address from main API payload (display-only formatting here). */
   address?: { city?: string; street?: string; house_number?: string };
   estimated_value?: number | null;
@@ -116,6 +118,8 @@ function nycPricesMatchForAcris(a: number | null | undefined, b: number | null |
 export type UsNycTruthPropertyCardProps = {
   data: UsNycTruthCardData;
   currencySymbol: string;
+  /** Optional; falls back to `data.status`. */
+  status?: string;
   /** Apartment prompt + CTA only when main API sets `should_prompt_for_unit`. */
   apartmentFlowEnabled: boolean;
   showApartmentInput?: boolean;
@@ -141,6 +145,7 @@ const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-
 export function UsNycTruthPropertyCard({
   data,
   currencySymbol,
+  status: statusProp,
   apartmentFlowEnabled,
   showApartmentInput = false,
   apartmentDraft = "",
@@ -150,6 +155,8 @@ export function UsNycTruthPropertyCard({
   submittedApartment,
   onCheckAnotherApartment,
 }: UsNycTruthPropertyCardProps) {
+  const effectiveStatus = statusProp ?? data.status;
+  const requiresUnitOnly = effectiveStatus === "requires_unit";
   const ev = data.estimated_value;
   const price = data.latest_sale_price;
   const dateStr = formatNycSaleDate(data.latest_sale_date ?? null);
@@ -237,40 +244,50 @@ export function UsNycTruthPropertyCard({
         </div>
       ) : null}
 
-      <div className={block}>
-        <div className={sectionLabel}>Estimated value for this property</div>
-        <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
-          {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "Unavailable"}
+      {requiresUnitOnly ? (
+        <div className={block}>
+          <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+            Please enter a unit number to see specific valuation and sales history
+          </p>
         </div>
-        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
-      </div>
-
-      <div className={block}>
-        <div className={sectionLabel}>Last transaction</div>
-        <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-          {price != null && price > 0 ? (
-            <>
-              {formatCurrency(price, currencySymbol)}
-              {dateStr ? ` · ${dateStr}` : ""}
-            </>
-          ) : (
-            "No official sale recorded"
-          )}
-        </div>
-        {multiUnit ? (
-          <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
-            Transaction includes multiple units
+      ) : (
+        <>
+          <div className={block}>
+            <div className={sectionLabel}>Estimated value for this property</div>
+            <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
+              {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "Unavailable"}
+            </div>
+            <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
           </div>
-        ) : null}
-      </div>
 
-      <div className={block}>
-        <div className={sectionLabel}>Price per ft²</div>
-        <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-          {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "Unavailable"}
-        </div>
-        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
-      </div>
+          <div className={block}>
+            <div className={sectionLabel}>Last transaction</div>
+            <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+              {price != null && price > 0 ? (
+                <>
+                  {formatCurrency(price, currencySymbol)}
+                  {dateStr ? ` · ${dateStr}` : ""}
+                </>
+              ) : (
+                "No official sale recorded"
+              )}
+            </div>
+            {multiUnit ? (
+              <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
+                Transaction includes multiple units
+              </div>
+            ) : null}
+          </div>
+
+          <div className={block}>
+            <div className={sectionLabel}>Price per ft²</div>
+            <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+              {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "Unavailable"}
+            </div>
+            <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
+          </div>
+        </>
+      )}
 
       <div className={block}>
         <div className={sectionLabel}>Local market context</div>

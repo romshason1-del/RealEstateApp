@@ -26,6 +26,8 @@ export type PropertyValueCardProps = {
   position: { lat: number; lng: number };
   currencySymbol?: string;
   countryCode?: string;
+  /** NYC `/api/property-value` top-level `status` (e.g. requires_unit); usually derived from API JSON. */
+  status?: string;
   onClose: () => void;
   isSaved?: boolean;
   onToggleSave?: () => void;
@@ -379,6 +381,7 @@ export function PropertyValueCard({
   position,
   currencySymbol = "$",
   countryCode = "",
+  status: statusProp,
   onClose,
   isSaved = false,
   onToggleSave,
@@ -419,6 +422,11 @@ export function PropertyValueCard({
     refetchTrigger: aptSearchTrigger,
     postcode: isFR ? postcode : undefined,
   });
+
+  React.useEffect(() => {
+    if (!isUS || insightsData == null || typeof insightsData !== "object") return;
+    window.dispatchEvent(new CustomEvent("streetiq-us-property-value-raw", { detail: insightsData }));
+  }, [isUS, insightsData]);
 
   // Prevent France UI from flickering to an empty/no-data state while switching lots.
   // Keep rendering the last known "building/area" payload during loading.
@@ -646,6 +654,16 @@ export function PropertyValueCard({
   const availableLots = activeInsightsData && "available_lots" in activeInsightsData ? (activeInsightsData as { available_lots?: string[] }).available_lots : undefined;
   const averageBuildingValue = activeInsightsData && "average_building_value" in activeInsightsData ? (activeInsightsData as { average_building_value?: number }).average_building_value : undefined;
   const hasPropertyData = activeInsightsData?.address != null;
+  const isUsRequiresUnit =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    (activeInsightsData as { status?: string }).status === "requires_unit";
+  const resolvedStatus =
+    statusProp ??
+    (activeInsightsData && typeof activeInsightsData === "object"
+      ? (activeInsightsData as { status?: string }).status
+      : undefined);
   const hasUSData =
     isUS &&
     (activeInsightsData?.avm_value != null ||
@@ -657,7 +675,12 @@ export function PropertyValueCard({
         (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" &&
         (activeInsightsData as { success?: boolean }).success === true));
   const unitRequired = isUS && (activeInsightsData?.error === "UNIT_REQUIRED" || activeInsightsData?.debug?.unit_required === true);
-  const noDataAvailable = isUS && activeInsightsData?.message === "No Data Available" && !hasPropertyData && !unitRequired;
+  const noDataAvailable =
+    isUS &&
+    activeInsightsData?.message === "No Data Available" &&
+    !hasPropertyData &&
+    !unitRequired &&
+    !isUsRequiresUnit;
   const hasMatch = hasPropertyData && (activeInsightsData?.match_quality === "exact_building" || activeInsightsData?.match_quality === "nearby_building");
   const isNearbyBuilding = activeInsightsData?.match_quality === "nearby_building";
   const latest = activeInsightsData?.latest_transaction;
@@ -1252,7 +1275,7 @@ export function PropertyValueCard({
             <div className="text-[11px] text-zinc-500">
               {isLoading ? "Loading property data…" : "No DVF data for this area."}
             </div>
-          ) : !hasPropertyData && !ukLandRegistry ? (
+          ) : !hasPropertyData && !ukLandRegistry && !isUsRequiresUnit ? (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-amber-300/90">
                 <FileText className="size-3 shrink-0" aria-hidden />
@@ -1282,13 +1305,15 @@ export function PropertyValueCard({
           ) : isUS &&
             activeInsightsData &&
             typeof activeInsightsData === "object" &&
-            (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" ? (
+            (((activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth") ||
+              isUsRequiresUnit) ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <UsNycTruthPropertyCard
                 data={(nycTruthDisplay ?? activeInsightsData) as UsNycTruthCardData}
                 currencySymbol={currencySymbol}
-                apartmentFlowEnabled={usNycApartmentFlowEnabled}
-                showApartmentInput={usNycApartmentFlowEnabled && nycUnitSubmitted == null}
+                status={resolvedStatus}
+                apartmentFlowEnabled={!!(usNycApartmentFlowEnabled || isUsRequiresUnit)}
+                showApartmentInput={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && nycUnitSubmitted == null)}
                 apartmentDraft={nycUnitDraft}
                 onApartmentDraftChange={setNycUnitDraft}
                 onApartmentSearch={() => {

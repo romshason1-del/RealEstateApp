@@ -592,6 +592,16 @@ export const AddressExplorer = () => {
       debugCountryFromComponents: selectedBuilding.debugCountryFromComponents,
     });
   }, [selectedBuilding]);
+
+  React.useEffect(() => {
+    const handler = (ev: Event) => {
+      const ce = ev as CustomEvent<unknown>;
+      console.log("RAW API RESPONSE:", JSON.stringify(ce.detail, null, 2));
+    };
+    window.addEventListener("streetiq-us-property-value-raw", handler as EventListener);
+    return () => window.removeEventListener("streetiq-us-property-value-raw", handler as EventListener);
+  }, []);
+
   const { isLoaded, loadError } = useJsApiLoader({
     id: "streetiq-google-map",
     googleMapsApiKey: apiKey,
