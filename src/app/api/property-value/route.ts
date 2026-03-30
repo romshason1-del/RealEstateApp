@@ -578,7 +578,10 @@ export async function GET(request: NextRequest) {
     // CRITICAL: Pass through special statuses without adaptation
     if (usData.status === "commercial_property" || usData.status === "requires_unit") {
       console.log("[MAIN_ROUTE] final payload status =", usData?.status);
-      return NextResponse.json(usData, { status: 200 });
+      return NextResponse.json(
+        { ...(usData as Record<string, unknown>), status: usData?.status ?? null },
+        { status: 200 }
+      );
     }
 
     if (usRes.ok) {
@@ -587,9 +590,11 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
-      const finalPayload = adapted as Record<string, unknown>;
-      finalPayload.status = usData?.status ?? null;
-      console.log("[MAIN_ROUTE] final payload status =", finalPayload?.status);
+      const finalPayload: Record<string, unknown> = {
+        ...(adapted as Record<string, unknown>),
+        status: usData?.status ?? null,
+      };
+      console.log("[MAIN_ROUTE] final payload status =", finalPayload.status);
       if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
         const dbg = usData.us_nyc_debug as Record<string, unknown> | undefined;
         const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
@@ -625,7 +630,13 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json(omitUsNycDebugFromPayload(finalPayload), { status: 200 });
     }
-    return NextResponse.json(omitUsNycDebugFromPayload(usData as Record<string, unknown>), { status: usRes.status });
+    return NextResponse.json(
+      omitUsNycDebugFromPayload({
+        ...(usData as Record<string, unknown>),
+        status: usData?.status ?? null,
+      } as Record<string, unknown>),
+      { status: usRes.status }
+    );
   }
 
   if (isIL) {
