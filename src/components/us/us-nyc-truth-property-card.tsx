@@ -157,6 +157,7 @@ export function UsNycTruthPropertyCard({
 }: UsNycTruthPropertyCardProps) {
   const effectiveStatus = statusProp ?? data.status;
   const requiresUnitOnly = effectiveStatus === "requires_unit";
+  const commercialPropertyOnly = effectiveStatus === "commercial_property";
   const ev = data.estimated_value;
   const price = data.latest_sale_price;
   const dateStr = formatNycSaleDate(data.latest_sale_date ?? null);
@@ -179,6 +180,18 @@ export function UsNycTruthPropertyCard({
       onApartmentSearch?.();
     }
   };
+
+  if (commercialPropertyOnly) {
+    return (
+      <div className="space-y-1">
+        <div className={block}>
+          <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+            Commercial property — limited residential data available
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-1">

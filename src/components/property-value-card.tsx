@@ -659,6 +659,11 @@ export function PropertyValueCard({
     activeInsightsData &&
     typeof activeInsightsData === "object" &&
     (activeInsightsData as { status?: string }).status === "requires_unit";
+  const isUsCommercial =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    (activeInsightsData as { status?: string }).status === "commercial_property";
   const resolvedStatus =
     statusProp ??
     (activeInsightsData && typeof activeInsightsData === "object"
@@ -680,7 +685,8 @@ export function PropertyValueCard({
     activeInsightsData?.message === "No Data Available" &&
     !hasPropertyData &&
     !unitRequired &&
-    !isUsRequiresUnit;
+    !isUsRequiresUnit &&
+    !isUsCommercial;
   const hasMatch = hasPropertyData && (activeInsightsData?.match_quality === "exact_building" || activeInsightsData?.match_quality === "nearby_building");
   const isNearbyBuilding = activeInsightsData?.match_quality === "nearby_building";
   const latest = activeInsightsData?.latest_transaction;
@@ -1275,7 +1281,7 @@ export function PropertyValueCard({
             <div className="text-[11px] text-zinc-500">
               {isLoading ? "Loading property data…" : "No DVF data for this area."}
             </div>
-          ) : !hasPropertyData && !ukLandRegistry && !isUsRequiresUnit ? (
+          ) : !hasPropertyData && !ukLandRegistry && !isUsRequiresUnit && !isUsCommercial ? (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-amber-300/90">
                 <FileText className="size-3 shrink-0" aria-hidden />
@@ -1306,14 +1312,15 @@ export function PropertyValueCard({
             activeInsightsData &&
             typeof activeInsightsData === "object" &&
             (((activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth") ||
-              isUsRequiresUnit) ? (
+              isUsRequiresUnit ||
+              isUsCommercial) ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <UsNycTruthPropertyCard
                 data={(nycTruthDisplay ?? activeInsightsData) as UsNycTruthCardData}
                 currencySymbol={currencySymbol}
                 status={resolvedStatus}
-                apartmentFlowEnabled={!!(usNycApartmentFlowEnabled || isUsRequiresUnit)}
-                showApartmentInput={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && nycUnitSubmitted == null)}
+                apartmentFlowEnabled={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial)}
+                showApartmentInput={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial && nycUnitSubmitted == null)}
                 apartmentDraft={nycUnitDraft}
                 onApartmentDraftChange={setNycUnitDraft}
                 onApartmentSearch={() => {

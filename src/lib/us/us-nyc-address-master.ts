@@ -61,13 +61,15 @@ SELECT
   normalized_address,
   unitstotal,
   bbl,
-  zmcode
+  zmcode,
+  bldgclass
 FROM (
   SELECT
     m.normalized_address AS normalized_address,
     m.unitstotal AS unitstotal,
     m.bbl AS bbl,
     m.zipcode AS zmcode,
+    m.bldgclass AS bldgclass,
     ROW_NUMBER() OVER (
       ORDER BY CASE WHEN m.source = 'PLUTO' THEN 0 ELSE 1 END, m.unitstotal DESC NULLS LAST
     ) AS rn
@@ -91,6 +93,7 @@ LIMIT 25
 export type BuildingTruthFromMasterResult =
   | {
       requiresUnit: true;
+      isCommercial: false;
       message: string;
       buildingData: {
         address: string;
@@ -99,7 +102,7 @@ export type BuildingTruthFromMasterResult =
         zmcode?: string | null;
       };
     }
-  | { requiresUnit: false; fullAddresses: string[] };
+  | { requiresUnit: false; fullAddresses: string[]; isCommercial: boolean };
 
 function numOrNull(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -137,7 +140,7 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
   unitNumber?: string | null
 ): Promise<BuildingTruthFromMasterResult> {
   const n = normalizedMasterLine.trim();
-  if (!n) return { requiresUnit: false, fullAddresses: [] };
+  if (!n) return { requiresUnit: false, fullAddresses: [], isCommercial: false };
 
   const unitTrim = typeof unitNumber === "string" ? unitNumber.trim() : "";
 
@@ -146,6 +149,7 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
     unitstotal?: unknown;
     bbl?: unknown;
     zmcode?: unknown;
+    bldgclass?: unknown;
   };
   let row: MasterGateRow | null = null;
 
@@ -161,14 +165,21 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
     row = null;
   }
 
+  const bldgclassStr = row?.bldgclass != null && String(row.bldgclass).trim() !== "" ? String(row.bldgclass) : "";
+  const commercialPrefixes = ["O", "C", "K"];
+  const isCommercial = commercialPrefixes.some((p) => bldgclassStr.toUpperCase().startsWith(p));
+
   const ut = row != null ? numOrNull(row.unitstotal) : null;
   const bblStr = row?.bbl != null && row.bbl !== "" ? String(row.bbl) : null;
   const zm = row?.zmcode != null && row.zmcode !== "" ? String(row.zmcode) : null;
   const normAddr = row?.normalized_address != null ? String(row.normalized_address) : n;
 
-  if (ut != null && ut > 1 && !unitTrim) {
+  const requiresUnit = ut != null && ut > 1 && !unitTrim && !isCommercial;
+
+  if (requiresUnit) {
     return {
       requiresUnit: true,
+      isCommercial: false,
       message: "Please enter a unit number to see specific valuation and sales history",
       buildingData: {
         address: normAddr,
@@ -180,7 +191,7 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
   }
 
   const fullAddresses = await queryFullAddressesForNormalizedKey(client, n);
-  return { requiresUnit: false, fullAddresses };
+  return { requiresUnit: false, fullAddresses, isCommercial };
 }
 
 const UNIT_FROM_MASTER_SQL = `

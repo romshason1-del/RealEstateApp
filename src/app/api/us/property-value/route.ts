@@ -116,6 +116,18 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       masterNorm,
       combinedUnit
     );
+    if (masterGate.isCommercial) {
+      return NextResponse.json(
+        {
+          status: "commercial_property",
+          message: "Commercial property — limited residential data available",
+          property: null,
+          valuation: null,
+          lastTransaction: null,
+        },
+        { status: 200 }
+      );
+    }
     if (masterGate.requiresUnit) {
       return NextResponse.json(
         {

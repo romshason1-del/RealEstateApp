@@ -518,6 +518,9 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
+      if (typeof data.status === "string") {
+        (adapted as Record<string, unknown>).status = data.status;
+      }
       if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
         const dbg = data.us_nyc_debug as Record<string, unknown> | undefined;
         const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
