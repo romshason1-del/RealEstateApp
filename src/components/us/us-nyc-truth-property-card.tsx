@@ -164,15 +164,20 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     onCheckAnotherApartment,
   } = props;
   const effectiveStatus = statusProp ?? data.status;
-  const requiresUnitOnly = effectiveStatus === "requires_unit";
+  const ev = data.estimated_value;
+  /** Full NYC card when API says success or omitted status but value row exists. */
+  const treatAsSuccessWithData =
+    effectiveStatus === "success" ||
+    ((effectiveStatus == null || effectiveStatus === "") && ev != null);
+  const requiresUnitOnly = effectiveStatus === "requires_unit" && !treatAsSuccessWithData;
   const commercialPropertyOnly =
     isCommercialProp === true || effectiveStatus === "commercial_property";
   const showCommercialOnlyMessage =
-    commercialPropertyOnly ||
-    ((effectiveStatus == null || effectiveStatus === "") &&
-      !!(submittedApartment ?? "").trim() &&
-      !apartmentSearchInFlight);
-  const ev = data.estimated_value;
+    !treatAsSuccessWithData &&
+    (commercialPropertyOnly ||
+      ((effectiveStatus == null || effectiveStatus === "") &&
+        !!(submittedApartment ?? "").trim() &&
+        !apartmentSearchInFlight));
   const price = data.latest_sale_price;
   const dateStr = formatNycSaleDate(data.latest_sale_date ?? null);
   const ppsf = data.price_per_sqft;

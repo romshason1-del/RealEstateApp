@@ -215,7 +215,11 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       }
     }
 
-    return NextResponse.json(omitUsNycDebugFromPayload({ ...response, us_nyc_debug: debugOut } as Record<string, unknown>), {
+    const responseOut = { ...response, us_nyc_debug: debugOut } as Record<string, unknown>;
+    if (!responseOut.status && responseOut.estimated_value != null) {
+      responseOut.status = "success";
+    }
+    return NextResponse.json(omitUsNycDebugFromPayload(responseOut), {
       status: 200,
     });
   } catch (e) {

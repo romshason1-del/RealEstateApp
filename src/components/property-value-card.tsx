@@ -605,6 +605,25 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     return undefined;
   }, [isUS, activeInsightsData, nycUnitApplyPayload]);
 
+  const usNycHasEstimatedValue =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    (activeInsightsData as { estimated_value?: number | null }).estimated_value != null;
+
+  /** Align with US route: null/empty status + estimated_value ⇒ treat as success for UI. */
+  const usNycDisplayStatusResolved = React.useMemo(() => {
+    if (!isUS) return undefined;
+    if (usNycMergedStatus === "success") return "success";
+    if (
+      usNycHasEstimatedValue &&
+      (usNycMergedStatus == null || usNycMergedStatus === "")
+    ) {
+      return "success";
+    }
+    return usNycMergedStatus;
+  }, [isUS, usNycMergedStatus, usNycHasEstimatedValue]);
+
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
     return window.matchMedia?.("(max-width: 640px)")?.matches ?? window.innerWidth <= 640;
@@ -673,11 +692,14 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
   const availableLots = activeInsightsData && "available_lots" in activeInsightsData ? (activeInsightsData as { available_lots?: string[] }).available_lots : undefined;
   const averageBuildingValue = activeInsightsData && "average_building_value" in activeInsightsData ? (activeInsightsData as { average_building_value?: number }).average_building_value : undefined;
   const hasPropertyData = activeInsightsData?.address != null;
-  const isUsRequiresUnit = isUS && usNycMergedStatus === "requires_unit";
+  const isUsRequiresUnit =
+    isUS &&
+    usNycMergedStatus === "requires_unit" &&
+    usNycDisplayStatusResolved !== "success";
   const isUsCommercial = isUS && usNycMergedStatus === "commercial_property";
   const resolvedStatus =
     statusProp ??
-    (isUS ? usNycMergedStatus : undefined) ??
+    (isUS ? usNycDisplayStatusResolved : undefined) ??
     (activeInsightsData && typeof activeInsightsData === "object"
       ? (activeInsightsData as { status?: string }).status
       : undefined);
@@ -900,7 +922,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
 
   const data = insightsData;
   const apiStatus = isUS
-    ? (usNycMergedStatus ?? (insightsData as { status?: string } | null | undefined)?.status)
+    ? (usNycDisplayStatusResolved ?? (insightsData as { status?: string } | null | undefined)?.status)
     : (insightsData as { status?: string } | null | undefined)?.status;
   console.log("[PROPERTY_CARD] received status:", apiStatus);
 
