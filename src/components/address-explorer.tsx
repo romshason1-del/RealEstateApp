@@ -596,8 +596,9 @@ export const AddressExplorer = () => {
   React.useEffect(() => {
     const handler = (ev: Event) => {
       const ce = ev as CustomEvent<unknown>;
-      const detail = ce.detail as { status?: string } | undefined;
-      console.log("[STREETIQ DEBUG] API response status:", detail?.status);
+      const data = ce.detail;
+      console.log("[GATE DEBUG] masterGate result:", JSON.stringify(data));
+      console.log("[STREETIQ DEBUG] API response status:", (data as { status?: string } | undefined)?.status);
     };
     window.addEventListener("streetiq-us-property-value-raw", handler as EventListener);
     return () => window.removeEventListener("streetiq-us-property-value-raw", handler as EventListener);

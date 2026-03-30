@@ -23,6 +23,14 @@ import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 import { emptyFranceResponse, type FrancePropertyResponse } from "@/lib/france-response-contract";
 import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
 import { omitUsNycDebugFromPayload } from "@/lib/us/us-nyc-api-response-debug";
+import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
+import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
+import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
+import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
+import {
+  normalizeNycAddressMasterV1Line,
+  queryBuildingTruthFullAddressesFromAddressMaster,
+} from "@/lib/us/us-nyc-address-master";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -506,10 +514,63 @@ export async function GET(request: NextRequest) {
     if (!usAddress) {
       return NextResponse.json({ message: "address is required", error: "INVALID_INPUT" }, { status: 400 });
     }
+
+    const unitOrLot = (searchParams.get("unit_or_lot") ?? "").trim();
+    const unitFromParam = (searchParams.get("unit") ?? "").trim();
+    const combinedUnit = (unitFromParam || unitOrLot) || null;
+
+    if (isUSBigQueryConfigured()) {
+      const { line } = normalizeUSAddressLine(usAddress);
+      if (line) {
+        const norm = buildNycTruthLookupNormalizationDebug(line);
+        if (norm) {
+          try {
+            const client = getUSBigQueryClient();
+            const masterLine =
+              norm.normalized_building_address.trim() ||
+              norm.normalized_full_address.split(",")[0]?.replace(/\s+/g, " ").trim() ||
+              "";
+            const masterNorm = normalizeNycAddressMasterV1Line(masterLine);
+            const masterGate = await queryBuildingTruthFullAddressesFromAddressMaster(
+              client,
+              masterNorm,
+              combinedUnit
+            );
+            if (masterGate.isCommercial) {
+              return NextResponse.json(
+                {
+                  status: "commercial_property",
+                  message: "Commercial property — limited residential data available",
+                  property: null,
+                  valuation: null,
+                  lastTransaction: null,
+                },
+                { status: 200 }
+              );
+            }
+            if (masterGate.requiresUnit) {
+              return NextResponse.json(
+                {
+                  status: "requires_unit",
+                  message: "Please enter a unit number to see specific valuation and sales history",
+                  property: null,
+                  valuation: null,
+                  lastTransaction: null,
+                },
+                { status: 200 }
+              );
+            }
+          } catch {
+            /* fall through to /api/us/property-value */
+          }
+        }
+      }
+    }
+
     const usUrl = new URL("/api/us/property-value", request.nextUrl.origin);
     usUrl.searchParams.set("address", usAddress);
-    const unitOrLot = (searchParams.get("unit_or_lot") ?? "").trim();
     if (unitOrLot) usUrl.searchParams.set("unit_or_lot", unitOrLot);
+    if (unitFromParam) usUrl.searchParams.set("unit", unitFromParam);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const data = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
     if (usRes.ok) {
