@@ -256,6 +256,9 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               {apartmentSearchInFlight ? "…" : "Apply"}
             </button>
           </div>
+          {apartmentSearchInFlight ? (
+            <p className="mt-1.5 text-[8px] leading-tight text-zinc-500">Searching…</p>
+          ) : null}
         </div>
       ) : null}
 

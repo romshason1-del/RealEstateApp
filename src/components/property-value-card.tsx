@@ -1005,6 +1005,9 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                   {nycUnitApplyLoading || isLoading ? "…" : "Apply"}
                 </button>
               </div>
+              {nycUnitApplyLoading ? (
+                <p className="mt-1.5 text-[8px] leading-tight text-zinc-500">Searching…</p>
+              ) : null}
               {nycUnitApplyError ? <p className="text-[9px] text-amber-400/90">{nycUnitApplyError}</p> : null}
             </div>
           ) : unitRequired ? (
