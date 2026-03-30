@@ -139,6 +139,7 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
   normalizedMasterLine: string,
   unitNumber?: string | null
 ): Promise<BuildingTruthFromMasterResult> {
+  console.log("[MASTER_GATE_CALLED] masterNorm:", normalizedMasterLine);
   const n = normalizedMasterLine.trim();
   if (!n) return { requiresUnit: false, fullAddresses: [], isCommercial: false };
 

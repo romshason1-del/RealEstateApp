@@ -36,6 +36,7 @@ function logUsNycDebug(label: string, payload: object): void {
 }
 
 async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitParamRaw?: string | null) {
+  console.log("[STREETIQ_FORCE_CHECK] handle() called, address:", addressRaw);
   const { line } = normalizeUSAddressLine(addressRaw);
   if (!line) {
     const empty = createEmptyUSNYCApiTruthResponse({
