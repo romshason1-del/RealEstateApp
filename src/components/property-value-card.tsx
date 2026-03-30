@@ -556,6 +556,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     setNycUnitApplyLoading(true);
     setNycUnitApplyError(null);
     try {
+      console.log("[UNIT_FETCH_TRIGGERED] address:", addressForApi.trim(), "unit:", t);
       const params = new URLSearchParams();
       params.set("address", addressForApi.trim());
       params.set("countryCode", "US");
@@ -585,9 +586,24 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     isUS &&
     activeInsightsData &&
     typeof activeInsightsData === "object" &&
-    (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth"
+    ((activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" ||
+      (activeInsightsData as { status?: string }).status === "requires_unit" ||
+      (activeInsightsData as { status?: string }).status === "commercial_property")
       ? (nycUnitApplyPayload ?? (activeInsightsData as Record<string, unknown>))
       : null;
+
+  /** Prefer Apply response status so UI leaves requires_unit after unit submit. */
+  const usNycMergedStatus = React.useMemo(() => {
+    if (!isUS) return undefined;
+    if (nycUnitApplyPayload && typeof nycUnitApplyPayload === "object") {
+      const st = (nycUnitApplyPayload as { status?: string }).status;
+      if (typeof st === "string") return st;
+    }
+    if (activeInsightsData && typeof activeInsightsData === "object") {
+      return (activeInsightsData as { status?: string }).status;
+    }
+    return undefined;
+  }, [isUS, activeInsightsData, nycUnitApplyPayload]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -657,18 +673,11 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
   const availableLots = activeInsightsData && "available_lots" in activeInsightsData ? (activeInsightsData as { available_lots?: string[] }).available_lots : undefined;
   const averageBuildingValue = activeInsightsData && "average_building_value" in activeInsightsData ? (activeInsightsData as { average_building_value?: number }).average_building_value : undefined;
   const hasPropertyData = activeInsightsData?.address != null;
-  const isUsRequiresUnit =
-    isUS &&
-    activeInsightsData &&
-    typeof activeInsightsData === "object" &&
-    (activeInsightsData as { status?: string }).status === "requires_unit";
-  const isUsCommercial =
-    isUS &&
-    activeInsightsData &&
-    typeof activeInsightsData === "object" &&
-    (activeInsightsData as { status?: string }).status === "commercial_property";
+  const isUsRequiresUnit = isUS && usNycMergedStatus === "requires_unit";
+  const isUsCommercial = isUS && usNycMergedStatus === "commercial_property";
   const resolvedStatus =
     statusProp ??
+    (isUS ? usNycMergedStatus : undefined) ??
     (activeInsightsData && typeof activeInsightsData === "object"
       ? (activeInsightsData as { status?: string }).status
       : undefined);
@@ -1367,6 +1376,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <UsNycTruthPropertyCard
                 data={(nycTruthDisplay ?? activeInsightsData) as UsNycTruthCardData}
+                addressForFetch={addressForApi}
                 currencySymbol={currencySymbol}
                 status={resolvedStatus}
                 apartmentFlowEnabled={!!((usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial)}

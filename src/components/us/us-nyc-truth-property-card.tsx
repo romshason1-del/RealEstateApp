@@ -118,6 +118,8 @@ function nycPricesMatchForAcris(a: number | null | undefined, b: number | null |
 export type UsNycTruthPropertyCardProps = {
   data: UsNycTruthCardData;
   currencySymbol: string;
+  /** Address sent to `/api/property-value` (for debug logs on unit apply). */
+  addressForFetch?: string;
   /** Optional; falls back to `data.status`. */
   status?: string;
   /** Apartment prompt + CTA only when main API sets `should_prompt_for_unit`. */
@@ -143,10 +145,10 @@ const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
  */
 export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
-  console.log("[CARD_PROPS_FULL]", JSON.stringify(props).substring(0, 500));
   const {
     data,
     currencySymbol,
+    addressForFetch,
     status: statusProp,
     apartmentFlowEnabled,
     showApartmentInput = false,
@@ -181,6 +183,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
       e.preventDefault();
       const unitValue = apartmentDraft.trim();
       console.log("[UNIT_SUBMIT] unit value:", unitValue);
+      console.log("[UNIT_FETCH_TRIGGERED] address:", addressForFetch ?? "", "unit:", unitValue);
       onApartmentSearch?.();
     }
   };
@@ -249,6 +252,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               onClick={() => {
                 const unitValue = apartmentDraft.trim();
                 console.log("[UNIT_SUBMIT] unit value:", unitValue);
+                console.log("[UNIT_FETCH_TRIGGERED] address:", addressForFetch ?? "", "unit:", unitValue);
                 onApartmentSearch?.();
               }}
               className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"

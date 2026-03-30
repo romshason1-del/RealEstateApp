@@ -118,6 +118,7 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       masterNorm,
       null
     );
+    console.log("[COMMERCIAL_CHECK]", masterGateBuilding.isCommercial, masterGateBuilding);
     if (masterGateBuilding.isCommercial) {
       console.log("[GATE DEBUG] isCommercial=true, bldgclass=", masterGateBuilding.bldgclass);
       return NextResponse.json(
@@ -137,6 +138,19 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       masterNorm,
       combinedUnit
     );
+    console.log("[COMMERCIAL_CHECK]", masterGate.isCommercial, masterGate);
+    if (masterGate.isCommercial) {
+      return NextResponse.json(
+        {
+          status: "commercial_property",
+          message: "Commercial property — limited residential data available",
+          property: null,
+          valuation: null,
+          lastTransaction: null,
+        },
+        { status: 200 }
+      );
+    }
     if (masterGate.requiresUnit) {
       return NextResponse.json(
         {
