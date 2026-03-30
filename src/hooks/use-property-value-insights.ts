@@ -57,7 +57,7 @@ export function usePropertyValueInsights(
       ...(opts?.selectedFormattedAddress != null ? { selectedFormattedAddress: opts.selectedFormattedAddress } : {}),
       ...((opts?.aptNumber ?? "").toString().trim() ? { aptNumber: (opts?.aptNumber ?? "").toString().trim() } : {}),
       ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),
-      ...(cc === "US" && (opts?.unitOrLot ?? "").trim() ? { unitOrLot: (opts.unitOrLot ?? "").trim() } : {}),
+      ...(cc === "US" && (opts?.unitOrLot ?? "").trim() ? { unitOrLot: (opts?.unitOrLot ?? "").trim() } : {}),
       signal: abortRef.current.signal,
     };
     const aptSent = (fetchOpts as { aptNumber?: string }).aptNumber ?? "";
