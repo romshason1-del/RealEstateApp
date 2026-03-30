@@ -37,6 +37,9 @@ export function normalizeNycAddressMasterV1Line(raw: string): string {
   let s = input.replace(/\s+/g, " ").trim();
   if (!s) return "";
   const pairs: [RegExp, string][] = [
+    [/\bCENTRAL PRK\b/g, "CENTRAL PARK"],
+    [/ PRK /g, " PARK "],
+    [/ PRK$/g, " PARK"],
     [/\bSTREET\b/g, "ST"],
     [/\bAVENUE\b/g, "AVE"],
     [/\bBOULEVARD\b/g, "BLVD"],
