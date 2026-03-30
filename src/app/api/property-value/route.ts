@@ -576,11 +576,9 @@ export async function GET(request: NextRequest) {
 
     // CRITICAL: Pass through special statuses without adaptation
     if (usData.status === "commercial_property" || usData.status === "requires_unit") {
-      console.log("[MAIN_ROUTE] final payload status =", usData?.status);
-      return NextResponse.json(
-        { ...(usData as Record<string, unknown>), status: usData?.status ?? null },
-        { status: 200 }
-      );
+      const passthrough = { ...(usData as Record<string, unknown>), status: usData?.status ?? null };
+      console.log("[MAIN_ROUTE] final status being sent to client:", passthrough?.status);
+      return NextResponse.json(passthrough, { status: 200 });
     }
 
     if (usRes.ok) {
@@ -589,17 +587,20 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
-      console.log("[MAIN_ROUTE] usData.status =", usData?.status);
-      console.log("[MAIN_ROUTE] adapted.status =", (adapted as Record<string, unknown>)?.status);
-      const finalPayload: Record<string, unknown> = {
-        ...(adapted as Record<string, unknown>),
-        status: usData?.status ?? (adapted as Record<string, unknown>)?.status ?? null,
-      };
-      console.log("[MAIN_ROUTE] finalPayload.status =", finalPayload?.status);
+      const adaptedPayload: Record<string, unknown> = { ...(adapted as Record<string, unknown>) };
+
+      // Passthrough critical status flags from US route
+      const criticalStatus = usData?.status ?? adaptedPayload?.status ?? null;
+      if (criticalStatus === "commercial_property" || criticalStatus === "requires_unit") {
+        adaptedPayload.status = criticalStatus;
+      } else {
+        adaptedPayload.status = usData?.status ?? adaptedPayload.status ?? null;
+      }
+
       if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
         const dbg = usData.us_nyc_debug as Record<string, unknown> | undefined;
         const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
-        const pr = finalPayload.property_result as Record<string, unknown> | undefined;
+        const pr = adaptedPayload.property_result as Record<string, unknown> | undefined;
         const raw = usData as Record<string, unknown>;
         try {
           console.log(
@@ -613,8 +614,8 @@ export async function GET(request: NextRequest) {
               building_type: row?.building_type ?? null,
               unit_count: row?.unit_count ?? null,
               nyc_pending_unit_prompt: raw.nyc_pending_unit_prompt ?? null,
-              should_prompt_for_unit: finalPayload.should_prompt_for_unit ?? null,
-              unit_prompt_reason: finalPayload.unit_prompt_reason ?? null,
+              should_prompt_for_unit: adaptedPayload.should_prompt_for_unit ?? null,
+              unit_prompt_reason: adaptedPayload.unit_prompt_reason ?? null,
               unit_lookup_status: raw.unit_lookup_status ?? null,
               nyc_final_match_level: raw.nyc_final_match_level ?? null,
               nyc_final_transaction_match_level: raw.nyc_final_transaction_match_level ?? null,
@@ -629,15 +630,18 @@ export async function GET(request: NextRequest) {
           /* ignore */
         }
       }
-      return NextResponse.json(omitUsNycDebugFromPayload(finalPayload), { status: 200 });
+      console.log("[MAIN_ROUTE] final status being sent to client:", adaptedPayload?.status);
+      return NextResponse.json(omitUsNycDebugFromPayload(adaptedPayload), { status: 200 });
     }
-    return NextResponse.json(
-      omitUsNycDebugFromPayload({
-        ...(usData as Record<string, unknown>),
-        status: usData?.status ?? null,
-      } as Record<string, unknown>),
-      { status: usRes.status }
-    );
+    const errorPayload: Record<string, unknown> = { ...(usData as Record<string, unknown>) };
+    const criticalStatusErr = usData?.status ?? errorPayload.status ?? null;
+    if (criticalStatusErr === "commercial_property" || criticalStatusErr === "requires_unit") {
+      errorPayload.status = criticalStatusErr;
+    } else {
+      errorPayload.status = usData?.status ?? errorPayload.status ?? null;
+    }
+    console.log("[MAIN_ROUTE] final status being sent to client:", errorPayload?.status);
+    return NextResponse.json(omitUsNycDebugFromPayload(errorPayload), { status: usRes.status });
   }
 
   if (isIL) {
