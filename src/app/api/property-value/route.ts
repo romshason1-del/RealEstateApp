@@ -573,7 +573,6 @@ export async function GET(request: NextRequest) {
     if (unitFromParam) usUrl.searchParams.set("unit", unitFromParam);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const usData = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
-    console.log("[MAIN_ROUTE] usData.status =", usData?.status);
 
     // CRITICAL: Pass through special statuses without adaptation
     if (usData.status === "commercial_property" || usData.status === "requires_unit") {
@@ -590,11 +589,13 @@ export async function GET(request: NextRequest) {
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
+      console.log("[MAIN_ROUTE] usData.status =", usData?.status);
+      console.log("[MAIN_ROUTE] adapted.status =", (adapted as Record<string, unknown>)?.status);
       const finalPayload: Record<string, unknown> = {
         ...(adapted as Record<string, unknown>),
-        status: usData?.status ?? null,
+        status: usData?.status ?? (adapted as Record<string, unknown>)?.status ?? null,
       };
-      console.log("[MAIN_ROUTE] final payload status =", finalPayload.status);
+      console.log("[MAIN_ROUTE] finalPayload.status =", finalPayload?.status);
       if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
         const dbg = usData.us_nyc_debug as Record<string, unknown> | undefined;
         const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
