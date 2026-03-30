@@ -241,6 +241,7 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
       outStreet.us_nyc_debug = { ...priorDebug, acris_debug: skippedAcrisDebug, dob_debug: skippedDobDebug };
     }
     ensureNycUnitFieldsOnPayload(outStreet);
+    outStreet.status = us.status ?? null;
     return outStreet;
   }
 
@@ -511,5 +512,6 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   }
 
   ensureNycUnitFieldsOnPayload(out);
+  out.status = us.status ?? null;
   return out;
 }
