@@ -116,6 +116,7 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       masterNorm,
       combinedUnit
     );
+    console.log("[GATE DEBUG]", JSON.stringify(masterGate));
     if (masterGate.isCommercial) {
       return NextResponse.json(
         {
