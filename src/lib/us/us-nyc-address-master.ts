@@ -106,6 +106,7 @@ export type BuildingTruthFromMasterResult =
       requiresUnit: false;
       fullAddresses: string[];
       isCommercial: boolean;
+      /** Present when row had bldgclass (for gates/logging). */
       bldgclass?: string | null;
     };
 
@@ -175,17 +176,17 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
 
   console.log("[GATE DEBUG] bldgclass=", row?.bldgclass, "unitstotal=", row?.unitstotal);
 
+  const bldgClassStr = (row?.bldgclass ?? "").toString();
+  // Always evaluate from PLUTO bldgclass — independent of whether a unit was submitted.
   const commercialPrefixes = ["O", "C", "K"];
-  const isCommercial = commercialPrefixes.some((p) =>
-    (row?.bldgclass ?? "").toString().toUpperCase().startsWith(p)
-  );
+  const isCommercial = commercialPrefixes.some((p) => bldgClassStr.toUpperCase().startsWith(p));
 
   if (isCommercial) {
     return {
       requiresUnit: false,
       isCommercial: true,
       fullAddresses: [],
-      bldgclass: (row?.bldgclass as string) ?? null,
+      bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
     };
   }
 
@@ -211,7 +212,12 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
   }
 
   const fullAddresses = await queryFullAddressesForNormalizedKey(client, n);
-  return { requiresUnit: false, fullAddresses, isCommercial };
+  return {
+    requiresUnit: false,
+    fullAddresses,
+    isCommercial: false,
+    bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
+  };
 }
 
 const UNIT_FROM_MASTER_SQL = `

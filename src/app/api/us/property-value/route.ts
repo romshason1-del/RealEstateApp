@@ -112,33 +112,17 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       "";
     const masterNorm = normalizeNycAddressMasterV1Line(masterLine);
 
-    // Building-level gate (no unit): commercial must be detected on every request, including after unit submit.
-    const masterGateBuilding = await queryBuildingTruthFullAddressesFromAddressMaster(
-      client,
-      masterNorm,
-      null
-    );
-    console.log("[COMMERCIAL_CHECK]", masterGateBuilding.isCommercial, masterGateBuilding);
-    if (masterGateBuilding.isCommercial) {
-      console.log("[GATE DEBUG] isCommercial=true, bldgclass=", masterGateBuilding.bldgclass);
-      return NextResponse.json(
-        {
-          status: "commercial_property",
-          message: "Commercial property — limited residential data available",
-          property: null,
-          valuation: null,
-          lastTransaction: null,
-        },
-        { status: 200 }
-      );
-    }
-
+    // Single master gate (includes combined unit): commercial must run on every request, including after unit submit.
     const masterGate = await queryBuildingTruthFullAddressesFromAddressMaster(
       client,
       masterNorm,
       combinedUnit
     );
-    console.log("[COMMERCIAL_CHECK]", masterGate.isCommercial, masterGate);
+    console.log(
+      "[COMMERCIAL_CHECK]",
+      masterGate.isCommercial,
+      "bldgclass" in masterGate ? masterGate.bldgclass : undefined
+    );
     if (masterGate.isCommercial) {
       return NextResponse.json(
         {

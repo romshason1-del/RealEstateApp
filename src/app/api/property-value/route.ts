@@ -642,6 +642,7 @@ export async function GET(request: NextRequest) {
           /* ignore */
         }
       }
+      if (usData?.status) adaptedPayload.status = usData.status;
       console.log("[MAIN_ROUTE] final status being sent to client:", adaptedPayload?.status);
       return NextResponse.json(omitUsNycDebugFromPayload(adaptedPayload), { status: 200 });
     }
