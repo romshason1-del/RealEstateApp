@@ -572,35 +572,28 @@ export async function GET(request: NextRequest) {
     if (unitOrLot) usUrl.searchParams.set("unit_or_lot", unitOrLot);
     if (unitFromParam) usUrl.searchParams.set("unit", unitFromParam);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
-    const usResponse = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
-    const statusValue = usResponse.status;
-    if (statusValue === "commercial_property" || statusValue === "requires_unit") {
-      console.log("[MAIN_ROUTE_PASSTHROUGH] status detected:", statusValue);
-      return NextResponse.json(
-        {
-          status: statusValue,
-          message: typeof usResponse.message === "string" ? usResponse.message : "",
-          property: null,
-          valuation: null,
-          lastTransaction: null,
-        },
-        { status: 200 }
-      );
+    const usData = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
+    console.log("[MAIN_ROUTE] usData.status =", usData.status);
+
+    // CRITICAL: Pass through special statuses without adaptation
+    if (usData.status === "commercial_property" || usData.status === "requires_unit") {
+      return NextResponse.json(usData, { status: 200 });
     }
+
     if (usRes.ok) {
-      const adapted = await adaptUsNycTruthJsonForMainPropertyValueRoute(usResponse, {
+      const adapted = await adaptUsNycTruthJsonForMainPropertyValueRoute(usData, {
         city: city.trim(),
         street: street.trim(),
         houseNumber: houseNumber.trim(),
       });
-      if (typeof usResponse.status === "string") {
-        (adapted as Record<string, unknown>).status = usResponse.status;
+      if (typeof usData.status === "string") {
+        (adapted as Record<string, unknown>).status = usData.status;
       }
       if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
-        const dbg = usResponse.us_nyc_debug as Record<string, unknown> | undefined;
+        const dbg = usData.us_nyc_debug as Record<string, unknown> | undefined;
         const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
         const pr = adapted.property_result as Record<string, unknown> | undefined;
-        const raw = usResponse as Record<string, unknown>;
+        const raw = usData as Record<string, unknown>;
         try {
           console.log(
             "[NYC_PROPERTY_VALUE_FIELDS]",
@@ -631,7 +624,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json(omitUsNycDebugFromPayload(adapted as Record<string, unknown>), { status: 200 });
     }
-    return NextResponse.json(omitUsNycDebugFromPayload(usResponse as Record<string, unknown>), { status: usRes.status });
+    return NextResponse.json(omitUsNycDebugFromPayload(usData as Record<string, unknown>), { status: usRes.status });
   }
 
   if (isIL) {
