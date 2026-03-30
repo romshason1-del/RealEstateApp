@@ -102,7 +102,12 @@ export type BuildingTruthFromMasterResult =
         zmcode?: string | null;
       };
     }
-  | { requiresUnit: false; fullAddresses: string[]; isCommercial: boolean };
+  | {
+      requiresUnit: false;
+      fullAddresses: string[];
+      isCommercial: boolean;
+      bldgclass?: string | null;
+    };
 
 function numOrNull(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -166,16 +171,28 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
     row = null;
   }
 
-  const bldgclassStr = row?.bldgclass != null && String(row.bldgclass).trim() !== "" ? String(row.bldgclass) : "";
+  console.log("[GATE DEBUG] bldgclass=", row?.bldgclass, "unitstotal=", row?.unitstotal);
+
   const commercialPrefixes = ["O", "C", "K"];
-  const isCommercial = commercialPrefixes.some((p) => bldgclassStr.toUpperCase().startsWith(p));
+  const isCommercial = commercialPrefixes.some((p) =>
+    (row?.bldgclass ?? "").toString().toUpperCase().startsWith(p)
+  );
+
+  if (isCommercial) {
+    return {
+      requiresUnit: false,
+      isCommercial: true,
+      fullAddresses: [],
+      bldgclass: row?.bldgclass ?? null,
+    };
+  }
 
   const ut = row != null ? numOrNull(row.unitstotal) : null;
   const bblStr = row?.bbl != null && row.bbl !== "" ? String(row.bbl) : null;
   const zm = row?.zmcode != null && row.zmcode !== "" ? String(row.zmcode) : null;
   const normAddr = row?.normalized_address != null ? String(row.normalized_address) : n;
 
-  const requiresUnit = ut != null && ut > 1 && !unitTrim && !isCommercial;
+  const requiresUnit = ut != null && ut > 1 && !unitTrim;
 
   if (requiresUnit) {
     return {
