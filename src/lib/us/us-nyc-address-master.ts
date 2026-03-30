@@ -18,6 +18,22 @@ const NYC_BQ_LOCATION = "EU";
  */
 export function normalizeNycAddressMasterV1Line(raw: string): string {
   let input = raw.split(",")[0].trim().toUpperCase();
+  // Street name alias corrections (Google Autocomplete variants)
+  const streetAliases: Record<string, string> = {
+    "CENTRAL PRK": "CENTRAL PARK",
+    "CENT PARK": "CENTRAL PARK",
+    "CPW": "CENTRAL PARK W",
+    "AVE OF AMERICAS": "6 AVE",
+    "AVENUE OF THE AMERICAS": "6 AVE",
+    "LENOX AVE": "MALCOLM X BLVD",
+    "6TH AVE": "6 AVE",
+  };
+  for (const [alias, correct] of Object.entries(streetAliases)) {
+    if (input.includes(alias)) {
+      input = input.replace(alias, correct);
+      break;
+    }
+  }
   let s = input.replace(/\s+/g, " ").trim();
   if (!s) return "";
   const pairs: [RegExp, string][] = [
