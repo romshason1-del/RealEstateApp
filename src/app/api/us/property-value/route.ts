@@ -1,6 +1,7 @@
 /**
  * US property value API (isolated route).
  * NYC: BigQuery precomputed `us_nyc_card_output_v5` + `us_nyc_last_transaction_engine_v3` (exact `full_address`).
+ * Candidate hints may prepend rows from `us_nyc_address_master_v1` (see `scripts/us/nyc/sql/build-us-nyc-address-master-v1.sql`).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -112,9 +113,12 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
           JSON.stringify({
             route: "us_property_value",
             address_searched: addressRaw,
+            address_master_normalized: debug.address_master_normalized ?? null,
+            address_master_hint_full_addresses: debug.address_master_hint_full_addresses ?? null,
             candidate_generator_version: norm.candidate_generator_version ?? null,
             zip_from_input: norm.zip_from_input ?? null,
             normalized_candidates: norm.candidates,
+            candidates_after_address_master: debug.candidates_tried ?? null,
             final_selected_candidate: debug.final_selected_candidate ?? null,
             precomputed_row_matched: debug.precomputed_row_matched ?? null,
             matched_full_address: (row?.full_address as string | undefined) ?? response.nyc_card_full_address ?? null,

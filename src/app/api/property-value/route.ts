@@ -496,6 +496,8 @@ export async function GET(request: NextRequest) {
   const isIL = (countryCode ?? "").toUpperCase() === "IL";
   const usMockMode = isUS && isUSMockEnabled();
 
+  // US / NYC: delegates to /api/us/property-value, which resolves candidates via BigQuery
+  // (us_nyc_card_output_v5) with optional full_address hints from us_nyc_address_master_v1 (suffix normalization).
   if (isUS) {
     const usAddress =
       addressParam.trim() ||
@@ -527,6 +529,8 @@ export async function GET(request: NextRequest) {
             JSON.stringify({
               route: "main_property_value",
               address_searched: usAddress,
+              address_master_normalized: dbg?.address_master_normalized ?? null,
+              address_master_hint_full_addresses: dbg?.address_master_hint_full_addresses ?? null,
               matched_full_address: row?.full_address ?? raw.nyc_card_full_address ?? null,
               building_type: row?.building_type ?? null,
               unit_count: row?.unit_count ?? null,

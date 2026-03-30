@@ -22,6 +22,16 @@
 --   5. Expand W/E/N/S directional prefix before street numbers.
 --   6. Append ", NEW YORK, NY <zip>" suffix.
 --
+-- Row loss:
+--   Lots with NULL/blank PLUTO address are excluded in pluto_base — they never
+--   reach building_truth. Refresh PLUTO or fix ingestion if a real lot is missing.
+--   If an address exists in PLUTO but not here, check postcode typing and aliases.
+--
+-- Truth-layer aliases (Section 4):
+--   After PLUTO+sales merge, emit alternate full_address rows per BBL (no-zip,
+--   CPW short, directional short, ordinal strip, STREET→ST) so lookups match
+--   card_output / candidate strings without relying on card alone.
+--
 -- Run:
 --   bq query --use_legacy_sql=false --project_id=streetiq-bigquery --location=EU \
 --     < scripts/us/nyc/sql/build-us-nyc-building-truth-v3.sql
@@ -39,7 +49,8 @@ WITH
     SELECT
       TRIM(REGEXP_REPLACE(UPPER(COALESCE(address, '')), r'\s+', ' '))
         AS raw_addr_upper,
-      TRIM(CAST(postcode AS STRING))                     AS zip_code,
+      -- Normalize float CSV postcodes (e.g. 10024.0) so suffix matches user ZIPs
+      TRIM(REGEXP_REPLACE(CAST(postcode AS STRING), r'\.0\s*$', '')) AS zip_code,
       SAFE_CAST(borocode AS INT64)                       AS borough_code,
       SAFE_CAST(`Tax block` AS INT64)                    AS block,
       SAFE_CAST(`Tax lot` AS INT64)                      AS lot,
@@ -311,6 +322,204 @@ WITH
     FROM pluto_enriched p
     LEFT JOIN sales_agg  sa ON p.bbl = sa.bbl
     LEFT JOIN sales_btype_best bt ON p.bbl = bt.bbl
+  ),
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SECTION 4 – Alternate full_address rows per BBL (aligns with card_output_v5)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+  truth_no_zip AS (
+    SELECT
+      REGEXP_REPLACE(m.full_address_canonical, r'\s+\d{5}\s*$', '') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'\s+\d{5}\s*$')
+      AND REGEXP_REPLACE(m.full_address_canonical, r'\s+\d{5}\s*$', '') != m.full_address_canonical
+  ),
+
+  truth_cpw_short AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(m.full_address_canonical,
+          r'\bCENTRAL PARK WEST\b', 'CENTRAL PARK W'),
+        r'\bCENTRAL PARK EAST\b', 'CENTRAL PARK E') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'\bCENTRAL PARK (WEST|EAST)\b')
+      AND REGEXP_REPLACE(
+            REGEXP_REPLACE(m.full_address_canonical,
+              r'\bCENTRAL PARK WEST\b', 'CENTRAL PARK W'),
+            r'\bCENTRAL PARK EAST\b', 'CENTRAL PARK E')
+          != m.full_address_canonical
+  ),
+
+  truth_cpw_short_no_zip AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(m.full_address_canonical,
+            r'\bCENTRAL PARK WEST\b', 'CENTRAL PARK W'),
+          r'\bCENTRAL PARK EAST\b', 'CENTRAL PARK E'),
+        r'\s+\d{5}\s*$', '') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'\bCENTRAL PARK (WEST|EAST)\b')
+      AND REGEXP_CONTAINS(m.full_address_canonical, r'\s+\d{5}\s*$')
+  ),
+
+  truth_directional_short AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(m.full_address_canonical,
+              r'\bWEST\s+(\d)',  'W \\1'),
+            r'\bEAST\s+(\d)',   'E \\1'),
+          r'\bNORTH\s+(\d)',  'N \\1'),
+        r'\bSOUTH\s+(\d)',   'S \\1') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'^\d+\s+(WEST|EAST|NORTH|SOUTH)\s+\d')
+      AND NOT REGEXP_CONTAINS(m.full_address_canonical, r'\bCENTRAL PARK\b')
+  ),
+
+  truth_directional_short_no_zip AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(m.full_address_canonical,
+                r'\bWEST\s+(\d)',  'W \\1'),
+              r'\bEAST\s+(\d)',   'E \\1'),
+            r'\bNORTH\s+(\d)',  'N \\1'),
+          r'\bSOUTH\s+(\d)',   'S \\1'),
+        r'\s+\d{5}\s*$', '') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'^\d+\s+(WEST|EAST|NORTH|SOUTH)\s+\d')
+      AND NOT REGEXP_CONTAINS(m.full_address_canonical, r'\bCENTRAL PARK\b')
+      AND REGEXP_CONTAINS(m.full_address_canonical, r'\s+\d{5}\s*$')
+  ),
+
+  truth_directional_short_no_ordinal AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(m.full_address_canonical,
+                r'\bWEST\s+(\d)',  'W \\1'),
+              r'\bEAST\s+(\d)',   'E \\1'),
+            r'\bNORTH\s+(\d)',  'N \\1'),
+          r'\bSOUTH\s+(\d)',   'S \\1'),
+        r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'^\d+\s+(WEST|EAST|NORTH|SOUTH)\s+\d')
+      AND NOT REGEXP_CONTAINS(m.full_address_canonical, r'\bCENTRAL PARK\b')
+  ),
+
+  truth_street_to_st AS (
+    SELECT
+      REGEXP_REPLACE(m.full_address_canonical, r'\bSTREET\b', 'ST') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'\bSTREET\b')
+      AND REGEXP_REPLACE(m.full_address_canonical, r'\bSTREET\b', 'ST') != m.full_address_canonical
+  ),
+
+  truth_ordinal_stripped AS (
+    SELECT
+      REGEXP_REPLACE(m.full_address_canonical, r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1') AS full_address_canonical,
+      m.bbl,
+      m.zip_code,
+      m.borough_code,
+      m.building_type,
+      m.unit_count,
+      m.avg_sale_price,
+      m.max_sale_price,
+      m.latest_sale_date,
+      m.sale_count,
+      m.avg_ppsf
+    FROM merged m
+    WHERE REGEXP_CONTAINS(m.full_address_canonical, r'\b\d{1,3}(ST|ND|RD|TH)\b')
+      AND REGEXP_REPLACE(m.full_address_canonical, r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1') != m.full_address_canonical
+  ),
+
+  all_truth AS (
+    SELECT * FROM merged
+    UNION ALL SELECT * FROM truth_no_zip
+    UNION ALL SELECT * FROM truth_cpw_short
+    UNION ALL SELECT * FROM truth_cpw_short_no_zip
+    UNION ALL SELECT * FROM truth_directional_short
+    UNION ALL SELECT * FROM truth_directional_short_no_zip
+    UNION ALL SELECT * FROM truth_directional_short_no_ordinal
+    UNION ALL SELECT * FROM truth_street_to_st
+    UNION ALL SELECT * FROM truth_ordinal_stripped
   )
 
 SELECT
@@ -325,6 +534,7 @@ SELECT
   latest_sale_date,
   sale_count,
   avg_ppsf
-FROM merged
+FROM all_truth
 WHERE full_address_canonical IS NOT NULL
-  AND TRIM(full_address_canonical) != '';
+  AND TRIM(full_address_canonical) != ''
+QUALIFY ROW_NUMBER() OVER (PARTITION BY bbl, full_address_canonical ORDER BY sale_count DESC, building_type) = 1

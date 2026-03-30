@@ -24,6 +24,7 @@ import {
   NYC_CANDIDATE_GENERATOR_VERSION,
 } from "./us-nyc-address-normalize";
 import { shouldApplyNycDebugKnownAddressUnitPromptOverride } from "./us-nyc-debug-known-addresses";
+import { augmentNycTruthCandidatesWithAddressMaster } from "./us-nyc-address-master";
 
 /** @deprecated Use {@link US_NYC_CARD_OUTPUT_V5_REFERENCE}; kept for `/api/us/property-value` debug strings. */
 export const US_NYC_API_TRUTH_TABLE_REFERENCE = US_NYC_CARD_OUTPUT_V5_REFERENCE;
@@ -121,6 +122,9 @@ export type USNYCApiTruthQueryDebug = {
   nyc_pending_unit_prompt?: boolean;
   unit_prompt_reason?: string | null;
   same_street_pool?: boolean;
+  /** `us_nyc_address_master_v1` + building_truth BBL bridge (suffix-normalized key). */
+  address_master_normalized?: string | null;
+  address_master_hint_full_addresses?: readonly string[];
 };
 
 function rowToJsonSafe(row: Record<string, unknown>): Record<string, unknown> {
@@ -216,6 +220,7 @@ async function queryNycStreetFallbackTruth(
     fallbackType,
     scoreReason,
     sameStreetPool,
+    houseDistance,
   } = await queryPrecomputedNycStreetFallbackRow(client, line);
   if (!row || rowsReturned === 0) {
     // Log diagnostic info even on empty pool (helps confirm data coverage gap vs pattern issue).
@@ -230,10 +235,39 @@ async function queryNycStreetFallbackTruth(
       matched_full_address: null,
       matched_building_type: null,
       matched_unit_count: null,
+      house_distance: houseDistance,
       should_prompt_for_unit: false,
       nyc_pending_unit_prompt: false,
       unit_prompt_reason: null,
       note: rowsReturned === 0 ? "pool_empty_data_coverage_gap" : "pool_non_empty_ranking_returned_null",
+    });
+    return { response: null, patternsUsed, rowsReturned, matchedRawRow: null, sameStreetPool: false };
+  }
+
+  // Multi-unit inventory: never use another building's card row as a stand-in when the user has not
+  // submitted a unit — prefer no match over anchoring prompts / badges to the wrong address.
+  if (
+    !hasUnit &&
+    nycFallbackLooksMultiUnit(row, addressLineForPrompt || line, candidates.length) &&
+    houseDistance != null &&
+    houseDistance > 0
+  ) {
+    logNycFallbackDecision({
+      searched_address: rawInput ?? "",
+      fallback_used: false,
+      fallback_type: fallbackType,
+      fallback_score_reason: `${scoreReason};rejected:multi_unit_no_unit_requires_house_dist_0_got_${houseDistance}`,
+      pool_size: rowsReturned,
+      patterns_used: patternsUsed,
+      normalized_line_used_for_patterns: line,
+      matched_full_address: String(row.full_address ?? ""),
+      matched_building_type: row.building_type,
+      matched_unit_count: row.unit_count,
+      house_distance: houseDistance,
+      should_prompt_for_unit: false,
+      nyc_pending_unit_prompt: false,
+      unit_prompt_reason: null,
+      note: "rejected_multi_unit_fallback_not_exact_house",
     });
     return { response: null, patternsUsed, rowsReturned, matchedRawRow: null, sameStreetPool: false };
   }
@@ -279,6 +313,7 @@ async function queryNycStreetFallbackTruth(
     normalized_line_used_for_patterns: line,
     matched_building_type: row.building_type,
     matched_unit_count: row.unit_count,
+    house_distance: houseDistance,
     should_prompt_for_unit: needPrompt,
     nyc_pending_unit_prompt: needPrompt,
     unit_prompt_reason: needPrompt ? "apartment_or_lot_required" : null,
@@ -329,11 +364,20 @@ export async function queryUSNYCApiTruthWithCandidates(
   options?: { unitOrLot?: string | null }
 ): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
+  const normForMaster = buildNycTruthLookupNormalizationDebug(rawInput?.trim() || candidates[0] || "");
+  let workCandidates = [...candidates];
+  if (normForMaster) {
+    const aug = await augmentNycTruthCandidatesWithAddressMaster(client, {
+      ...normForMaster,
+      candidates: workCandidates,
+    });
+    workCandidates = aug.candidates;
+  }
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
   const attempts: { candidate: string; rows_returned: number }[] = [];
 
   if (hasUnit && submitted) {
-    for (const address of candidates) {
+    for (const address of workCandidates) {
       const trimmed = address.trim();
       if (!trimmed) continue;
       const suffixed = `${trimmed}, ${submitted}`;
@@ -353,9 +397,9 @@ export async function queryUSNYCApiTruthWithCandidates(
     }
   }
 
-  const addressLineForPrompt = (rawInput ?? "").trim() || (candidates[0] ?? "").trim();
+  const addressLineForPrompt = (rawInput ?? "").trim() || (workCandidates[0] ?? "").trim();
 
-  for (const address of candidates) {
+  for (const address of workCandidates) {
     const trimmed = address.trim();
     if (!trimmed) continue;
     const { row, rowsReturned } = await queryPrecomputedNycCardJoinRow(client, trimmed);
@@ -365,14 +409,14 @@ export async function queryUSNYCApiTruthWithCandidates(
         !hasUnit &&
         computeNycNeedsUnitPrompt(row, {
           addressLine: addressLineForPrompt || trimmed,
-          candidatesCount: candidates.length,
+          candidatesCount: workCandidates.length,
         });
       if (
         !needPrompt &&
         !hasUnit &&
         shouldApplyNycDebugKnownAddressUnitPromptOverride(rawInput ?? "", row, {
           addressLine: addressLineForPrompt || trimmed,
-          candidatesCount: candidates.length,
+          candidatesCount: workCandidates.length,
         })
       ) {
         needPrompt = true;
@@ -405,7 +449,7 @@ export async function queryUSNYCApiTruthWithCandidates(
   const streetFb = await queryNycStreetFallbackTruth(
     client,
     rawInput,
-    candidates,
+    workCandidates,
     hasUnit,
     submitted,
     addressLineForPrompt
@@ -416,7 +460,7 @@ export async function queryUSNYCApiTruthWithCandidates(
 
   logNycPrecomputedLookupMiss({
     searched_address: rawInput ?? "",
-    generated_candidates: [...candidates],
+    generated_candidates: [...workCandidates],
     matched_full_address: null,
     final_selected_candidate: null,
     precomputed_row_matched: false,
@@ -442,12 +486,18 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
 ): Promise<{ response: USNYCApiTruthResponse; debug: USNYCApiTruthQueryDebug }> {
   const cgv = norm.candidate_generator_version ?? NYC_CANDIDATE_GENERATOR_VERSION;
   const client = getUSBigQueryClient();
+  const aug = await augmentNycTruthCandidatesWithAddressMaster(client, norm);
+  const candidatesToUse = aug.candidates;
+  const addrMasterDebug = {
+    address_master_normalized: aug.masterNormalized,
+    address_master_hint_full_addresses: aug.masterHintFullAddresses,
+  };
   const attempts: { candidate: string; rows_returned: number }[] = [];
   let firstRow: Record<string, unknown> | null = null;
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
 
   if (hasUnit && submitted) {
-    for (const address of norm.candidates) {
+    for (const address of candidatesToUse) {
       const trimmed = address.trim();
       if (!trimmed) continue;
       const suffixed = `${trimmed}, ${submitted}`;
@@ -476,7 +526,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
             sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
             rows_found_count: n,
             first_row_if_any: firstRow,
-            candidates_tried: norm.candidates,
+            candidates_tried: candidatesToUse,
             attempts,
             final_selected_candidate: suffixed,
             matched_full_address: matchedAddr,
@@ -485,6 +535,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
             full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
             nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
             candidate_generator_version: cgv,
+            ...addrMasterDebug,
           },
         };
       }
@@ -494,7 +545,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
   const addressLineForPrompt =
     originalInput.trim() || norm.normalized_full_address.trim() || norm.normalized_building_address.trim();
 
-  for (const address of norm.candidates) {
+  for (const address of candidatesToUse) {
     const trimmed = address.trim();
     if (!trimmed) continue;
     const { row, rowsReturned: n } = await queryPrecomputedNycCardJoinRow(client, trimmed);
@@ -505,14 +556,14 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         !hasUnit &&
         computeNycNeedsUnitPrompt(row, {
           addressLine: addressLineForPrompt || trimmed,
-          candidatesCount: norm.candidates.length,
+          candidatesCount: candidatesToUse.length,
         });
       if (
         !needPrompt &&
         !hasUnit &&
         shouldApplyNycDebugKnownAddressUnitPromptOverride(originalInput, row, {
           addressLine: addressLineForPrompt || trimmed,
-          candidatesCount: norm.candidates.length,
+          candidatesCount: candidatesToUse.length,
         })
       ) {
         needPrompt = true;
@@ -542,7 +593,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
           rows_found_count: n,
           first_row_if_any: firstRow,
-          candidates_tried: norm.candidates,
+          candidates_tried: candidatesToUse,
           attempts,
           final_selected_candidate: trimmed,
           matched_full_address: matchedAddr,
@@ -551,6 +602,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
           nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
           candidate_generator_version: cgv,
+          ...addrMasterDebug,
         },
       };
     }
@@ -561,7 +613,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
   const streetFb = await queryNycStreetFallbackTruth(
     client,
     originalInput,
-    norm.candidates,
+    candidatesToUse,
     hasUnit,
     submitted,
     addressLineForFallback
@@ -586,7 +638,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         sql_where_used: "street_fallback: UPPER(c.full_address) LIKE @pN (OR)",
         rows_found_count: streetFb.rowsReturned,
         first_row_if_any: firstRowFallback,
-        candidates_tried: norm.candidates,
+        candidates_tried: candidatesToUse,
         attempts,
         final_selected_candidate:
           matchedStr && fbType ? `FALLBACK:${fbType}:${matchedStr}` : matchedStr ? `FALLBACK:${matchedStr}` : null,
@@ -608,13 +660,14 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         nyc_pending_unit_prompt: prompt,
         unit_prompt_reason: prompt ? "apartment_or_lot_required" : null,
         same_street_pool: streetFb.sameStreetPool,
+        ...addrMasterDebug,
       },
     };
   }
 
   logNycPrecomputedLookupMiss({
     searched_address: originalInput,
-    generated_candidates: [...norm.candidates],
+    generated_candidates: [...candidatesToUse],
     matched_full_address: null,
     final_selected_candidate: null,
     precomputed_row_matched: false,
@@ -632,7 +685,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
       sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
       rows_found_count: 0,
       first_row_if_any: null,
-      candidates_tried: norm.candidates,
+      candidates_tried: candidatesToUse,
       attempts,
       final_selected_candidate: null,
       matched_full_address: null,
@@ -641,6 +694,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
       full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
       nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
       candidate_generator_version: cgv,
+      ...addrMasterDebug,
     },
   };
 }

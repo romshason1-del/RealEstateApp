@@ -333,15 +333,48 @@ function nycBuildingTypeResidentialTier(raw: string): number {
   return 25;
 }
 
+/**
+ * Max |requested − candidate| house number for same-normalized-street street_fallback.
+ * Above this: reject (e.g. 245 vs 210 at dist 35).
+ */
+export const NYC_FALLBACK_MAX_HOUSE_DIST_SAME_STREET = 10;
+
+/**
+ * Stricter cap when the pool is cross-street best-effort (no same-street rows).
+ */
+export const NYC_FALLBACK_MAX_HOUSE_DIST_CROSS_STREET = 5;
+
 export type NycFallbackRankResult = {
   row: Record<string, unknown> | null;
   fallbackType: "building_fallback" | "street_fallback" | null;
   scoreReason: string;
   sameStreetPool: boolean;
+  /** Parsed distance when both sides have a leading house number; else null. */
+  houseDistance: number | null;
 };
+
+type ScoredFallback = {
+  row: Record<string, unknown>;
+  sameStreet: boolean;
+  houseDist: number;
+  tier: number;
+  uc: number;
+};
+
+function passesHouseDistanceGate(
+  s: ScoredFallback,
+  sameStreetPool: boolean,
+  requestedHouseNumber: number | null
+): boolean {
+  if (requestedHouseNumber == null) return true;
+  if (s.houseDist >= 9999990) return true;
+  const max = sameStreetPool ? NYC_FALLBACK_MAX_HOUSE_DIST_SAME_STREET : NYC_FALLBACK_MAX_HOUSE_DIST_CROSS_STREET;
+  return s.houseDist <= max;
+}
 
 /**
  * Rank fallback rows: same normalized street first, then closest house number, then residential tier, then unit_count.
+ * Drops candidates whose house-number distance exceeds NYC caps (no misleading far-away buildings).
  */
 export function rankNycFallbackRows(
   rows: Record<string, unknown>[],
@@ -349,11 +382,11 @@ export function rankNycFallbackRows(
   requestedHouseNumber: number | null
 ): NycFallbackRankResult {
   if (rows.length === 0) {
-    return { row: null, fallbackType: null, scoreReason: "no_rows", sameStreetPool: false };
+    return { row: null, fallbackType: null, scoreReason: "no_rows", sameStreetPool: false, houseDistance: null };
   }
 
   const searchStreet = normalizeManhattanStreetPortion(normalizedAddressLine);
-  const scored = rows.map((row) => {
+  const scored: ScoredFallback[] = rows.map((row) => {
     const fa = String(row.full_address ?? "");
     const candStreet = normalizeManhattanStreetPortion(fa);
     const sameStreet = searchStreet.length > 0 && candStreet === searchStreet;
@@ -369,13 +402,37 @@ export function rankNycFallbackRows(
   const pool = sameStreetRows.length > 0 ? sameStreetRows : scored;
   const sameStreetPool = sameStreetRows.length > 0;
 
-  pool.sort((a, b) => {
+  const maxAllowed = sameStreetPool ? NYC_FALLBACK_MAX_HOUSE_DIST_SAME_STREET : NYC_FALLBACK_MAX_HOUSE_DIST_CROSS_STREET;
+  const eligible = pool.filter((s) => passesHouseDistanceGate(s, sameStreetPool, requestedHouseNumber));
+
+  if (eligible.length === 0) {
+    pool.sort((a, b) => {
+      if (a.houseDist !== b.houseDist) return a.houseDist - b.houseDist;
+      if (b.tier !== a.tier) return b.tier - a.tier;
+      return b.uc - a.uc;
+    });
+    const wouldBe = pool[0]!;
+    const hd =
+      wouldBe.houseDist < 9999990 && requestedHouseNumber != null ? wouldBe.houseDist : null;
+    return {
+      row: null,
+      fallbackType: null,
+      scoreReason: `rejected:min_house_dist_${wouldBe.houseDist < 9999990 ? wouldBe.houseDist : "unknown"}_exceeds_max_${maxAllowed}_${sameStreetPool ? "same_street" : "cross_street"}`,
+      sameStreetPool,
+      houseDistance: hd,
+    };
+  }
+
+  eligible.sort((a, b) => {
     if (a.houseDist !== b.houseDist) return a.houseDist - b.houseDist;
     if (b.tier !== a.tier) return b.tier - a.tier;
     return b.uc - a.uc;
   });
 
-  const best = pool[0]!;
+  const best = eligible[0]!;
+  const houseDistance =
+    best.houseDist < 9999990 && requestedHouseNumber != null ? best.houseDist : null;
+
   let fallbackType: "building_fallback" | "street_fallback";
   let scoreReason: string;
 
@@ -384,13 +441,13 @@ export function rankNycFallbackRows(
     scoreReason = `same_normalized_street+house_number_match;ranked_by_residential_tier(${best.tier})_then_unit_count(${best.uc})`;
   } else if (sameStreetPool) {
     fallbackType = "street_fallback";
-    scoreReason = `same_normalized_street+closest_house(dist=${best.houseDist});tier_then_unit_count`;
+    scoreReason = `same_normalized_street+closest_house(dist=${best.houseDist};max=${NYC_FALLBACK_MAX_HOUSE_DIST_SAME_STREET});tier_then_unit_count`;
   } else {
     fallbackType = "street_fallback";
-    scoreReason = `no_same_street_match_in_pool;best_effort_by_house_distance+tier+unit_count`;
+    scoreReason = `no_same_street_match_in_pool;best_effort(dist=${best.houseDist};max=${NYC_FALLBACK_MAX_HOUSE_DIST_CROSS_STREET})+tier+unit_count`;
   }
 
-  return { row: best.row, fallbackType, scoreReason, sameStreetPool };
+  return { row: best.row, fallbackType, scoreReason, sameStreetPool, houseDistance };
 }
 
 /**
@@ -495,6 +552,7 @@ export async function queryPrecomputedNycStreetFallbackRow(
   fallbackType: "building_fallback" | "street_fallback" | null;
   scoreReason: string;
   sameStreetPool: boolean;
+  houseDistance: number | null;
 }> {
   const { patterns, requestedHouseNumber } = buildNycStreetFallbackLikePatterns(normalizedAddressLine);
   if (patterns.length === 0) {
@@ -505,6 +563,7 @@ export async function queryPrecomputedNycStreetFallbackRow(
       fallbackType: null,
       scoreReason: "no_patterns",
       sameStreetPool: false,
+      houseDistance: null,
     };
   }
 
@@ -546,6 +605,7 @@ export async function queryPrecomputedNycStreetFallbackRow(
       fallbackType: null,
       scoreReason: "no_pool_rows",
       sameStreetPool: false,
+      houseDistance: null,
     };
   }
 
@@ -557,5 +617,6 @@ export async function queryPrecomputedNycStreetFallbackRow(
     fallbackType: rank.fallbackType,
     scoreReason: rank.scoreReason,
     sameStreetPool: rank.sameStreetPool,
+    houseDistance: rank.houseDistance,
   };
 }

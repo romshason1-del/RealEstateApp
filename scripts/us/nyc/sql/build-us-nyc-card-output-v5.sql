@@ -18,7 +18,9 @@
 -- Address alias strategy:
 --   Generates MULTIPLE full_address rows per building so every candidate
 --   string produced by us-nyc-address-normalize.ts hits an exact match:
---     canonical, CPW W↔WEST, ordinal stripped, no-zip, directional short, combinations.
+--     canonical, CPW W↔WEST, ordinal stripped, no-zip, directional short,
+--     directional short + no-zip (matches ", NY" before ", NY {zip}" in TS),
+--     STREET↔ST, combinations.
 --
 -- Run:
 --   bq query --use_legacy_sql=false --project_id=streetiq-bigquery --location=EU \
@@ -262,7 +264,69 @@ WITH
       AND NOT REGEXP_CONTAINS(full_address_canonical, r'\bCENTRAL PARK\b')
   ),
 
-  -- ── 12. UNION all alias forms ─────────────────────────────────────────────
+  -- ── 11b. Directional short + strip trailing ZIP (TS tries ", NY" before ", NY {zip}")
+  directional_short_no_zip_rows AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(full_address_canonical,
+                r'\bWEST\s+(\d)',  'W \\1'),
+              r'\bEAST\s+(\d)',   'E \\1'),
+            r'\bNORTH\s+(\d)',  'N \\1'),
+          r'\bSOUTH\s+(\d)',   'S \\1'),
+        r'\s+\d{5}\s*$', '') AS full_address,
+      badge_1, badge_2, badge_3, badge_4,
+      estimated_value, estimated_value_subtext,
+      price_per_sqft_text, final_match_level,
+      building_type, unit_count
+    FROM with_display
+    WHERE REGEXP_CONTAINS(full_address_canonical, r'^\d+\s+(WEST|EAST|NORTH|SOUTH)\s+\d')
+      AND NOT REGEXP_CONTAINS(full_address_canonical, r'\bCENTRAL PARK\b')
+      AND REGEXP_CONTAINS(full_address_canonical, r'\s+\d{5}\s*$')
+  ),
+
+  -- ── 11c. Directional short + ordinal stripped + no ZIP
+  directional_short_no_ordinal_no_zip_rows AS (
+    SELECT
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(
+                REGEXP_REPLACE(full_address_canonical,
+                  r'\bWEST\s+(\d)',  'W \\1'),
+                r'\bEAST\s+(\d)',   'E \\1'),
+              r'\bNORTH\s+(\d)',  'N \\1'),
+            r'\bSOUTH\s+(\d)',   'S \\1'),
+          r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1'),
+        r'\s+\d{5}\s*$', '') AS full_address,
+      badge_1, badge_2, badge_3, badge_4,
+      estimated_value, estimated_value_subtext,
+      price_per_sqft_text, final_match_level,
+      building_type, unit_count
+    FROM with_display
+    WHERE REGEXP_CONTAINS(full_address_canonical, r'^\d+\s+(WEST|EAST|NORTH|SOUTH)\s+\d')
+      AND NOT REGEXP_CONTAINS(full_address_canonical, r'\bCENTRAL PARK\b')
+      AND REGEXP_CONTAINS(full_address_canonical, r'\s+\d{5}\s*$')
+  ),
+
+  -- ── 12. STREET ↔ ST (mirrors expandNycStreetTypeAliasesBidirectional)
+  -- STREET→ST only (not ST→STREET: \bST\b would corrupt ordinals like 1ST AVENUE).
+  street_to_st_rows AS (
+    SELECT
+      REGEXP_REPLACE(full_address_canonical, r'\bSTREET\b', 'ST') AS full_address,
+      badge_1, badge_2, badge_3, badge_4,
+      estimated_value, estimated_value_subtext,
+      price_per_sqft_text, final_match_level,
+      building_type, unit_count
+    FROM with_display
+    WHERE REGEXP_CONTAINS(full_address_canonical, r'\bSTREET\b')
+      AND REGEXP_REPLACE(full_address_canonical, r'\bSTREET\b', 'ST') != full_address_canonical
+  ),
+
+  -- ── 13. UNION all alias forms ─────────────────────────────────────────────
   all_rows AS (
     SELECT * FROM canonical_rows
     UNION ALL SELECT * FROM cpw_alias_rows
@@ -272,6 +336,9 @@ WITH
     UNION ALL SELECT * FROM no_zip_no_ordinal_rows
     UNION ALL SELECT * FROM directional_short_rows
     UNION ALL SELECT * FROM directional_short_no_ordinal
+    UNION ALL SELECT * FROM directional_short_no_zip_rows
+    UNION ALL SELECT * FROM directional_short_no_ordinal_no_zip_rows
+    UNION ALL SELECT * FROM street_to_st_rows
   )
 
 -- Final: deduplicate by full_address; prefer rows with non-null estimated_value

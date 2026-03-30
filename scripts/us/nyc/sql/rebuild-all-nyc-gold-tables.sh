@@ -35,18 +35,26 @@ echo "========================================"
 echo ""
 
 # ── Step 1: PLUTO-driven building truth ──────────────────────────────────────
-echo "[1/3] us_nyc_building_truth_v3 ..."
+echo "[1/4] us_nyc_building_truth_v3 ..."
 ${BQ} < "${SCRIPT_DIR}/build-us-nyc-building-truth-v3.sql"
 echo "      Done."
+echo "      Optional PLUTO/truth spot checks:"
+echo "        ${BQ} < ${SCRIPT_DIR}/verify-nyc-pluto-spot-addresses.sql"
+echo "        ${BQ} < ${SCRIPT_DIR}/verify-nyc-building-truth-spot-addresses.sql"
 
 # ── Step 2: Card output (every building_truth row survives) ──────────────────
-echo "[2/3] us_nyc_card_output_v5 ..."
+echo "[2/4] us_nyc_card_output_v5 ..."
 ${BQ} < "${SCRIPT_DIR}/build-us-nyc-card-output-v5.sql"
 echo "      Done."
 
 # ── Step 3: Last transaction engine (2000+ history) ──────────────────────────
-echo "[3/3] us_nyc_last_transaction_engine_v3 ..."
+echo "[3/4] us_nyc_last_transaction_engine_v3 ..."
 ${BQ} < "${SCRIPT_DIR}/build-us-nyc-last-transaction-engine-v3.sql"
+echo "      Done."
+
+# ── Step 4: Unified address master (PLUTO + sales, suffix-normalized; API candidate hints) ──
+echo "[4/4] us_nyc_address_master_v1 ..."
+${BQ} < "${SCRIPT_DIR}/build-us-nyc-address-master-v1.sql"
 echo "      Done."
 
 echo ""
@@ -71,7 +79,12 @@ ${BQ} --format=prettyjson "
   SELECT
     'us_nyc_last_transaction_engine_v3',
     COUNT(*)
-  FROM \`${PROJECT}.streetiq_gold.us_nyc_last_transaction_engine_v3\`"
+  FROM \`${PROJECT}.streetiq_gold.us_nyc_last_transaction_engine_v3\`
+  UNION ALL
+  SELECT
+    'us_nyc_address_master_v1',
+    COUNT(*)
+  FROM \`${PROJECT}.streetiq_gold.us_nyc_address_master_v1\`"
 
 echo ""
 
@@ -80,11 +93,15 @@ echo "--- Address spot-checks (card_output_v5) ---"
 for addr in \
   "234 CENTRAL PARK WEST, NEW YORK, NY 10024" \
   "234 CENTRAL PARK W, NEW YORK, NY 10024" \
+  "234 CENTRAL PARK W, NEW YORK, NY" \
   "40 WEST 86TH STREET, NEW YORK, NY 10024" \
   "40 W 86TH STREET, NEW YORK, NY 10024" \
+  "40 W 86TH STREET, NEW YORK, NY" \
   "40 WEST 86 STREET, NEW YORK, NY 10024" \
   "245 EAST 63RD STREET, NEW YORK, NY 10065" \
   "245 E 63RD STREET, NEW YORK, NY 10065" \
+  "245 E 63RD STREET, NEW YORK, NY" \
+  "245 E 63 STREET, NEW YORK, NY" \
   "245 EAST 63 STREET, NEW YORK, NY 10065"
 do
   echo ""
