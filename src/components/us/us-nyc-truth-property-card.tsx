@@ -179,6 +179,8 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const onAptKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
+      const unitValue = apartmentDraft.trim();
+      console.log("[UNIT_SUBMIT] unit value:", unitValue);
       onApartmentSearch?.();
     }
   };
@@ -244,7 +246,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             <button
               type="button"
               disabled={apartmentSearchInFlight || !apartmentDraft.trim()}
-              onClick={() => onApartmentSearch?.()}
+              onClick={() => {
+                const unitValue = apartmentDraft.trim();
+                console.log("[UNIT_SUBMIT] unit value:", unitValue);
+                onApartmentSearch?.();
+              }}
               className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
             >
               {apartmentSearchInFlight ? "…" : "Apply"}

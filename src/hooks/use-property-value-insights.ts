@@ -17,6 +17,8 @@ export type UsePropertyValueInsightsOptions = {
   postcode?: string;
   /** Increment to force refetch (e.g. when user clicks Search for apartment) */
   refetchTrigger?: number;
+  /** US NYC: optional unit/lot — passed as `unit_or_lot` to `/api/property-value` (same as Apply flow). */
+  unitOrLot?: string;
 };
 
 /** Countries that have an official property data provider. FR uses properties_france (DVF import) + optional DVF API fallback. */
@@ -45,6 +47,7 @@ export function usePropertyValueInsights(
     if (isFR) setData(null);
     setIsLoading(true);
     const rawForFrance = (opts?.rawInputAddress || (isFR ? address : "")).trim();
+    const cc = (countryCode ?? "").toUpperCase();
     const fetchOpts = {
       countryCode: countryCode || "IL",
       ...(opts?.latitude != null && opts?.longitude != null && Number.isFinite(opts.latitude) && Number.isFinite(opts.longitude)
@@ -54,6 +57,7 @@ export function usePropertyValueInsights(
       ...(opts?.selectedFormattedAddress != null ? { selectedFormattedAddress: opts.selectedFormattedAddress } : {}),
       ...((opts?.aptNumber ?? "").toString().trim() ? { aptNumber: (opts?.aptNumber ?? "").toString().trim() } : {}),
       ...(opts?.postcode != null ? { postcode: opts.postcode } : {}),
+      ...(cc === "US" && (opts?.unitOrLot ?? "").trim() ? { unitOrLot: (opts.unitOrLot ?? "").trim() } : {}),
       signal: abortRef.current.signal,
     };
     const aptSent = (fetchOpts as { aptNumber?: string }).aptNumber ?? "";
@@ -100,7 +104,7 @@ export function usePropertyValueInsights(
       return;
     }
     doFetch();
-  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress, options?.aptNumber, options?.postcode, options?.refetchTrigger, doFetch]);
+  }, [address, countryCode, hasProvider, options?.latitude, options?.longitude, options?.rawInputAddress, options?.selectedFormattedAddress, options?.aptNumber, options?.postcode, options?.refetchTrigger, options?.unitOrLot, doFetch]);
 
   React.useEffect(() => {
     return () => {

@@ -410,7 +410,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
   /** NYC only: apartment/lot from API prompt — local until backend unit lookup exists. */
   const [nycUnitDraft, setNycUnitDraft] = React.useState("");
   const [nycUnitSubmitted, setNycUnitSubmitted] = React.useState<string | null>(null);
-  /** NYC: full `/api/property-value` JSON after Apply with `unit_or_lot` (hook does not send that param). */
+  /** NYC: full `/api/property-value` JSON after Apply with `unit_or_lot` (see also `unitOrLot` on the insights hook). */
   const [nycUnitApplyPayload, setNycUnitApplyPayload] = React.useState<Record<string, unknown> | null>(null);
   const [nycUnitApplyLoading, setNycUnitApplyLoading] = React.useState(false);
   const [nycUnitApplyError, setNycUnitApplyError] = React.useState<string | null>(null);
@@ -423,6 +423,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     aptNumber: searchApt,
     refetchTrigger: aptSearchTrigger,
     postcode: isFR ? postcode : undefined,
+    unitOrLot: isUS && nycUnitSubmitted?.trim() ? nycUnitSubmitted.trim() : undefined,
   });
 
   React.useEffect(() => {
@@ -981,6 +982,8 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
+                      const unitValue = nycUnitDraft.trim();
+                      console.log("[UNIT_SUBMIT] unit value:", unitValue);
                       void submitNycUnitApply();
                     }
                   }}
@@ -992,7 +995,11 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                 <button
                   type="button"
                   disabled={nycUnitApplyLoading || isLoading || !nycUnitDraft.trim()}
-                  onClick={() => void submitNycUnitApply()}
+                  onClick={() => {
+                    const unitValue = nycUnitDraft.trim();
+                    console.log("[UNIT_SUBMIT] unit value:", unitValue);
+                    void submitNycUnitApply();
+                  }}
                   className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
                 >
                   {nycUnitApplyLoading || isLoading ? "…" : "Apply"}
