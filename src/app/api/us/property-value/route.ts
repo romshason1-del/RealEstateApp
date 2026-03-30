@@ -10,6 +10,12 @@ import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
 import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
 import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
+import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
+import {
+  normalizeNycAddressMasterV1Line,
+  queryBuildingTruthFullAddressesFromAddressMaster,
+  queryUnitFromAddressMaster,
+} from "@/lib/us/us-nyc-address-master";
 import {
   queryUSNYCApiTruthWithCandidatesDebug,
   US_NYC_API_TRUTH_SQL_WHERE,
@@ -29,7 +35,7 @@ function logUsNycDebug(label: string, payload: object): void {
   }
 }
 
-async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
+async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitParamRaw?: string | null) {
   const { line } = normalizeUSAddressLine(addressRaw);
   if (!line) {
     const empty = createEmptyUSNYCApiTruthResponse({
@@ -94,16 +100,52 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
 
     const unitOrLot =
       typeof unitOrLotRaw === "string" && unitOrLotRaw.trim() !== "" ? unitOrLotRaw.trim() : null;
+    const unitFromParam =
+      typeof unitParamRaw === "string" && unitParamRaw.trim() !== "" ? unitParamRaw.trim() : null;
+    const combinedUnit = unitFromParam ?? unitOrLot;
+
+    const client = getUSBigQueryClient();
+    const masterLine =
+      norm.normalized_building_address.trim() ||
+      norm.normalized_full_address.split(",")[0]?.replace(/\s+/g, " ").trim() ||
+      "";
+    const masterNorm = normalizeNycAddressMasterV1Line(masterLine);
+
+    const masterGate = await queryBuildingTruthFullAddressesFromAddressMaster(
+      client,
+      masterNorm,
+      combinedUnit
+    );
+    if (masterGate.requiresUnit) {
+      return NextResponse.json(
+        {
+          status: "requires_unit",
+          message: masterGate.message,
+          building: masterGate.buildingData,
+        },
+        { status: 200 }
+      );
+    }
+
+    let addressMasterUnitSearch: Awaited<ReturnType<typeof queryUnitFromAddressMaster>> | null = null;
+    if (combinedUnit && masterNorm) {
+      addressMasterUnitSearch = await queryUnitFromAddressMaster(client, masterNorm, combinedUnit);
+    }
+
     const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm, {
-      unitOrLot,
+      unitOrLot: combinedUnit,
     });
-    logUsNycDebug("TEMP_DEBUG", { ...debug });
+    const debugOut =
+      addressMasterUnitSearch != null
+        ? { ...debug, address_master_unit_search: addressMasterUnitSearch }
+        : debug;
+    logUsNycDebug("TEMP_DEBUG", { ...debugOut });
 
     if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
-      const row = debug.first_row_if_any as Record<string, unknown> | null | undefined;
+      const row = debugOut.first_row_if_any as Record<string, unknown> | null | undefined;
       const ups = parseUSAddressFromFullString(addressRaw);
       const adapted = await adaptUsNycTruthJsonForMainPropertyValueRoute(
-        { ...response, us_nyc_debug: debug } as Record<string, unknown>,
+        { ...response, us_nyc_debug: debugOut } as Record<string, unknown>,
         { city: ups.city, street: ups.street, houseNumber: ups.houseNumber }
       );
       const pr = adapted.property_result as Record<string, unknown> | undefined;
@@ -113,14 +155,14 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
           JSON.stringify({
             route: "us_property_value",
             address_searched: addressRaw,
-            address_master_normalized: debug.address_master_normalized ?? null,
-            address_master_hint_full_addresses: debug.address_master_hint_full_addresses ?? null,
+            address_master_normalized: debugOut.address_master_normalized ?? null,
+            address_master_hint_full_addresses: debugOut.address_master_hint_full_addresses ?? null,
             candidate_generator_version: norm.candidate_generator_version ?? null,
             zip_from_input: norm.zip_from_input ?? null,
             normalized_candidates: norm.candidates,
-            candidates_after_address_master: debug.candidates_tried ?? null,
-            final_selected_candidate: debug.final_selected_candidate ?? null,
-            precomputed_row_matched: debug.precomputed_row_matched ?? null,
+            candidates_after_address_master: debugOut.candidates_tried ?? null,
+            final_selected_candidate: debugOut.final_selected_candidate ?? null,
+            precomputed_row_matched: debugOut.precomputed_row_matched ?? null,
             matched_full_address: (row?.full_address as string | undefined) ?? response.nyc_card_full_address ?? null,
             building_type: row?.building_type ?? null,
             unit_count: row?.unit_count ?? null,
@@ -145,7 +187,7 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
       }
     }
 
-    return NextResponse.json(omitUsNycDebugFromPayload({ ...response, us_nyc_debug: debug } as Record<string, unknown>), {
+    return NextResponse.json(omitUsNycDebugFromPayload({ ...response, us_nyc_debug: debugOut } as Record<string, unknown>), {
       status: 200,
     });
   } catch (e) {
@@ -172,18 +214,21 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null) {
 export async function GET(req: NextRequest) {
   const address = req.nextUrl.searchParams.get("address") ?? "";
   const unitOrLot = req.nextUrl.searchParams.get("unit_or_lot");
-  return handle(address, unitOrLot);
+  const unit = req.nextUrl.searchParams.get("unit");
+  return handle(address, unitOrLot, unit);
 }
 
 export async function POST(req: NextRequest) {
   let address = "";
   let unitOrLot: string | null = null;
+  let unit: string | null = null;
   try {
-    const body = (await req.json()) as { address?: string; unit_or_lot?: string };
+    const body = (await req.json()) as { address?: string; unit_or_lot?: string; unit?: string };
     address = typeof body.address === "string" ? body.address : "";
     unitOrLot = typeof body.unit_or_lot === "string" ? body.unit_or_lot : null;
+    unit = typeof body.unit === "string" ? body.unit : null;
   } catch {
     address = "";
   }
-  return handle(address, unitOrLot);
+  return handle(address, unitOrLot, unit);
 }
