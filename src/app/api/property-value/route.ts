@@ -573,13 +573,13 @@ export async function GET(request: NextRequest) {
     if (unitFromParam) usUrl.searchParams.set("unit", unitFromParam);
     const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
     const usResponse = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
-    const usStatus = usResponse.status;
-    if (usStatus === "commercial_property" || usStatus === "requires_unit") {
-      console.log("[MAIN_ROUTE_PASSTHROUGH] status detected:", usResponse.status);
+    const statusValue = usResponse.status;
+    if (statusValue === "commercial_property" || statusValue === "requires_unit") {
+      console.log("[MAIN_ROUTE_PASSTHROUGH] status detected:", statusValue);
       return NextResponse.json(
         {
-          status: usStatus,
-          message: typeof usResponse.message === "string" ? usResponse.message : null,
+          status: statusValue,
+          message: typeof usResponse.message === "string" ? usResponse.message : "",
           property: null,
           valuation: null,
           lastTransaction: null,
@@ -631,7 +631,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json(omitUsNycDebugFromPayload(adapted as Record<string, unknown>), { status: 200 });
     }
-      return NextResponse.json(omitUsNycDebugFromPayload(usResponse as Record<string, unknown>), { status: usRes.status });
+    return NextResponse.json(omitUsNycDebugFromPayload(usResponse as Record<string, unknown>), { status: usRes.status });
   }
 
   if (isIL) {

@@ -886,6 +886,10 @@ export function PropertyValueCard({
       : null) ??
     address;
 
+  const data = insightsData;
+  const apiStatus = (data as any)?.status;
+  console.log("[PROPERTY_CARD] received status:", apiStatus);
+
   return (
     <div
       className={[
@@ -959,6 +963,40 @@ export function PropertyValueCard({
                 {mockData.pricePerSqm.toLocaleString()} {currencySymbol}/ sqm
                 <span className="ml-2 text-emerald-400">↑ {mockData.trendYoY >= 0 ? "+" : ""}{mockData.trendYoY.toFixed(1)}% YoY</span>
               </div>
+            </div>
+          ) : isUS && apiStatus === "commercial_property" && hasOfficialProvider ? (
+            <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
+              <p>🏢 Commercial property — limited residential data available</p>
+            </div>
+          ) : isUS && apiStatus === "requires_unit" && hasOfficialProvider ? (
+            <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
+              <p>Please enter a unit number</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                <input
+                  type="text"
+                  value={nycUnitDraft}
+                  onChange={(e) => setNycUnitDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitNycUnitApply();
+                    }
+                  }}
+                  placeholder="e.g. 4B"
+                  disabled={nycUnitApplyLoading || isLoading}
+                  className="min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-1 text-[10px] leading-tight text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  disabled={nycUnitApplyLoading || isLoading || !nycUnitDraft.trim()}
+                  onClick={() => void submitNycUnitApply()}
+                  className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+                >
+                  {nycUnitApplyLoading || isLoading ? "…" : "Apply"}
+                </button>
+              </div>
+              {nycUnitApplyError ? <p className="text-[9px] text-amber-400/90">{nycUnitApplyError}</p> : null}
             </div>
           ) : unitRequired ? (
             <div className="space-y-0.5">
