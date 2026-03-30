@@ -120,8 +120,10 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       return NextResponse.json(
         {
           status: "requires_unit",
-          message: masterGate.message,
-          building: masterGate.buildingData,
+          message: "Please enter a unit number to see specific valuation and sales history",
+          property: null,
+          valuation: null,
+          lastTransaction: null,
         },
         { status: 200 }
       );
@@ -129,7 +131,16 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
 
     let addressMasterUnitSearch: Awaited<ReturnType<typeof queryUnitFromAddressMaster>> | null = null;
     if (combinedUnit && masterNorm) {
-      addressMasterUnitSearch = await queryUnitFromAddressMaster(client, masterNorm, combinedUnit);
+      const zmFromInput =
+        typeof norm.zip_from_input === "string" && norm.zip_from_input.trim() !== ""
+          ? norm.zip_from_input.trim()
+          : null;
+      addressMasterUnitSearch = await queryUnitFromAddressMaster(
+        client,
+        masterNorm,
+        combinedUnit,
+        zmFromInput
+      );
     }
 
     const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm, {

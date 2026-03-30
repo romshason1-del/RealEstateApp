@@ -17,8 +17,8 @@ const NYC_BQ_LOCATION = "EU";
  * Mirrors `streetiq_gold.nyc_normalize_address_master_v1` (suffix abbreviations + directionals).
  */
 export function normalizeNycAddressMasterV1Line(raw: string): string {
-  let input = raw.split(",")[0].trim();
-  let s = input.replace(/\s+/g, " ").trim().toUpperCase();
+  let input = raw.split(",")[0].trim().toUpperCase();
+  let s = input.replace(/\s+/g, " ").trim();
   if (!s) return "";
   const pairs: [RegExp, string][] = [
     [/\bSTREET\b/g, "ST"],
@@ -206,11 +206,13 @@ function normalizeUnitToken(raw: string): string {
 /**
  * Looks up master rows for a normalized key and tries to associate a unit with raw_address text.
  * No dedicated unit column yet — match is heuristic on raw_address.
+ * When `zmcode` is set, prefers rows whose `zmcode` matches (USPS-style ZIP from input).
  */
 export async function queryUnitFromAddressMaster(
   client: ReturnType<typeof getUSBigQueryClient>,
   normalizedAddress: string,
-  unitNumber: string
+  unitNumber: string,
+  zmcode?: string | null
 ): Promise<
   | { matched: true; raw_address: string; bbl: string | null; zmcode: string | null }
   | { matched: false; unitNotFound: true; bbl: string | null; zmcode: string | null }
@@ -231,6 +233,12 @@ export async function queryUnitFromAddressMaster(
     rows = (r as typeof rows | null | undefined) ?? [];
   } catch {
     return { matched: false, unitNotFound: true, bbl: null, zmcode: null };
+  }
+
+  const zmTrim = typeof zmcode === "string" ? zmcode.trim() : "";
+  if (zmTrim) {
+    const byZm = rows.filter((row) => String(row.zmcode ?? "").trim() === zmTrim);
+    if (byZm.length > 0) rows = byZm;
   }
 
   const digitMatch = u.match(/\d+/);
