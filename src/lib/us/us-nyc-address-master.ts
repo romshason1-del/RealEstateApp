@@ -183,7 +183,7 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
       requiresUnit: false,
       isCommercial: true,
       fullAddresses: [],
-      bldgclass: row?.bldgclass ?? null,
+      bldgclass: (row?.bldgclass as string) ?? null,
     };
   }
 
