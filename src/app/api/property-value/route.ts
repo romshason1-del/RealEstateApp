@@ -551,6 +551,16 @@ export async function GET(request: NextRequest) {
             }
             const hasSubmittedUnitPrefetch =
               typeof combinedUnit === "string" && combinedUnit.trim() !== "";
+            console.log(
+              "[GATE_RESULT]",
+              JSON.stringify({
+                requiresUnit: masterGate.requiresUnit,
+                isCommercial: masterGate.isCommercial,
+                unitstotal: masterGate.unitstotal,
+                bldgclass: masterGate.bldgclass,
+                unitTrim: combinedUnit?.trim() ?? "",
+              })
+            );
             if (masterGate.requiresUnit && !hasSubmittedUnitPrefetch) {
               return NextResponse.json(
                 {

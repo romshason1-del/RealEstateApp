@@ -101,6 +101,9 @@ export type BuildingTruthFromMasterResult =
         bbl: string | null;
         zmcode?: string | null;
       };
+      /** PLUTO unitstotal from master row (for route logging). */
+      unitstotal?: number | null;
+      bldgclass?: string | null;
     }
   | {
       requiresUnit: false;
@@ -108,6 +111,8 @@ export type BuildingTruthFromMasterResult =
       isCommercial: boolean;
       /** Present when row had bldgclass (for gates/logging). */
       bldgclass?: string | null;
+      /** PLUTO unitstotal from master row (for route logging). */
+      unitstotal?: number | null;
     };
 
 function numOrNull(v: unknown): number | null {
@@ -147,7 +152,9 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
 ): Promise<BuildingTruthFromMasterResult> {
   console.log("[MASTER_GATE_CALLED] masterNorm:", normalizedMasterLine);
   const n = normalizedMasterLine.trim();
-  if (!n) return { requiresUnit: false, fullAddresses: [], isCommercial: false };
+  if (!n) {
+    return { requiresUnit: false, fullAddresses: [], isCommercial: false, unitstotal: null, bldgclass: null };
+  }
 
   const unitTrim = typeof unitNumber === "string" ? unitNumber.trim() : "";
 
@@ -181,30 +188,36 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
   const commercialPrefixes = ["O", "C", "K"];
   const isCommercial = commercialPrefixes.some((p) => bldgClassStr.toUpperCase().startsWith(p));
 
+  const unitstotal = row != null ? numOrNull(row.unitstotal) : null;
+
   if (isCommercial) {
     return {
       requiresUnit: false,
       isCommercial: true,
       fullAddresses: [],
       bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
+      unitstotal,
     };
   }
 
-  const ut = row != null ? numOrNull(row.unitstotal) : null;
   const bblStr = row?.bbl != null && row.bbl !== "" ? String(row.bbl) : null;
   const zm = row?.zmcode != null && row.zmcode !== "" ? String(row.zmcode) : null;
   const normAddr = row?.normalized_address != null ? String(row.normalized_address) : n;
 
-  const requiresUnit = ut != null && ut > 1 && !unitTrim;
+  // Multi-unit residential: require a unit unless one was supplied (commercial already excluded above).
+  const requiresUnit =
+    unitstotal != null && unitstotal > 1 && !isCommercial && !unitTrim;
 
   if (requiresUnit) {
     return {
       requiresUnit: true,
       isCommercial: false,
       message: "Please enter a unit number to see specific valuation and sales history",
+      unitstotal,
+      bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
       buildingData: {
         address: normAddr,
-        unitstotal: ut,
+        unitstotal,
         bbl: bblStr,
         zmcode: zm,
       },
@@ -217,6 +230,7 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
     fullAddresses,
     isCommercial: false,
     bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
+    unitstotal,
   };
 }
 
