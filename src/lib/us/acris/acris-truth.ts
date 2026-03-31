@@ -1,8 +1,9 @@
 /**
  * NYC ACRIS → deterministic deed history for truth-layer enrichment (US only).
- * Not wired to API/UI. No apartment or street-average logic.
+ * Optional `unit` filters Real Property Legals to that unit column (condo/co-op unit deeds).
  */
 
+import { normalizeUnitOrLotForTruthLookup } from "@/lib/us/us-nyc-api-truth";
 import { fetchAcrisLegalsByStreetAddress } from "./acris-legals";
 import { fetchAcrisMasterDeedsByDocumentId, type AcrisMasterDeedRow } from "./acris-master";
 import { acrisMasterRowsByDocumentId, joinAcrisLegalsWithMasterDeeds, type AcrisJoinedRow } from "./acris-join";
@@ -74,20 +75,29 @@ function joinedRowToTruthDeed(row: AcrisJoinedRow): AcrisTruthDeed {
 
 /**
  * Legals → master (DEED, amt > 0) per `document_id` → join → deed list sorted newest-first.
+ * When `unit` is provided, Legals rows are restricted to that `unit` (unit-specific deeds only).
  */
 export async function fetchAcrisNycTruthDeedHistory(params: {
   streetNumber: string;
   streetName: string;
+  /** Optional apartment/unit (normalized like NYC truth lookup). */
+  unit?: string | null;
   signal?: AbortSignal;
   legalsLimit?: number;
 }): Promise<AcrisTruthDeedHistoryResult> {
   const address_key = buildAcrisNycAddressKey(params.streetNumber, params.streetName);
+
+  const unitForLegals =
+    typeof params.unit === "string" && params.unit.trim() !== ""
+      ? normalizeUnitOrLotForTruthLookup(params.unit.trim()) || undefined
+      : undefined;
 
   const legalsResult = await fetchAcrisLegalsByStreetAddress({
     streetNumber: params.streetNumber,
     streetName: params.streetName,
     limit: params.legalsLimit,
     signal: params.signal,
+    unit: unitForLegals,
   });
 
   if (!legalsResult.success) {

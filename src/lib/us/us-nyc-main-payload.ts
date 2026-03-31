@@ -349,10 +349,16 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
     matched: null,
   };
 
+  const unitOrLotForAcris =
+    typeof us.unit_or_lot_submitted === "string" && us.unit_or_lot_submitted.trim() !== ""
+      ? us.unit_or_lot_submitted.trim()
+      : null;
+
   if (!isNycPrecomputed && acrisStreetNumber && acrisStreetName) {
     const acris = await fetchAcrisNycTruthDeedHistory({
       streetNumber: acrisStreetNumber,
       streetName: acrisStreetName,
+      unit: unitOrLotForAcris,
     });
 
     if (acris.success) {

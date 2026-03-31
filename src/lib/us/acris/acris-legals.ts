@@ -56,6 +56,7 @@ export type FetchAcrisLegalsByStreetResult =
 
 /**
  * Query Legals where `street_number` and `street_name` match (case-insensitive on street name).
+ * When `unit` is set, also requires ACRIS `unit` (Unit Number for BBL) to match — condo/co-op unit deeds.
  * Caller supplies values as recorded by ACRIS when possible (e.g. street name uppercase).
  */
 export async function fetchAcrisLegalsByStreetAddress(params: {
@@ -63,6 +64,8 @@ export async function fetchAcrisLegalsByStreetAddress(params: {
   streetName: string;
   limit?: number;
   signal?: AbortSignal;
+  /** Optional: filter to this unit/apartment (matches Legals `unit` column). */
+  unit?: string | null;
 }): Promise<FetchAcrisLegalsByStreetResult> {
   const sn = params.streetNumber.trim();
   const st = params.streetName.trim();
@@ -72,7 +75,12 @@ export async function fetchAcrisLegalsByStreetAddress(params: {
 
   const escN = acrisEscapeSoqlString(sn);
   const escS = acrisEscapeSoqlString(st);
-  const where = `street_number = '${escN}' AND upper(street_name) = upper('${escS}')`;
+  let where = `street_number = '${escN}' AND upper(street_name) = upper('${escS}')`;
+  const unitRaw = typeof params.unit === "string" ? params.unit.trim() : "";
+  if (unitRaw) {
+    const escU = acrisEscapeSoqlString(unitRaw);
+    where += ` AND upper(trim(unit)) = upper('${escU}')`;
+  }
 
   const res = await acrisSocrataGet<SocrataLegalRaw[]>(
     acrisLegalsResourcePath(),

@@ -377,22 +377,29 @@ export async function queryUSNYCApiTruthWithCandidates(
   const attempts: { candidate: string; rows_returned: number }[] = [];
 
   if (hasUnit && submitted) {
+    /** Precomputed `full_address` may use `, 1A` or `, UNIT 1A` — try both after normalization. */
+    const unitSuffixes = [submitted];
+    if (!/^UNIT\s/i.test(submitted)) {
+      unitSuffixes.push(`UNIT ${submitted}`);
+    }
     for (const address of workCandidates) {
       const trimmed = address.trim();
       if (!trimmed) continue;
-      const suffixed = `${trimmed}, ${submitted}`;
-      const { row, rowsReturned } = await queryPrecomputedNycCardJoinRow(client, suffixed);
-      attempts.push({ candidate: suffixed, rows_returned: rowsReturned });
-      if (row) {
-        return withUnitLookup(
-          {
-            success: true,
-            message: null,
-            ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row),
-          },
-          "matched",
-          submitted
-        );
+      for (const suffix of unitSuffixes) {
+        const suffixed = `${trimmed}, ${suffix}`;
+        const { row, rowsReturned } = await queryPrecomputedNycCardJoinRow(client, suffixed);
+        attempts.push({ candidate: suffixed, rows_returned: rowsReturned });
+        if (row) {
+          return withUnitLookup(
+            {
+              success: true,
+              message: null,
+              ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row),
+            },
+            "matched",
+            submitted
+          );
+        }
       }
     }
   }
@@ -497,47 +504,53 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
 
   if (hasUnit && submitted) {
+    const unitSuffixesDbg = [submitted];
+    if (!/^UNIT\s/i.test(submitted)) {
+      unitSuffixesDbg.push(`UNIT ${submitted}`);
+    }
     for (const address of candidatesToUse) {
       const trimmed = address.trim();
       if (!trimmed) continue;
-      const suffixed = `${trimmed}, ${submitted}`;
-      const { row, rowsReturned: n } = await queryPrecomputedNycCardJoinRow(client, suffixed);
-      attempts.push({ candidate: suffixed, rows_returned: n });
-      if (row) {
-        firstRow = rowToJsonSafe(row);
-        const response = withUnitLookup(
-          {
-            success: true,
-            message: null,
-            ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row),
-          },
-          "matched",
-          submitted
-        );
-        const matchedAddr = firstRow.full_address != null ? String(firstRow.full_address) : null;
-        return {
-          response,
-          debug: {
-            original_input: originalInput,
-            normalized_full_address: norm.normalized_full_address,
-            normalized_building_address: norm.normalized_building_address,
-            zip_from_input: norm.zip_from_input ?? null,
-            table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
-            sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
-            rows_found_count: n,
-            first_row_if_any: firstRow,
-            candidates_tried: candidatesToUse,
-            attempts,
-            final_selected_candidate: suffixed,
-            matched_full_address: matchedAddr,
-            precomputed_row_matched: true,
-            bigquery_location: NYC_TRUTH_QUERY_LOCATION,
-            full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
-            nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
-            candidate_generator_version: cgv,
-            ...addrMasterDebug,
-          },
-        };
+      for (const suffix of unitSuffixesDbg) {
+        const suffixed = `${trimmed}, ${suffix}`;
+        const { row, rowsReturned: n } = await queryPrecomputedNycCardJoinRow(client, suffixed);
+        attempts.push({ candidate: suffixed, rows_returned: n });
+        if (row) {
+          firstRow = rowToJsonSafe(row);
+          const response = withUnitLookup(
+            {
+              success: true,
+              message: null,
+              ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row),
+            },
+            "matched",
+            submitted
+          );
+          const matchedAddr = firstRow.full_address != null ? String(firstRow.full_address) : null;
+          return {
+            response,
+            debug: {
+              original_input: originalInput,
+              normalized_full_address: norm.normalized_full_address,
+              normalized_building_address: norm.normalized_building_address,
+              zip_from_input: norm.zip_from_input ?? null,
+              table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
+              sql_where_used: US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
+              rows_found_count: n,
+              first_row_if_any: firstRow,
+              candidates_tried: candidatesToUse,
+              attempts,
+              final_selected_candidate: suffixed,
+              matched_full_address: matchedAddr,
+              precomputed_row_matched: true,
+              bigquery_location: NYC_TRUTH_QUERY_LOCATION,
+              full_sql_template: US_NYC_PRECOMPUTED_JOIN_QUERY,
+              nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+              candidate_generator_version: cgv,
+              ...addrMasterDebug,
+            },
+          };
+        }
       }
     }
   }
