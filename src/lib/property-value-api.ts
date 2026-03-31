@@ -301,7 +301,11 @@ export async function fetchPropertyValueInsights(
   }
 
   try {
-    const params = new URLSearchParams({ address });
+    let addressParam = address.trim();
+    if (code === "US" && addressParam.includes("Long Island City")) {
+      addressParam = addressParam.replace(/Long Island City/g, "Queens");
+    }
+    const params = new URLSearchParams({ address: addressParam });
     if (options?.countryCode) params.set("countryCode", options.countryCode);
     if (options?.latitude != null && Number.isFinite(options.latitude)) {
       params.set("latitude", String(options.latitude));

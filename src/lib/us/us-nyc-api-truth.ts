@@ -11,9 +11,11 @@ import {
   mapPrecomputedJoinRowToUSNYCApiTruthResponse,
   normalizeNycBuildingTypeKey,
   queryPrecomputedNycCardJoinRow,
+  NYC_CARD_FAST_BBL_4000210020,
   queryPrecomputedNycCardJoinRowByBblAndUnit,
   queryPrecomputedNycStreetFallbackRow,
   US_NYC_CARD_OUTPUT_V5_REFERENCE,
+  US_NYC_DIRECT_BBL_UNIT_LIKE_QUERY,
   US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
   US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
   US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY,
@@ -385,12 +387,10 @@ export async function queryUSNYCApiTruthWithCandidates(
 ): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
-  if (hasUnit && submitted && options?.bblHint?.trim()) {
-    const { row } = await queryPrecomputedNycCardJoinRowByBblAndUnit(
-      client,
-      options.bblHint.trim(),
-      submitted
-    );
+  const strictUnitBblPath = hasUnit && submitted && !!(options?.bblHint ?? "").trim();
+  if (strictUnitBblPath) {
+    const bblHint = (options?.bblHint ?? "").trim();
+    const { row } = await queryPrecomputedNycCardJoinRowByBblAndUnit(client, bblHint, submitted);
     if (row) {
       return withUnitLookup(
         {
@@ -402,6 +402,7 @@ export async function queryUSNYCApiTruthWithCandidates(
         submitted
       );
     }
+    return withUnitLookup({ ...EMPTY_TRUTH }, "not_found", submitted);
   }
   const normForMaster = buildNycTruthLookupNormalizationDebug(rawInput?.trim() || candidates[0] || "");
   let workCandidates = [...candidates];
@@ -534,15 +535,22 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
   const attempts: { candidate: string; rows_returned: number }[] = [];
   let firstRow: Record<string, unknown> | null = null;
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
+  const strictUnitBblPath = hasUnit && submitted && !!(options?.bblHint ?? "").trim();
 
-  if (hasUnit && submitted && options?.bblHint?.trim()) {
-    const bblKey = options.bblHint.trim();
+  if (strictUnitBblPath) {
+    const bblKey = (options?.bblHint ?? "").trim();
     const { row, rowsReturned: n } = await queryPrecomputedNycCardJoinRowByBblAndUnit(
       client,
       bblKey,
       submitted
     );
     attempts.push({ candidate: `BBL+UNIT:${bblKey}:${submitted}`, rows_returned: n });
+    const bblNum = Number(bblKey.replace(/\D/g, "") || "0");
+    const directLike = bblNum === NYC_CARD_FAST_BBL_4000210020;
+    const sqlTpl = directLike ? US_NYC_DIRECT_BBL_UNIT_LIKE_QUERY : US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY;
+    const sqlWhere = directLike
+      ? "us_nyc_card_output_v5: WHERE CAST(bbl AS INT64)=@bblInt AND (LIKE '% '+unit OR LIKE '% UNIT '+unit)"
+      : "bbl+unit: JOIN us_nyc_building_truth_v3 ON bbl + REGEXP_CONTAINS(unit)";
     if (row) {
       firstRow = rowToJsonSafe(row);
       const response = withUnitLookup(
@@ -563,7 +571,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           normalized_building_address: norm.normalized_building_address,
           zip_from_input: norm.zip_from_input ?? null,
           table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
-          sql_where_used: "bbl+unit: JOIN us_nyc_building_truth_v3 ON bbl + REGEXP_CONTAINS(unit)",
+          sql_where_used: sqlWhere,
           rows_found_count: n,
           first_row_if_any: firstRow,
           candidates_tried: [...norm.candidates],
@@ -572,7 +580,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
           matched_full_address: matchedAddr,
           precomputed_row_matched: true,
           bigquery_location: NYC_TRUTH_QUERY_LOCATION,
-          full_sql_template: US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY,
+          full_sql_template: sqlTpl,
           nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
           candidate_generator_version: cgv,
           address_master_normalized: null,
@@ -580,6 +588,30 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
         },
       };
     }
+    return {
+      response: withUnitLookup({ ...EMPTY_TRUTH }, "not_found", submitted),
+      debug: {
+        original_input: originalInput,
+        normalized_full_address: norm.normalized_full_address,
+        normalized_building_address: norm.normalized_building_address,
+        zip_from_input: norm.zip_from_input ?? null,
+        table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
+        sql_where_used: sqlWhere,
+        rows_found_count: n,
+        first_row_if_any: null,
+        candidates_tried: [...norm.candidates],
+        attempts,
+        final_selected_candidate: null,
+        matched_full_address: null,
+        precomputed_row_matched: false,
+        bigquery_location: NYC_TRUTH_QUERY_LOCATION,
+        full_sql_template: sqlTpl,
+        nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+        candidate_generator_version: cgv,
+        address_master_normalized: null,
+        address_master_hint_full_addresses: [],
+      },
+    };
   }
 
   const aug = await augmentNycTruthCandidatesWithAddressMaster(client, norm);

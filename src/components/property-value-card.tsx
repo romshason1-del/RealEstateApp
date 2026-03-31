@@ -557,8 +557,12 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     setNycUnitApplyError(null);
     try {
       console.log("[UNIT_FETCH_TRIGGERED] address:", addressForApi.trim(), "unit:", t);
+      let addressToSend = addressForApi.trim();
+      if (addressToSend.includes("Long Island City")) {
+        addressToSend = addressToSend.replace(/Long Island City/g, "Queens");
+      }
       const params = new URLSearchParams();
-      params.set("address", addressForApi.trim());
+      params.set("address", addressToSend);
       params.set("countryCode", "US");
       if (position?.lat != null && Number.isFinite(position.lat)) params.set("latitude", String(position.lat));
       if (position?.lng != null && Number.isFinite(position.lng)) params.set("longitude", String(position.lng));

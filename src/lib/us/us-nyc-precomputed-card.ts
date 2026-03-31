@@ -8,6 +8,9 @@ import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
 import { US_NYC_BUILDING_TRUTH_V3_REFERENCE } from "./us-nyc-address-master";
 
+/** Manual PLUTO gate BBL for 47-20 / 45-45 (Queens) — direct card lookup by `bbl` + unit LIKE (no building_truth join). */
+export const NYC_CARD_FAST_BBL_4000210020 = 4000210020;
+
 export const US_NYC_CARD_OUTPUT_V5_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_card_output_v5";
 export const US_NYC_LAST_TX_ENGINE_V3_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_last_transaction_engine_v3";
 
@@ -23,6 +26,36 @@ const ENGINE = `\`${US_NYC_LAST_TX_ENGINE_V3_REFERENCE}\``;
 const TRUTH = `\`${US_NYC_BUILDING_TRUTH_V3_REFERENCE}\``;
 
 const NYC_PRECOMPUTED_LOCATION = "EU";
+
+/**
+ * Fast path for BBL 4000210020: single-table filter on `us_nyc_card_output_v5.bbl` + unit LIKE patterns.
+ * Requires `bbl` on card table (see build-us-nyc-card-output-v5.sql).
+ */
+export const US_NYC_DIRECT_BBL_UNIT_LIKE_QUERY = `
+SELECT
+  c.full_address AS full_address,
+  c.badge_1 AS badge_1,
+  c.badge_2 AS badge_2,
+  c.badge_3 AS badge_3,
+  c.badge_4 AS badge_4,
+  c.estimated_value AS estimated_value,
+  c.estimated_value_subtext AS estimated_value_subtext,
+  c.price_per_sqft_text AS price_per_sqft_text,
+  c.final_match_level AS final_match_level,
+  c.building_type AS building_type,
+  c.unit_count AS unit_count,
+  e.final_last_transaction_text AS final_last_transaction_text,
+  e.final_transaction_match_level AS final_transaction_match_level
+FROM ${CARD} c
+LEFT JOIN ${ENGINE} e
+  ON UPPER(TRIM(c.full_address)) = UPPER(TRIM(e.full_address))
+WHERE CAST(c.bbl AS INT64) = @bblInt
+  AND (
+    c.full_address LIKE CONCAT('% ', @unitToken)
+    OR c.full_address LIKE CONCAT('% UNIT ', @unitToken)
+  )
+LIMIT 1
+`.trim();
 
 /** Fast path: join card to building_truth by BBL (indexed) then filter unit via regex on full_address. */
 export const US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY = `
@@ -310,7 +343,8 @@ export async function queryPrecomputedNycCardJoinRow(
 }
 
 /**
- * Single round-trip: BBL + unit — avoids scanning card by string-only candidates (faster for large tables).
+ * BBL + unit: 4000210020 uses direct `WHERE bbl = … AND full_address LIKE …` on card (fast).
+ * Other BBLs use building_truth join + regex.
  */
 export async function queryPrecomputedNycCardJoinRowByBblAndUnit(
   client: ReturnType<typeof getUSBigQueryClient>,
@@ -320,6 +354,20 @@ export async function queryPrecomputedNycCardJoinRowByBblAndUnit(
   const bblStr = bbl.trim();
   const u = unitNormalized.trim();
   if (!bblStr || !u) return { row: null, rowsReturned: 0 };
+  const bblNum = Number(bblStr.replace(/\D/g, "") || "0");
+  if (bblNum === NYC_CARD_FAST_BBL_4000210020) {
+    const [rows] = await client.query({
+      query: US_NYC_DIRECT_BBL_UNIT_LIKE_QUERY,
+      params: {
+        bblInt: NYC_CARD_FAST_BBL_4000210020,
+        unitToken: u,
+      },
+      location: NYC_PRECOMPUTED_LOCATION,
+      jobTimeoutMs: 8000,
+    });
+    const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
+    return { row: list[0] ?? null, rowsReturned: list.length };
+  }
   const unitRegex = buildNycCardUnitRegexPattern(u);
   const [rows] = await client.query({
     query: US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY,

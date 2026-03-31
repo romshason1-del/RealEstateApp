@@ -133,6 +133,7 @@ WITH
   canonical_rows AS (
     SELECT
       full_address_canonical AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -147,6 +148,7 @@ WITH
         REGEXP_REPLACE(full_address_canonical,
           r'\bCENTRAL PARK WEST\b', 'CENTRAL PARK W'),
         r'\bCENTRAL PARK EAST\b', 'CENTRAL PARK E') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -165,6 +167,7 @@ WITH
     SELECT
       REGEXP_REPLACE(full_address_canonical, r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1')
         AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -179,6 +182,7 @@ WITH
   no_zip_rows AS (
     SELECT
       REGEXP_REPLACE(full_address_canonical, r'\s+\d{5}\s*$', '') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -198,6 +202,7 @@ WITH
             r'\bCENTRAL PARK EAST\b', 'CENTRAL PARK E'),
           r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1'),
         r'\s+\d{5}\s*$', '') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -213,6 +218,7 @@ WITH
         REGEXP_REPLACE(full_address_canonical,
           r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1'),
         r'\s+\d{5}\s*$', '') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -233,6 +239,7 @@ WITH
             r'\bEAST\s+(\d)',   'E \\1'),
           r'\bNORTH\s+(\d)',  'N \\1'),
         r'\bSOUTH\s+(\d)',   'S \\1') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -255,6 +262,7 @@ WITH
             r'\bNORTH\s+(\d)',  'N \\1'),
           r'\bSOUTH\s+(\d)',   'S \\1'),
         r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -277,6 +285,7 @@ WITH
             r'\bNORTH\s+(\d)',  'N \\1'),
           r'\bSOUTH\s+(\d)',   'S \\1'),
         r'\s+\d{5}\s*$', '') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -302,6 +311,7 @@ WITH
             r'\bSOUTH\s+(\d)',   'S \\1'),
           r'\b(\d{1,3})(ST|ND|RD|TH)\b', '\\1'),
         r'\s+\d{5}\s*$', '') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -317,6 +327,7 @@ WITH
   street_to_st_rows AS (
     SELECT
       REGEXP_REPLACE(full_address_canonical, r'\bSTREET\b', 'ST') AS full_address,
+      bbl,
       badge_1, badge_2, badge_3, badge_4,
       estimated_value, estimated_value_subtext,
       price_per_sqft_text, final_match_level,
@@ -344,6 +355,7 @@ WITH
 -- Final: deduplicate by full_address; prefer rows with non-null estimated_value
 SELECT
   full_address,
+  ANY_VALUE(bbl)                        AS bbl,
   ANY_VALUE(badge_1)                    AS badge_1,
   ANY_VALUE(badge_2)                    AS badge_2,
   ANY_VALUE(badge_3)                    AS badge_3,
