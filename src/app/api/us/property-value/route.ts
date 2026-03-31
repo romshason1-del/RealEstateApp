@@ -9,6 +9,7 @@ import { parseUSAddressFromFullString } from "@/lib/address-parse";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
 import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
+import { preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
 import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
 import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
 import {
@@ -38,7 +39,7 @@ function logUsNycDebug(label: string, payload: object): void {
 
 async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitParamRaw?: string | null) {
   console.log("[STREETIQ_FORCE_CHECK] handle() called, address:", addressRaw);
-  const { line } = normalizeUSAddressLine(addressRaw);
+  const { line } = normalizeUSAddressLine(preserveQueensInAddressLineIfUserTypedQueens(addressRaw));
   if (!line) {
     const empty = createEmptyUSNYCApiTruthResponse({
       success: false,
@@ -119,18 +120,28 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
     const plutoGate = await queryPlutoResidentialMultiUnitGate(
       client,
       norm.normalized_building_address,
-      norm.zip_from_input ?? null
+      norm.zip_from_input ?? null,
+      addressRaw
     );
     const gateBblFromPluto = plutoGate.hit ? plutoGate.bbl : null;
     if (plutoGate.hit && plutoGate.strictMultiUnitResidential && !hasSubmittedUnit) {
+      console.log(
+        `[NYC-DEBUG] Input: ${addressRaw} | Assigned BBL: ${gateBblFromPluto ?? "null"} | Status: requires_unit`
+      );
       return NextResponse.json(
         {
+          success: true,
           status: "requires_unit",
           message: "Please enter a unit number to see specific valuation and sales history",
+          estimated_value: null,
+          latest_sale_price: null,
+          latest_sale_date: null,
+          has_truth_property_row: false,
           property: null,
           valuation: null,
           lastTransaction: null,
           nyc_pluto_strict_unit_gate: true,
+          nyc_truth_fetch_skipped: true,
         },
         { status: 200 }
       );
@@ -170,13 +181,22 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       );
     }
     if (masterGate.requiresUnit && !hasSubmittedUnit) {
+      console.log(
+        `[NYC-DEBUG] Input: ${addressRaw} | Assigned BBL: ${gateBbl ?? "null"} | Status: requires_unit`
+      );
       return NextResponse.json(
         {
+          success: true,
           status: "requires_unit",
           message: "Please enter a unit number to see specific valuation and sales history",
+          estimated_value: null,
+          latest_sale_price: null,
+          latest_sale_date: null,
+          has_truth_property_row: false,
           property: null,
           valuation: null,
           lastTransaction: null,
+          nyc_truth_fetch_skipped: true,
         },
         { status: 200 }
       );
@@ -257,6 +277,9 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
     if (!responseOut.status && responseOut.estimated_value != null) {
       responseOut.status = "success";
     }
+    console.log(
+      `[NYC-DEBUG] Input: ${addressRaw} | Assigned BBL: ${gateBbl ?? "null"} | Status: ${String(responseOut.status ?? "ok")}`
+    );
     return NextResponse.json(omitUsNycDebugFromPayload(responseOut), {
       status: 200,
     });

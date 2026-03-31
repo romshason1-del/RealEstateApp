@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { HeartButton } from "@/components/heart-button";
 import { PropertyValueCardSafe } from "@/components/property-value-card-safe";
+import { preserveQueensOverGoogleNeighborhood } from "@/lib/us/us-nyc-preserve-queens";
 import { FranceApartmentSheet } from "@/components/france-apartment-sheet";
 import {
   GoogleMap,
@@ -1254,7 +1255,10 @@ export const AddressExplorer = () => {
           return;
         }
         const selectedFormatted = results[0].formatted_address ?? prediction.description;
-        const displayAddress = selectedFormatted;
+        const displayAddress = preserveQueensOverGoogleNeighborhood(
+          propertyValueAddressQuery.trim() || undefined,
+          selectedFormatted
+        );
         setIsPropertyValueAddressInputOpen(false);
         setPropertyValueAddressQuery("");
         setPropertyValuePredictions([]);
@@ -1262,7 +1266,7 @@ export const AddressExplorer = () => {
         setSelectedBuilding({
           ...insight,
           rawInputAddress: propertyValueAddressQuery.trim() || undefined,
-          selectedFormattedAddress: selectedFormatted,
+          selectedFormattedAddress: displayAddress,
         });
         setDismissedBuilding(null);
         setQuery(displayAddress);

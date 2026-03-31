@@ -3,8 +3,10 @@
  * Not fuzzy — fixed rules only.
  */
 
+import { preserveQueensInAddressLineIfUserTypedQueens } from "./us-nyc-preserve-queens";
+
 /** Bump when candidate rules change (client cache key + API debug). */
-export const NYC_CANDIDATE_GENERATOR_VERSION = 6;
+export const NYC_CANDIDATE_GENERATOR_VERSION = 7;
 
 const NYC_BOROUGHS_AND_CITY = new Set([
   "BROOKLYN",
@@ -348,7 +350,7 @@ export type NycTruthNormalizationDebug = {
  * Computes normalized labels + candidate list (single source of truth).
  */
 export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTruthNormalizationDebug | null {
-  const upper = collapseSpaces(rawInput.toUpperCase());
+  const upper = collapseSpaces(preserveQueensInAddressLineIfUserTypedQueens(rawInput).toUpperCase());
   const commaParts = upper.split(",").map((p) => p.trim()).filter(Boolean);
 
   let coreRaw: string;

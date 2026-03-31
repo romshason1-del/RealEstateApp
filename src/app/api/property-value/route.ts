@@ -32,6 +32,7 @@ import {
   queryBuildingTruthFullAddressesFromAddressMaster,
 } from "@/lib/us/us-nyc-address-master";
 import { queryPlutoResidentialMultiUnitGate } from "@/lib/us/us-nyc-pluto-gate";
+import { preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -521,7 +522,7 @@ export async function GET(request: NextRequest) {
     const combinedUnit = (unitFromParam || unitOrLot) || null;
 
     if (isUSBigQueryConfigured()) {
-      const { line } = normalizeUSAddressLine(usAddress);
+      const { line } = normalizeUSAddressLine(preserveQueensInAddressLineIfUserTypedQueens(usAddress));
       if (line) {
         const norm = buildNycTruthLookupNormalizationDebug(line);
         if (norm) {
@@ -532,21 +533,31 @@ export async function GET(request: NextRequest) {
             const plutoGatePrefetch = await queryPlutoResidentialMultiUnitGate(
               client,
               norm.normalized_building_address,
-              norm.zip_from_input ?? null
+              norm.zip_from_input ?? null,
+              usAddress
             );
             if (
               plutoGatePrefetch.hit &&
               plutoGatePrefetch.strictMultiUnitResidential &&
               !hasSubmittedUnitPrefetch
             ) {
+              console.log(
+                `[NYC-DEBUG] Input: ${usAddress} | Assigned BBL: ${plutoGatePrefetch.bbl ?? "null"} | Status: requires_unit`
+              );
               return NextResponse.json(
                 {
+                  success: true,
                   status: "requires_unit",
                   message: "Please enter a unit number to see specific valuation and sales history",
+                  estimated_value: null,
+                  latest_sale_price: null,
+                  latest_sale_date: null,
+                  has_truth_property_row: false,
                   property: null,
                   valuation: null,
                   lastTransaction: null,
                   nyc_pluto_strict_unit_gate: true,
+                  nyc_truth_fetch_skipped: true,
                 },
                 { status: 200 }
               );
@@ -585,13 +596,26 @@ export async function GET(request: NextRequest) {
               })
             );
             if (masterGate.requiresUnit && !hasSubmittedUnitPrefetch) {
+              const prefetchBbl =
+                masterGate.requiresUnit && "buildingData" in masterGate
+                  ? masterGate.buildingData.bbl ?? null
+                  : null;
+              console.log(
+                `[NYC-DEBUG] Input: ${usAddress} | Assigned BBL: ${prefetchBbl ?? "null"} | Status: requires_unit`
+              );
               return NextResponse.json(
                 {
+                  success: true,
                   status: "requires_unit",
                   message: "Please enter a unit number to see specific valuation and sales history",
+                  estimated_value: null,
+                  latest_sale_price: null,
+                  latest_sale_date: null,
+                  has_truth_property_row: false,
                   property: null,
                   valuation: null,
                   lastTransaction: null,
+                  nyc_truth_fetch_skipped: true,
                 },
                 { status: 200 }
               );

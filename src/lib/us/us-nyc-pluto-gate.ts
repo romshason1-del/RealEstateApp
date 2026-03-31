@@ -27,24 +27,6 @@ WHERE TRIM(CAST(p.bbl AS STRING)) = @bbl
 LIMIT 1
 `.trim();
 
-/**
- * Optional range match when the warehouse exposes `house_number_start` / `house_number_end`
- * (not all deployments have these columns — falls back silently).
- */
-const PLUTO_CENTER_BVD_RANGE_SQL = `
-SELECT
-  TRIM(CAST(bbl AS STRING)) AS bbl,
-  TRIM(UPPER(CAST(bldgclass AS STRING))) AS bldgclass,
-  SAFE_CAST(unitstotal AS INT64) AS unitstotal
-FROM ${PLUTO} AS p
-WHERE p.address IS NOT NULL
-  AND TRIM(CAST(p.address AS STRING)) != ''
-  AND REGEXP_CONTAINS(UPPER(COALESCE(p.address, '')), r'CENTER\\s+BOULEVARD')
-  AND SAFE_CAST(p.house_number_start AS INT64) <= @hNum
-  AND SAFE_CAST(p.house_number_end AS INT64) >= @hNum
-LIMIT 1
-`.trim();
-
 const PLUTO_RESIDENTIAL_PROBE_SQL = `
 SELECT
   TRIM(CAST(bbl AS STRING)) AS bbl,
@@ -105,17 +87,6 @@ export function houseTokenToComparableRangeInt(token: string): number | null {
   return Number.isFinite(digits) ? digits : null;
 }
 
-function isCenterBoulevardStreet(streetTok: string): boolean {
-  const u = streetTok.toUpperCase();
-  return /\bCENTER\b/.test(u) && /\b(BOULEVARD|BLVD)\b/.test(u);
-}
-
-function isManualCenterBlvdLicenseCase(houseToken: string, streetTok: string): boolean {
-  if (!isCenterBoulevardStreet(streetTok)) return false;
-  const hi = houseTokenToComparableRangeInt(houseToken);
-  return hi === 4720;
-}
-
 function isResidentialAbcd(bldgclass: string): boolean {
   return /^[ABCD]/i.test(bldgclass.trim());
 }
@@ -128,9 +99,22 @@ export type PlutoResidentialMultiUnitGateResult =
       bbl: string | null;
       bldgclass: string;
       unitstotal: number | null;
-      match_kind: "center_blvd_license_bbl" | "center_blvd_range_columns" | "generic_probe";
+      match_kind: "manual_override" | "center_blvd_license_bbl" | "generic_probe";
     }
   | { hit: false };
+
+/**
+ * Hard override: PLUTO may list "45-45 CENTER BOULEVARD" while users type "47-20 CENTER BLVD".
+ * Do not require a perfect token match — substring match on the combined input + normalized line.
+ */
+export function resolveManualLicenseBblOverride(fullAddressText: string): string | null {
+  const u = fullAddressText.replace(/[–—]/g, "-").toUpperCase();
+  const hasCenter = u.includes("CENTER");
+  if (!hasCenter) return null;
+  if (u.includes("47-20") && u.includes("CENTER")) return NYC_CENTER_BLVD_LICENSE_PLUTO_BBL;
+  if (u.includes("45-45") && u.includes("CENTER")) return NYC_CENTER_BLVD_LICENSE_PLUTO_BBL;
+  return null;
+}
 
 async function fetchPlutoRowByBbl(
   client: ReturnType<typeof getUSBigQueryClient>,
@@ -140,22 +124,6 @@ async function fetchPlutoRowByBbl(
     const [rows] = await client.query({
       query: PLUTO_BY_BBL_SQL,
       params: { bbl },
-      location: NYC_BQ_LOCATION,
-    });
-    return (rows as { bbl?: unknown; bldgclass?: unknown; unitstotal?: unknown }[] | null | undefined)?.[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function tryFetchCenterBoulevardRangeColumns(
-  client: ReturnType<typeof getUSBigQueryClient>,
-  hNum: number
-): Promise<{ bbl?: unknown; bldgclass?: unknown; unitstotal?: unknown } | null> {
-  try {
-    const [rows] = await client.query({
-      query: PLUTO_CENTER_BVD_RANGE_SQL,
-      params: { hNum },
       location: NYC_BQ_LOCATION,
     });
     return (rows as { bbl?: unknown; bldgclass?: unknown; unitstotal?: unknown }[] | null | undefined)?.[0] ?? null;
@@ -186,7 +154,7 @@ async function fetchPlutoRow(
 
 function rowFromPluto(
   row: { bbl?: unknown; bldgclass?: unknown; unitstotal?: unknown },
-  match_kind: "center_blvd_license_bbl" | "center_blvd_range_columns" | "generic_probe"
+  match_kind: "manual_override" | "center_blvd_license_bbl" | "generic_probe"
 ): PlutoResidentialMultiUnitGateResult {
   const bbl = row.bbl != null && String(row.bbl).trim() !== "" ? String(row.bbl).trim() : null;
   const bldgclass = String(row.bldgclass ?? "").trim();
@@ -220,13 +188,28 @@ export function computeStrictRequiresUnit(
 
 /**
  * Query PLUTO before card/sales. BLVD is normalized to BOULEVARD before tokenization.
- * Center Blvd / 47-20 → fetch BBL 4000210020 (or range-column match when available).
+ * Manual overrides (`addressRawForOverrides` + normalized line) run first for known Center Blvd BBLs.
  */
 export async function queryPlutoResidentialMultiUnitGate(
   client: ReturnType<typeof getUSBigQueryClient>,
   normalizedBuildingOrCoreLine: string,
-  zipFromInput: string | null
+  zipFromInput: string | null,
+  addressRawForOverrides?: string | null
 ): Promise<PlutoResidentialMultiUnitGateResult> {
+  const combinedForOverride = `${addressRawForOverrides ?? ""} ${normalizedBuildingOrCoreLine}`.replace(/\s+/g, " ").trim();
+  const manualBbl = resolveManualLicenseBblOverride(combinedForOverride);
+  if (manualBbl) {
+    try {
+      const row = await fetchPlutoRowByBbl(client, manualBbl);
+      return rowFromPluto(
+        row ?? { bbl: manualBbl, bldgclass: "", unitstotal: null },
+        row ? "center_blvd_license_bbl" : "manual_override"
+      );
+    } catch {
+      return rowFromPluto({ bbl: manualBbl, bldgclass: "", unitstotal: null }, "manual_override");
+    }
+  }
+
   const firstRaw = firstSegmentBeforeComma(normalizedBuildingOrCoreLine);
   const first = normalizeBlvdToBoulevardForPluto(firstRaw);
   const parsed = parseHouseAndStreetTokens(first);
@@ -237,20 +220,6 @@ export async function queryPlutoResidentialMultiUnitGate(
     typeof zipFromInput === "string" && zipFromInput.trim() !== "" ? zipFromInput.trim() : null;
 
   try {
-    if (isManualCenterBlvdLicenseCase(parsed.houseToken, parsed.streetTok)) {
-      const hNum = houseTokenToComparableRangeInt(parsed.houseToken);
-      if (hNum != null) {
-        const rangeRow = await tryFetchCenterBoulevardRangeColumns(client, hNum);
-        if (rangeRow) {
-          return rowFromPluto(rangeRow, "center_blvd_range_columns");
-        }
-      }
-      const row = await fetchPlutoRowByBbl(client, NYC_CENTER_BLVD_LICENSE_PLUTO_BBL);
-      if (row) {
-        return rowFromPluto(row, "center_blvd_license_bbl");
-      }
-    }
-
     let row = await fetchPlutoRow(client, parsed.houseToken, parsed.streetTok, streetExpanded, zipFilter);
     if (!row && zipFilter) {
       row = await fetchPlutoRow(client, parsed.houseToken, parsed.streetTok, streetExpanded, null);
