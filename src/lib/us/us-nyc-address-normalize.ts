@@ -4,7 +4,7 @@
  */
 
 /** Bump when candidate rules change (client cache key + API debug). */
-export const NYC_CANDIDATE_GENERATOR_VERSION = 5;
+export const NYC_CANDIDATE_GENERATOR_VERSION = 6;
 
 const NYC_BOROUGHS_AND_CITY = new Set([
   "BROOKLYN",
@@ -51,20 +51,34 @@ function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/** Never treat these as the "borough" token for candidate suffixes — avoids LIC replacing Queens. */
+const NYC_NON_BOROUGH_LOCALITY_LABELS = new Set(["LONG ISLAND CITY", "LIC"]);
+
 /**
  * If the user typed an NYC borough name (e.g. Queens), prefer that in geo suffix candidates
  * so we do not rely only on "NEW YORK, NY" — PLUTO and many gold tables use borough labels.
- * Does not map neighborhoods (e.g. Long Island City) to boroughs; preserves explicit borough input.
+ * Explicit borough (especially QUEENS) wins over neighborhood labels; we never substitute Long Island City for Queens.
  */
 export function extractPreferredNycBoroughFromUserInput(raw: string): string | null {
   const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  const upperParts = parts.map((p) => p.toUpperCase());
+  if (upperParts.includes("QUEENS")) return "QUEENS";
   for (const p of parts) {
     const u = p.toUpperCase();
+    if (NYC_NON_BOROUGH_LOCALITY_LABELS.has(u)) continue;
     if (NYC_BOROUGHS_AND_CITY.has(u) && u !== "NEW YORK" && u !== "NYC") {
       return u;
     }
   }
   return null;
+}
+
+/** When both "Long Island City" and "Queens" appear (e.g. geocoder noise), keep Queens and drop LIC from the core. */
+function preferBoroughOverConflictingNeighborhoodLabels(parts: readonly string[]): string[] {
+  const upper = parts.map((p) => p.trim().toUpperCase());
+  const hasQueens = upper.some((x) => x === "QUEENS");
+  if (!hasQueens) return [...parts];
+  return parts.filter((p, i) => !NYC_NON_BOROUGH_LOCALITY_LABELS.has(upper[i]!));
 }
 
 function isGeographicOnlyPart(part: string): boolean {
@@ -341,7 +355,7 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
   if (commaParts.length <= 1) {
     coreRaw = commaParts[0] ?? upper;
   } else {
-    const parts = [...commaParts];
+    const parts = [...preferBoroughOverConflictingNeighborhoodLabels(commaParts)];
     while (parts.length > 0 && isGeographicOnlyPart(parts[parts.length - 1]!)) {
       parts.pop();
     }

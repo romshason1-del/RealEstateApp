@@ -79,6 +79,13 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
 
   try {
     const norm = buildNycTruthLookupNormalizationDebug(line);
+    console.log("[US_NYC_PROPERTY_VALUE] final_normalized_address", {
+      normalized_input_line: line,
+      normalized_full_address: norm?.normalized_full_address ?? null,
+      normalized_building_address: norm?.normalized_building_address ?? null,
+      zip_from_input: norm?.zip_from_input ?? null,
+      preferred_borough_from_input: norm?.preferred_borough_from_input ?? null,
+    });
     if (!norm) {
       const empty = createEmptyUSNYCApiTruthResponse({
         success: false,
