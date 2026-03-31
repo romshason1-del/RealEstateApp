@@ -31,6 +31,7 @@ import {
   normalizeNycAddressMasterV1Line,
   queryBuildingTruthFullAddressesFromAddressMaster,
 } from "@/lib/us/us-nyc-address-master";
+import { queryPlutoResidentialMultiUnitGate } from "@/lib/us/us-nyc-pluto-gate";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -526,6 +527,30 @@ export async function GET(request: NextRequest) {
         if (norm) {
           try {
             const client = getUSBigQueryClient();
+            const hasSubmittedUnitPrefetch =
+              typeof combinedUnit === "string" && combinedUnit.trim() !== "";
+            const plutoGatePrefetch = await queryPlutoResidentialMultiUnitGate(
+              client,
+              norm.normalized_building_address,
+              norm.zip_from_input ?? null
+            );
+            if (
+              plutoGatePrefetch.hit &&
+              plutoGatePrefetch.strictMultiUnitResidential &&
+              !hasSubmittedUnitPrefetch
+            ) {
+              return NextResponse.json(
+                {
+                  status: "requires_unit",
+                  message: "Please enter a unit number to see specific valuation and sales history",
+                  property: null,
+                  valuation: null,
+                  lastTransaction: null,
+                  nyc_pluto_strict_unit_gate: true,
+                },
+                { status: 200 }
+              );
+            }
             const masterLine =
               norm.normalized_building_address.trim() ||
               norm.normalized_full_address.split(",")[0]?.replace(/\s+/g, " ").trim() ||
@@ -549,8 +574,6 @@ export async function GET(request: NextRequest) {
                 { status: 200 }
               );
             }
-            const hasSubmittedUnitPrefetch =
-              typeof combinedUnit === "string" && combinedUnit.trim() !== "";
             console.log(
               "[GATE_RESULT]",
               JSON.stringify({

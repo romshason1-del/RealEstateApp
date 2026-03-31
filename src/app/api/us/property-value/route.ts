@@ -16,6 +16,7 @@ import {
   queryBuildingTruthFullAddressesFromAddressMaster,
   queryUnitFromAddressMaster,
 } from "@/lib/us/us-nyc-address-master";
+import { queryPlutoResidentialMultiUnitGate } from "@/lib/us/us-nyc-pluto-gate";
 import {
   queryUSNYCApiTruthWithCandidatesDebug,
   US_NYC_API_TRUTH_SQL_WHERE,
@@ -104,8 +105,30 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
     const unitFromParam =
       typeof unitParamRaw === "string" && unitParamRaw.trim() !== "" ? unitParamRaw.trim() : null;
     const combinedUnit = unitFromParam ?? unitOrLot;
+    const hasSubmittedUnit = typeof combinedUnit === "string" && combinedUnit.trim() !== "";
 
     const client = getUSBigQueryClient();
+
+    const plutoGate = await queryPlutoResidentialMultiUnitGate(
+      client,
+      norm.normalized_building_address,
+      norm.zip_from_input ?? null
+    );
+    const gateBblFromPluto = plutoGate.hit ? plutoGate.bbl : null;
+    if (plutoGate.hit && plutoGate.strictMultiUnitResidential && !hasSubmittedUnit) {
+      return NextResponse.json(
+        {
+          status: "requires_unit",
+          message: "Please enter a unit number to see specific valuation and sales history",
+          property: null,
+          valuation: null,
+          lastTransaction: null,
+          nyc_pluto_strict_unit_gate: true,
+        },
+        { status: 200 }
+      );
+    }
+
     const masterLine =
       norm.normalized_building_address.trim() ||
       norm.normalized_full_address.split(",")[0]?.replace(/\s+/g, " ").trim() ||
@@ -119,11 +142,12 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       combinedUnit
     );
     const gateBbl =
-      masterGate.requiresUnit && "buildingData" in masterGate
+      gateBblFromPluto ??
+      (masterGate.requiresUnit && "buildingData" in masterGate
         ? masterGate.buildingData.bbl
         : !masterGate.requiresUnit && "bbl" in masterGate
           ? masterGate.bbl ?? null
-          : null;
+          : null);
     const gateBldgClass = "bldgclass" in masterGate ? masterGate.bldgclass : undefined;
     console.log("[GATE_BLDGCLASS]", gateBldgClass, "isCommercial:", masterGate.isCommercial);
     if (masterGate.isCommercial) {
@@ -138,7 +162,6 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
         { status: 200 }
       );
     }
-    const hasSubmittedUnit = typeof combinedUnit === "string" && combinedUnit.trim() !== "";
     if (masterGate.requiresUnit && !hasSubmittedUnit) {
       return NextResponse.json(
         {

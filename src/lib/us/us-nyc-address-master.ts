@@ -2,9 +2,15 @@
  * NYC unified address master (`us_nyc_address_master_v1`) — US / BigQuery only.
  * Normalization must stay in lockstep with `nyc_normalize_address_master_v1` in
  * scripts/us/nyc/sql/build-us-nyc-address-master-v1.sql
+ *
+ * Borough labels (e.g. Queens vs a neighborhood name) are **not** rewritten here; candidate
+ * `, QUEENS, NY` suffixes come from {@link extractPreferredNycBoroughFromUserInput} in
+ * `us-nyc-address-normalize.ts` so user-supplied borough strings align with PLUTO-style records.
  */
 
 import { getUSBigQueryClient } from "./bigquery-client";
+
+export { extractPreferredNycBoroughFromUserInput } from "./us-nyc-address-normalize";
 
 export const US_NYC_ADDRESS_MASTER_V1_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_address_master_v1";
 export const US_NYC_BUILDING_TRUTH_V3_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_building_truth_v3";

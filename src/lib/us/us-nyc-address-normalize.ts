@@ -4,7 +4,7 @@
  */
 
 /** Bump when candidate rules change (client cache key + API debug). */
-export const NYC_CANDIDATE_GENERATOR_VERSION = 4;
+export const NYC_CANDIDATE_GENERATOR_VERSION = 5;
 
 const NYC_BOROUGHS_AND_CITY = new Set([
   "BROOKLYN",
@@ -49,6 +49,22 @@ const NYC_STREET_TYPE_PAIRS: readonly [string, string][] = [
 
 function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * If the user typed an NYC borough name (e.g. Queens), prefer that in geo suffix candidates
+ * so we do not rely only on "NEW YORK, NY" — PLUTO and many gold tables use borough labels.
+ * Does not map neighborhoods (e.g. Long Island City) to boroughs; preserves explicit borough input.
+ */
+export function extractPreferredNycBoroughFromUserInput(raw: string): string | null {
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  for (const p of parts) {
+    const u = p.toUpperCase();
+    if (NYC_BOROUGHS_AND_CITY.has(u) && u !== "NEW YORK" && u !== "NYC") {
+      return u;
+    }
+  }
+  return null;
 }
 
 function isGeographicOnlyPart(part: string): boolean {
@@ -268,13 +284,24 @@ function buildOrderedAddressOnlyCandidates(core: string, buildingOnly: string | 
  * 2) Same strings + ", NEW YORK, NY".
  * 3) Same strings + ", NEW YORK, NY {ZIP}" when ZIP known.
  * 4) Same strings + ", USA".
+ * When `preferredBorough` is set (user typed e.g. Queens), emit `, QUEENS, NY` before generic New York variants.
  */
-function appendGeoSuffixVariants(streetOnlyLines: readonly string[], zip: string | null): string[] {
+function appendGeoSuffixVariants(
+  streetOnlyLines: readonly string[],
+  zip: string | null,
+  preferredBorough: string | null
+): string[] {
   const out: string[] = [];
   for (const line of streetOnlyLines) {
     pushUniqueOrdered(out, line);
   }
   for (const line of streetOnlyLines) {
+    if (preferredBorough) {
+      pushUniqueOrdered(out, `${line}, ${preferredBorough}, NY`);
+      if (zip) {
+        pushUniqueOrdered(out, `${line}, ${preferredBorough}, NY ${zip}`);
+      }
+    }
     pushUniqueOrdered(out, `${line}, NEW YORK, NY`);
   }
   if (zip) {
@@ -299,6 +326,8 @@ export type NycTruthNormalizationDebug = {
   candidate_generator_version: number;
   /** Candidates passed to BigQuery in deterministic priority order. */
   candidates: string[];
+  /** Borough token from user input (e.g. QUEENS) when present — used for geo suffixes only. */
+  preferred_borough_from_input: string | null;
 };
 
 /**
@@ -329,9 +358,10 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
   const normalized_full_address = core;
   const normalized_building_address = buildingOnly ?? core;
   const zip = extractNycZipFromRawInput(rawInput);
+  const preferredBorough = extractPreferredNycBoroughFromUserInput(rawInput);
 
   const addressOnly = buildOrderedAddressOnlyCandidates(core, buildingOnly);
-  const candidates = appendGeoSuffixVariants(addressOnly, zip);
+  const candidates = appendGeoSuffixVariants(addressOnly, zip, preferredBorough);
 
   return {
     normalized_full_address,
@@ -339,6 +369,7 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
     zip_from_input: zip,
     candidate_generator_version: NYC_CANDIDATE_GENERATOR_VERSION,
     candidates,
+    preferred_borough_from_input: preferredBorough,
   };
 }
 

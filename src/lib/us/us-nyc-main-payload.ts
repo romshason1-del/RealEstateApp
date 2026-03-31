@@ -166,6 +166,46 @@ export async function adaptUsNycTruthJsonForMainPropertyValueRoute(
   const rawHouse = ctx.houseNumber.trim();
   const isStreetOnlyQuery = rawHouse === "" || rawHouse === "—";
 
+  /** NYC `/api/us/property-value` returns this before any truth rows — never surface "Unavailable" or partial pricing. */
+  if (us.status === "requires_unit") {
+    const out: Record<string, unknown> = {
+      success: true,
+      data_source: "us_nyc_truth",
+      message: null,
+      status: "requires_unit",
+      address: { city, street, house_number: houseNumber },
+      estimated_value: null,
+      latest_sale_price: null,
+      latest_sale_date: null,
+      latest_sale_total_units: null,
+      avg_street_price: null,
+      avg_street_price_per_sqft: null,
+      transaction_count: null,
+      price_per_sqft: null,
+      sales_address: null,
+      pluto_address: null,
+      street_name: null,
+      property_result: {
+        exact_value: null,
+        exact_value_message: null,
+        value_level: "property-level",
+        last_transaction: { amount: 0, date: null, message: null },
+        street_average: null,
+        street_average_message: null,
+        livability_rating: "FAIR",
+      },
+      unit_classification: "multi_unit_building",
+      should_prompt_for_unit: true,
+      unit_prompt_reason: "unit_required",
+      ...unitLookupFieldsFromUs(us),
+    };
+    ensureNycUnitFieldsOnPayload(out);
+    if (shouldIncludeUsNycDebugInApiResponse() && us.us_nyc_debug != null) {
+      out.us_nyc_debug = us.us_nyc_debug;
+    }
+    return out;
+  }
+
   const estimated_value = num(us.estimated_value);
   const latest_sale_price = num(us.latest_sale_price);
   const latest_sale_date = coerceBigQueryDateToYyyyMmDd(us.latest_sale_date);
