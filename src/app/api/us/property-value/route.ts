@@ -118,6 +118,12 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
       masterNorm,
       combinedUnit
     );
+    const gateBbl =
+      masterGate.requiresUnit && "buildingData" in masterGate
+        ? masterGate.buildingData.bbl
+        : !masterGate.requiresUnit && "bbl" in masterGate
+          ? masterGate.bbl ?? null
+          : null;
     const gateBldgClass = "bldgclass" in masterGate ? masterGate.bldgclass : undefined;
     console.log("[GATE_BLDGCLASS]", gateBldgClass, "isCommercial:", masterGate.isCommercial);
     if (masterGate.isCommercial) {
@@ -156,12 +162,14 @@ async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitPara
         client,
         masterNorm,
         combinedUnit,
-        zmFromInput
+        zmFromInput,
+        gateBbl
       );
     }
 
     const { response, debug } = await queryUSNYCApiTruthWithCandidatesDebug(addressRaw, norm, {
       unitOrLot: combinedUnit,
+      bblHint: gateBbl,
     });
     const debugOut =
       addressMasterUnitSearch != null

@@ -12,9 +12,10 @@ export const US_NYC_LAST_TX_ENGINE_V3_REFERENCE = "streetiq-bigquery.streetiq_go
 
 /**
  * Primary lookup predicate (card table) — one candidate per query.
- * Callers iterate {@link buildNycTruthLookupCandidates} in deterministic order until the first row matches.
+ * Case-insensitive + trimmed so BLVD vs blvd and spacing variants still match `us_nyc_card_output_v5`.
  */
-export const US_NYC_PRECOMPUTED_CARD_SQL_WHERE = "c.full_address = @address";
+export const US_NYC_PRECOMPUTED_CARD_SQL_WHERE =
+  "UPPER(TRIM(c.full_address)) = UPPER(TRIM(@address))";
 
 const CARD = `\`${US_NYC_CARD_OUTPUT_V5_REFERENCE}\``;
 const ENGINE = `\`${US_NYC_LAST_TX_ENGINE_V3_REFERENCE}\``;
@@ -39,8 +40,8 @@ SELECT
   e.final_transaction_match_level AS final_transaction_match_level
 FROM ${CARD} c
 LEFT JOIN ${ENGINE} e
-  ON c.full_address = e.full_address
-WHERE c.full_address = @address
+  ON UPPER(TRIM(c.full_address)) = UPPER(TRIM(e.full_address))
+WHERE UPPER(TRIM(c.full_address)) = UPPER(TRIM(@address))
 LIMIT 1
 `.trim();
 
@@ -288,7 +289,7 @@ SELECT
   e.final_transaction_match_level AS final_transaction_match_level
 FROM ${CARD} c
 LEFT JOIN ${ENGINE} e
-  ON c.full_address = e.full_address
+  ON UPPER(TRIM(c.full_address)) = UPPER(TRIM(e.full_address))
 WHERE __STREET_FALLBACK_WHERE__
 LIMIT 200
 `.trim();

@@ -24,7 +24,11 @@ import {
   NYC_CANDIDATE_GENERATOR_VERSION,
 } from "./us-nyc-address-normalize";
 import { shouldApplyNycDebugKnownAddressUnitPromptOverride } from "./us-nyc-debug-known-addresses";
-import { augmentNycTruthCandidatesWithAddressMaster } from "./us-nyc-address-master";
+import {
+  augmentNycTruthCandidatesWithAddressMaster,
+  queryFullAddressesByBbl,
+  uniqPreserveOrder,
+} from "./us-nyc-address-master";
 
 /** @deprecated Use {@link US_NYC_CARD_OUTPUT_V5_REFERENCE}; kept for `/api/us/property-value` debug strings. */
 export const US_NYC_API_TRUTH_TABLE_REFERENCE = US_NYC_CARD_OUTPUT_V5_REFERENCE;
@@ -54,6 +58,20 @@ const EMPTY_TRUTH: USNYCApiTruthResponse = {
 
 function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Suffix variants for `us_nyc_card_output_v5.full_address` (e.g. `, 1A` vs `, UNIT 1A` vs `, #1A`).
+ * Matching in BigQuery is UPPER(TRIM) — these are alternate spellings only.
+ */
+export function listNycCardUnitSuffixCandidates(submitted: string): string[] {
+  const u = submitted.replace(/\s+/g, " ").trim();
+  if (!u) return [];
+  const out: string[] = [u];
+  if (!/^UNIT\s/i.test(u)) out.push(`UNIT ${u}`);
+  if (!/^#/u.test(u)) out.push(`#${u}`);
+  if (!/^UNIT\s/i.test(u) && !/^#/u.test(u)) out.push(`UNIT #${u}`);
+  return [...new Set(out)].filter((x) => x.length > 0);
 }
 
 function logNycPrecomputedLookupMiss(payload: Record<string, unknown>): void {
@@ -361,7 +379,7 @@ async function queryNycStreetFallbackTruth(
 export async function queryUSNYCApiTruthWithCandidates(
   candidates: readonly string[],
   rawInput?: string,
-  options?: { unitOrLot?: string | null }
+  options?: { unitOrLot?: string | null; bblHint?: string | null }
 ): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
   const normForMaster = buildNycTruthLookupNormalizationDebug(rawInput?.trim() || candidates[0] || "");
@@ -373,15 +391,15 @@ export async function queryUSNYCApiTruthWithCandidates(
     });
     workCandidates = aug.candidates;
   }
+  if (options?.bblHint?.trim()) {
+    const bblHints = await queryFullAddressesByBbl(client, options.bblHint.trim());
+    workCandidates = uniqPreserveOrder([...bblHints, ...workCandidates]);
+  }
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
   const attempts: { candidate: string; rows_returned: number }[] = [];
 
   if (hasUnit && submitted) {
-    /** Precomputed `full_address` may use `, 1A` or `, UNIT 1A` — try both after normalization. */
-    const unitSuffixes = [submitted];
-    if (!/^UNIT\s/i.test(submitted)) {
-      unitSuffixes.push(`UNIT ${submitted}`);
-    }
+    const unitSuffixes = listNycCardUnitSuffixCandidates(submitted);
     for (const address of workCandidates) {
       const trimmed = address.trim();
       if (!trimmed) continue;
@@ -489,12 +507,16 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     zip_from_input?: string | null;
     candidate_generator_version?: number;
   },
-  options?: { unitOrLot?: string | null }
+  options?: { unitOrLot?: string | null; bblHint?: string | null }
 ): Promise<{ response: USNYCApiTruthResponse; debug: USNYCApiTruthQueryDebug }> {
   const cgv = norm.candidate_generator_version ?? NYC_CANDIDATE_GENERATOR_VERSION;
   const client = getUSBigQueryClient();
   const aug = await augmentNycTruthCandidatesWithAddressMaster(client, norm);
-  const candidatesToUse = aug.candidates;
+  let candidatesToUse = aug.candidates;
+  if (options?.bblHint?.trim()) {
+    const bblHints = await queryFullAddressesByBbl(client, options.bblHint.trim());
+    candidatesToUse = uniqPreserveOrder([...bblHints, ...candidatesToUse]);
+  }
   const addrMasterDebug = {
     address_master_normalized: aug.masterNormalized,
     address_master_hint_full_addresses: aug.masterHintFullAddresses,
@@ -504,10 +526,7 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
   const { hasUnit, submitted } = parseUnitOrLotOptions(options);
 
   if (hasUnit && submitted) {
-    const unitSuffixesDbg = [submitted];
-    if (!/^UNIT\s/i.test(submitted)) {
-      unitSuffixesDbg.push(`UNIT ${submitted}`);
-    }
+    const unitSuffixesDbg = listNycCardUnitSuffixCandidates(submitted);
     for (const address of candidatesToUse) {
       const trimmed = address.trim();
       if (!trimmed) continue;

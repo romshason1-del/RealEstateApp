@@ -63,7 +63,7 @@ export function normalizeNycAddressMasterV1Line(raw: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-function uniqPreserveOrder(lines: readonly string[]): string[] {
+export function uniqPreserveOrder(lines: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const x of lines) {
@@ -98,6 +98,119 @@ FROM (
 WHERE rn = 1
 `.trim();
 
+/** When exact @norm misses (e.g. BLVD vs BOULEVARD in gold), match house + street tokens in normalized_address. */
+const MASTER_ROW_FOR_GATE_SQL_LIKE = `
+SELECT
+  normalized_address,
+  unitstotal,
+  bbl,
+  zmcode,
+  bldgclass
+FROM (
+  SELECT
+    m.normalized_address AS normalized_address,
+    m.unitstotal AS unitstotal,
+    m.bbl AS bbl,
+    m.zipcode AS zmcode,
+    m.bldgclass AS bldgclass,
+    ROW_NUMBER() OVER (
+      ORDER BY CASE WHEN m.source = 'PLUTO' THEN 0 ELSE 1 END, m.unitstotal DESC NULLS LAST
+    ) AS rn
+  FROM ${MASTER} AS m
+  WHERE CONTAINS_SUBSTR(UPPER(m.normalized_address), UPPER(@houseToken))
+    AND CONTAINS_SUBSTR(UPPER(m.normalized_address), UPPER(@streetToken))
+)
+WHERE rn = 1
+`.trim();
+
+/**
+ * Expand abbreviated street tokens for a second pass against `us_nyc_address_master_v1`
+ * (ST↔STREET, BLVD↔BOULEVARD, etc.) when exact normalized keys disagree with PLUTO.
+ */
+export function expandNycStreetSuffixTokensForPlutoLookup(headLine: string): string {
+  let s = headLine.replace(/\s+/g, " ").trim().toUpperCase();
+  const pairs: [RegExp, string][] = [
+    [/\bBLVD\b/g, "BOULEVARD"],
+    [/\bAVE\b/g, "AVENUE"],
+    [/\bPKY\b/g, "PARKWAY"],
+    [/\bHWY\b/g, "HIGHWAY"],
+    [/\bEXPY\b/g, "EXPRESSWAY"],
+    [/\bDR\b/g, "DRIVE"],
+    [/\bRD\b/g, "ROAD"],
+    [/\bCT\b/g, "COURT"],
+    [/\bLN\b/g, "LANE"],
+    [/\bPL\b/g, "PLACE"],
+    [/\bTER\b/g, "TERRACE"],
+    [/\bST\b(?=\s*(,|$))/g, "STREET"],
+  ];
+  for (const [re, rep] of pairs) {
+    s = s.replace(re, rep);
+  }
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Deterministic alternate keys: primary line and expanded first-segment variant (before comma). */
+export function listNycMasterNormLookupKeys(primary: string): string[] {
+  const base = primary.trim();
+  if (!base) return [];
+  const comma = base.indexOf(",");
+  const head = comma === -1 ? base : base.slice(0, comma).trim();
+  const tail = comma === -1 ? "" : base.slice(comma);
+  const headExp = expandNycStreetSuffixTokensForPlutoLookup(head);
+  const alt = headExp !== head ? headExp + tail : "";
+  return [...new Set([base, alt].filter((x) => x.length > 0))];
+}
+
+type MasterGateRow = {
+  normalized_address?: unknown;
+  unitstotal?: unknown;
+  bbl?: unknown;
+  zmcode?: unknown;
+  bldgclass?: unknown;
+};
+
+async function fetchMasterRowForGateWithFallbacks(
+  client: ReturnType<typeof getUSBigQueryClient>,
+  n: string
+): Promise<MasterGateRow | null> {
+  const keys = listNycMasterNormLookupKeys(n);
+  for (const norm of keys) {
+    try {
+      const [rows] = await client.query({
+        query: MASTER_ROW_FOR_GATE_SQL,
+        params: { norm },
+        location: NYC_BQ_LOCATION,
+      });
+      const rowsArr = (rows as MasterGateRow[] | null | undefined) ?? [];
+      if (rowsArr[0]) return rowsArr[0]!;
+    } catch {
+      /* try next key */
+    }
+  }
+  const firstSeg = n.split(",")[0]?.trim() ?? "";
+  const toks = firstSeg.split(/\s+/).filter(Boolean);
+  if (toks.length < 2) return null;
+  const houseToken = toks[0]!;
+  const streetTok = toks.slice(1).join(" ");
+  const streetVariants = [...new Set([streetTok, expandNycStreetSuffixTokensForPlutoLookup(streetTok)])].filter(
+    (s) => s.length >= 2
+  );
+  for (const streetToken of streetVariants) {
+    try {
+      const [rows] = await client.query({
+        query: MASTER_ROW_FOR_GATE_SQL_LIKE,
+        params: { houseToken, streetToken },
+        location: NYC_BQ_LOCATION,
+      });
+      const rowsArr = (rows as MasterGateRow[] | null | undefined) ?? [];
+      if (rowsArr[0]) return rowsArr[0]!;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
 const BUILDING_TRUTH_FULL_ADDRESS_FROM_MASTER_SQL = `
 SELECT DISTINCT t.full_address AS full_address
 FROM ${TRUTH} AS t
@@ -109,6 +222,13 @@ WHERE t.bbl IN (
 LIMIT 25
 `.trim();
 
+const BUILDING_TRUTH_FULL_ADDRESS_BY_BBL_SQL = `
+SELECT DISTINCT t.full_address AS full_address
+FROM ${TRUTH} AS t
+WHERE t.bbl = @bbl
+LIMIT 50
+`.trim();
+
 export type BuildingTruthFromMasterResult =
   | {
       requiresUnit: true;
@@ -116,7 +236,7 @@ export type BuildingTruthFromMasterResult =
       message: string;
       buildingData: {
         address: string;
-        unitstotal: number;
+        unitstotal: number | null;
         bbl: string | null;
         zmcode?: string | null;
       };
@@ -132,6 +252,8 @@ export type BuildingTruthFromMasterResult =
       bldgclass?: string | null;
       /** PLUTO unitstotal from master row (for route logging). */
       unitstotal?: number | null;
+      /** BBL from resolved master row (unit lookup + card candidate hints). */
+      bbl?: string | null;
     };
 
 function numOrNull(v: unknown): number | null {
@@ -160,6 +282,26 @@ export async function queryFullAddressesForNormalizedKey(
   }
 }
 
+/** All distinct `full_address` rows in building_truth for one BBL (card alias coverage). */
+export async function queryFullAddressesByBbl(
+  client: ReturnType<typeof getUSBigQueryClient>,
+  bbl: string
+): Promise<string[]> {
+  const b = bbl.trim();
+  if (!b) return [];
+  try {
+    const [rows] = await client.query({
+      query: BUILDING_TRUTH_FULL_ADDRESS_BY_BBL_SQL,
+      params: { bbl: b },
+      location: NYC_BQ_LOCATION,
+    });
+    const list = (rows as { full_address?: string }[] | null | undefined) ?? [];
+    return list.map((r) => String(r.full_address ?? "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Returns `full_address` values from building_truth for any BBL that shares the master key,
  * or a unit gate when PLUTO reports multiple units and no unit was supplied.
@@ -172,40 +314,21 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
   console.log("[MASTER_GATE_CALLED] masterNorm:", normalizedMasterLine);
   const n = normalizedMasterLine.trim();
   if (!n) {
-    return { requiresUnit: false, fullAddresses: [], isCommercial: false, unitstotal: null, bldgclass: null };
+    return { requiresUnit: false, fullAddresses: [], isCommercial: false, unitstotal: null, bldgclass: null, bbl: null };
   }
 
   const unitTrim = typeof unitNumber === "string" ? unitNumber.trim() : "";
 
-  type MasterGateRow = {
-    normalized_address?: unknown;
-    unitstotal?: unknown;
-    bbl?: unknown;
-    zmcode?: unknown;
-    bldgclass?: unknown;
-  };
-  let row: MasterGateRow | null = null;
-
-  try {
-    const [rows] = await client.query({
-      query: MASTER_ROW_FOR_GATE_SQL,
-      params: { norm: n },
-      location: NYC_BQ_LOCATION,
-    });
-    const rowsArr = (rows as MasterGateRow[] | null | undefined) ?? [];
-    console.log("[MASTER_RAW_ROW]", JSON.stringify(rowsArr?.[0] ?? "NO ROWS"));
-    const list = rowsArr;
-    row = list[0] ?? null;
-  } catch {
-    row = null;
-  }
+  const row = await fetchMasterRowForGateWithFallbacks(client, n);
+  console.log("[MASTER_RAW_ROW]", JSON.stringify(row ?? "NO ROWS"));
 
   console.log("[GATE DEBUG] bldgclass=", row?.bldgclass, "unitstotal=", row?.unitstotal);
 
   const bldgClassStr = (row?.bldgclass ?? "").toString();
-  // Always evaluate from PLUTO bldgclass — independent of whether a unit was submitted.
-  const commercialPrefixes = ["O", "C", "K"];
-  const isCommercial = commercialPrefixes.some((p) => bldgClassStr.toUpperCase().startsWith(p));
+  const bldgUpper = bldgClassStr.toUpperCase();
+  // Office / bank — not residential inventory. PLUTO "C*" is often walk-up apartments; do not treat as commercial here.
+  const commercialPrefixes = ["O", "K"];
+  const isCommercial = commercialPrefixes.some((p) => bldgUpper.startsWith(p));
 
   const unitstotal = row != null ? numOrNull(row.unitstotal) : null;
 
@@ -216,16 +339,25 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
       fullAddresses: [],
       bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
       unitstotal,
+      bbl: row?.bbl != null && row.bbl !== "" ? String(row.bbl) : null,
     };
   }
 
   const bblStr = row?.bbl != null && row.bbl !== "" ? String(row.bbl) : null;
   const zm = row?.zmcode != null && row.zmcode !== "" ? String(row.zmcode) : null;
-  const normAddr = row?.normalized_address != null ? String(row.normalized_address) : n;
+  const normAddr = row?.normalized_address != null ? String(row.normalized_address).trim() : n;
+  const normForTruthKeys = uniqPreserveOrder([
+    ...(row?.normalized_address != null && String(row.normalized_address).trim() !== ""
+      ? [String(row.normalized_address).trim()]
+      : []),
+    ...listNycMasterNormLookupKeys(n),
+  ]);
 
-  // Multi-unit residential: require a unit unless one was supplied (commercial already excluded above).
+  // Multi-unit residential: PLUTO D/R/C inventory or unitstotal>1 (commercial excluded above).
   const requiresUnit =
-    unitstotal != null && unitstotal > 1 && !isCommercial && !unitTrim;
+    !unitTrim &&
+    !isCommercial &&
+    ((unitstotal != null && unitstotal > 1) || /^[DRC]/i.test(bldgClassStr));
 
   if (requiresUnit) {
     return {
@@ -243,13 +375,20 @@ export async function queryBuildingTruthFullAddressesFromAddressMaster(
     };
   }
 
-  const fullAddresses = await queryFullAddressesForNormalizedKey(client, n);
+  let fromNorm: string[] = [];
+  for (const nk of normForTruthKeys) {
+    const part = await queryFullAddressesForNormalizedKey(client, nk);
+    fromNorm = uniqPreserveOrder([...fromNorm, ...part]);
+  }
+  const fromBbl = bblStr ? await queryFullAddressesByBbl(client, bblStr) : [];
+  const fullAddresses = uniqPreserveOrder([...fromNorm, ...fromBbl]);
   return {
     requiresUnit: false,
     fullAddresses,
     isCommercial: false,
     bldgclass: bldgClassStr.trim() !== "" ? bldgClassStr : null,
     unitstotal,
+    bbl: bblStr,
   };
 }
 
@@ -262,6 +401,17 @@ SELECT
 FROM ${MASTER} AS m
 WHERE m.normalized_address = @norm
 LIMIT 100
+`.trim();
+
+const UNIT_FROM_MASTER_BY_BBL_SQL = `
+SELECT
+  m.normalized_address AS normalized_address,
+  m.raw_address AS raw_address,
+  m.bbl AS bbl,
+  m.zipcode AS zmcode
+FROM ${MASTER} AS m
+WHERE m.bbl = @bbl
+LIMIT 500
 `.trim();
 
 function escapeRegExp(s: string): string {
@@ -278,11 +428,26 @@ function normalizeUnitToken(raw: string): string {
  * No dedicated unit column yet — match is heuristic on raw_address.
  * When `zmcode` is set, prefers rows whose `zmcode` matches (USPS-style ZIP from input).
  */
+function dedupeMasterUnitRows(
+  rows: { raw_address?: string; bbl?: unknown; zmcode?: unknown; normalized_address?: unknown }[]
+): { raw_address?: string; bbl?: unknown; zmcode?: unknown }[] {
+  const seen = new Set<string>();
+  const out: typeof rows = [];
+  for (const row of rows) {
+    const k = `${String(row.normalized_address ?? "")}|${String(row.bbl ?? "")}|${String(row.raw_address ?? "")}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(row);
+  }
+  return out;
+}
+
 export async function queryUnitFromAddressMaster(
   client: ReturnType<typeof getUSBigQueryClient>,
   normalizedAddress: string,
   unitNumber: string,
-  zmcode?: string | null
+  zmcode?: string | null,
+  bblHint?: string | null
 ): Promise<
   | { matched: true; raw_address: string; bbl: string | null; zmcode: string | null }
   | { matched: false; unitNotFound: true; bbl: string | null; zmcode: string | null }
@@ -293,15 +458,34 @@ export async function queryUnitFromAddressMaster(
     return { matched: false, unitNotFound: true, bbl: null, zmcode: null };
   }
 
-  let rows: { raw_address?: string; bbl?: unknown; zmcode?: unknown }[] = [];
-  try {
-    const [r] = await client.query({
-      query: UNIT_FROM_MASTER_SQL,
-      params: { norm },
-      location: NYC_BQ_LOCATION,
-    });
-    rows = (r as typeof rows | null | undefined) ?? [];
-  } catch {
+  let rows: { raw_address?: string; bbl?: unknown; zmcode?: unknown; normalized_address?: unknown }[] = [];
+  for (const nKey of listNycMasterNormLookupKeys(norm)) {
+    try {
+      const [r] = await client.query({
+        query: UNIT_FROM_MASTER_SQL,
+        params: { norm: nKey },
+        location: NYC_BQ_LOCATION,
+      });
+      const got = (r as typeof rows | null | undefined) ?? [];
+      rows = dedupeMasterUnitRows([...rows, ...got]);
+      if (got.length > 0) break;
+    } catch {
+      /* try next normalized key */
+    }
+  }
+  if (rows.length === 0 && typeof bblHint === "string" && bblHint.trim() !== "") {
+    try {
+      const [r] = await client.query({
+        query: UNIT_FROM_MASTER_BY_BBL_SQL,
+        params: { bbl: bblHint.trim() },
+        location: NYC_BQ_LOCATION,
+      });
+      rows = dedupeMasterUnitRows((r as typeof rows | null | undefined) ?? []);
+    } catch {
+      /* BBL query failed — fall through */
+    }
+  }
+  if (rows.length === 0) {
     return { matched: false, unitNotFound: true, bbl: null, zmcode: null };
   }
 
