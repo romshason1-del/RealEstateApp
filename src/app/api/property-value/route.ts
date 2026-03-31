@@ -32,7 +32,10 @@ import {
   queryBuildingTruthFullAddressesFromAddressMaster,
 } from "@/lib/us/us-nyc-address-master";
 import { queryPlutoResidentialMultiUnitGate } from "@/lib/us/us-nyc-pluto-gate";
-import { preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
+import {
+  applyNyLongIslandCityToQueensInAddressLine,
+  preserveQueensInAddressLineIfUserTypedQueens,
+} from "@/lib/us/us-nyc-preserve-queens";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -509,10 +512,14 @@ export async function GET(request: NextRequest) {
   // US / NYC: delegates to /api/us/property-value, which resolves candidates via BigQuery
   // (us_nyc_card_output_v5) with optional full_address hints from us_nyc_address_master_v1 (suffix normalization).
   if (isUS) {
-    const usAddress =
+    if (state.trim().toUpperCase() === "NY" && city.trim().toLowerCase() === "long island city") {
+      city = "Queens";
+    }
+    let usAddress =
       addressParam.trim() ||
       rawInputAddress.trim() ||
       [houseNumber, street, city, state, zip].filter((p) => String(p ?? "").trim()).join(", ").trim();
+    usAddress = applyNyLongIslandCityToQueensInAddressLine(usAddress);
     if (!usAddress) {
       return NextResponse.json({ message: "address is required", error: "INVALID_INPUT" }, { status: 400 });
     }

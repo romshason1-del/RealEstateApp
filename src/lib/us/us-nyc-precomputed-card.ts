@@ -6,6 +6,7 @@
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";
 import { getUSBigQueryClient } from "./bigquery-client";
 import type { USNYCApiTruthResponse } from "./us-property-response-contract";
+import { US_NYC_BUILDING_TRUTH_V3_REFERENCE } from "./us-nyc-address-master";
 
 export const US_NYC_CARD_OUTPUT_V5_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_card_output_v5";
 export const US_NYC_LAST_TX_ENGINE_V3_REFERENCE = "streetiq-bigquery.streetiq_gold.us_nyc_last_transaction_engine_v3";
@@ -19,8 +20,45 @@ export const US_NYC_PRECOMPUTED_CARD_SQL_WHERE =
 
 const CARD = `\`${US_NYC_CARD_OUTPUT_V5_REFERENCE}\``;
 const ENGINE = `\`${US_NYC_LAST_TX_ENGINE_V3_REFERENCE}\``;
+const TRUTH = `\`${US_NYC_BUILDING_TRUTH_V3_REFERENCE}\``;
 
 const NYC_PRECOMPUTED_LOCATION = "EU";
+
+/** Fast path: join card to building_truth by BBL (indexed) then filter unit via regex on full_address. */
+export const US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY = `
+SELECT
+  c.full_address AS full_address,
+  c.badge_1 AS badge_1,
+  c.badge_2 AS badge_2,
+  c.badge_3 AS badge_3,
+  c.badge_4 AS badge_4,
+  c.estimated_value AS estimated_value,
+  c.estimated_value_subtext AS estimated_value_subtext,
+  c.price_per_sqft_text AS price_per_sqft_text,
+  c.final_match_level AS final_match_level,
+  c.building_type AS building_type,
+  c.unit_count AS unit_count,
+  e.final_last_transaction_text AS final_last_transaction_text,
+  e.final_transaction_match_level AS final_transaction_match_level
+FROM ${CARD} c
+INNER JOIN ${TRUTH} t
+  ON CAST(t.bbl AS STRING) = @bblStr
+  AND UPPER(TRIM(c.full_address)) = UPPER(TRIM(t.full_address))
+LEFT JOIN ${ENGINE} e
+  ON UPPER(TRIM(c.full_address)) = UPPER(TRIM(e.full_address))
+WHERE REGEXP_CONTAINS(TRIM(c.full_address), @unitRegex)
+LIMIT 1
+`.trim();
+
+function escapeRegExpForBQRe2(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** RE2 pattern for unit token (UNIT 1A, ", 1A", "#1A", etc.). */
+export function buildNycCardUnitRegexPattern(unitNormalized: string): string {
+  const core = escapeRegExpForBQRe2(unitNormalized.trim().toUpperCase());
+  return `(?i)(?:UNIT\\s+#?|#\\s*|,\\s*)${core}\\b`;
+}
 
 /** Template for debug; runtime matching is sequential equality on each generated candidate string. */
 export const US_NYC_PRECOMPUTED_JOIN_QUERY = `
@@ -266,6 +304,28 @@ export async function queryPrecomputedNycCardJoinRow(
     query: US_NYC_PRECOMPUTED_JOIN_QUERY,
     params: { address: trimmed },
     location: NYC_PRECOMPUTED_LOCATION,
+  });
+  const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
+  return { row: list[0] ?? null, rowsReturned: list.length };
+}
+
+/**
+ * Single round-trip: BBL + unit — avoids scanning card by string-only candidates (faster for large tables).
+ */
+export async function queryPrecomputedNycCardJoinRowByBblAndUnit(
+  client: ReturnType<typeof getUSBigQueryClient>,
+  bbl: string,
+  unitNormalized: string
+): Promise<{ row: Record<string, unknown> | null; rowsReturned: number }> {
+  const bblStr = bbl.trim();
+  const u = unitNormalized.trim();
+  if (!bblStr || !u) return { row: null, rowsReturned: 0 };
+  const unitRegex = buildNycCardUnitRegexPattern(u);
+  const [rows] = await client.query({
+    query: US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY,
+    params: { bblStr, unitRegex },
+    location: NYC_PRECOMPUTED_LOCATION,
+    jobTimeoutMs: 25000,
   });
   const list = (rows as Record<string, unknown>[] | null | undefined) ?? [];
   return { row: list[0] ?? null, rowsReturned: list.length };

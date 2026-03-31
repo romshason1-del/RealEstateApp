@@ -11,10 +11,12 @@ import {
   mapPrecomputedJoinRowToUSNYCApiTruthResponse,
   normalizeNycBuildingTypeKey,
   queryPrecomputedNycCardJoinRow,
+  queryPrecomputedNycCardJoinRowByBblAndUnit,
   queryPrecomputedNycStreetFallbackRow,
   US_NYC_CARD_OUTPUT_V5_REFERENCE,
   US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
   US_NYC_PRECOMPUTED_CARD_SQL_WHERE,
+  US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY,
   US_NYC_PRECOMPUTED_JOIN_QUERY,
   US_NYC_STREET_FALLBACK_JOIN_QUERY,
 } from "./us-nyc-precomputed-card";
@@ -382,6 +384,25 @@ export async function queryUSNYCApiTruthWithCandidates(
   options?: { unitOrLot?: string | null; bblHint?: string | null }
 ): Promise<USNYCApiTruthResponse> {
   const client = getUSBigQueryClient();
+  const { hasUnit, submitted } = parseUnitOrLotOptions(options);
+  if (hasUnit && submitted && options?.bblHint?.trim()) {
+    const { row } = await queryPrecomputedNycCardJoinRowByBblAndUnit(
+      client,
+      options.bblHint.trim(),
+      submitted
+    );
+    if (row) {
+      return withUnitLookup(
+        {
+          success: true,
+          message: null,
+          ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row),
+        },
+        "matched",
+        submitted
+      );
+    }
+  }
   const normForMaster = buildNycTruthLookupNormalizationDebug(rawInput?.trim() || candidates[0] || "");
   let workCandidates = [...candidates];
   if (normForMaster) {
@@ -395,7 +416,6 @@ export async function queryUSNYCApiTruthWithCandidates(
     const bblHints = await queryFullAddressesByBbl(client, options.bblHint.trim());
     workCandidates = uniqPreserveOrder([...bblHints, ...workCandidates]);
   }
-  const { hasUnit, submitted } = parseUnitOrLotOptions(options);
   const attempts: { candidate: string; rows_returned: number }[] = [];
 
   if (hasUnit && submitted) {
@@ -511,6 +531,57 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
 ): Promise<{ response: USNYCApiTruthResponse; debug: USNYCApiTruthQueryDebug }> {
   const cgv = norm.candidate_generator_version ?? NYC_CANDIDATE_GENERATOR_VERSION;
   const client = getUSBigQueryClient();
+  const attempts: { candidate: string; rows_returned: number }[] = [];
+  let firstRow: Record<string, unknown> | null = null;
+  const { hasUnit, submitted } = parseUnitOrLotOptions(options);
+
+  if (hasUnit && submitted && options?.bblHint?.trim()) {
+    const bblKey = options.bblHint.trim();
+    const { row, rowsReturned: n } = await queryPrecomputedNycCardJoinRowByBblAndUnit(
+      client,
+      bblKey,
+      submitted
+    );
+    attempts.push({ candidate: `BBL+UNIT:${bblKey}:${submitted}`, rows_returned: n });
+    if (row) {
+      firstRow = rowToJsonSafe(row);
+      const response = withUnitLookup(
+        {
+          success: true,
+          message: null,
+          ...mapPrecomputedJoinRowToUSNYCApiTruthResponse(row),
+        },
+        "matched",
+        submitted
+      );
+      const matchedAddr = firstRow.full_address != null ? String(firstRow.full_address) : null;
+      return {
+        response,
+        debug: {
+          original_input: originalInput,
+          normalized_full_address: norm.normalized_full_address,
+          normalized_building_address: norm.normalized_building_address,
+          zip_from_input: norm.zip_from_input ?? null,
+          table_name_used: US_NYC_CARD_OUTPUT_V5_REFERENCE,
+          sql_where_used: "bbl+unit: JOIN us_nyc_building_truth_v3 ON bbl + REGEXP_CONTAINS(unit)",
+          rows_found_count: n,
+          first_row_if_any: firstRow,
+          candidates_tried: [...norm.candidates],
+          attempts,
+          final_selected_candidate: `BBL+UNIT:${bblKey}:${submitted}`,
+          matched_full_address: matchedAddr,
+          precomputed_row_matched: true,
+          bigquery_location: NYC_TRUTH_QUERY_LOCATION,
+          full_sql_template: US_NYC_PRECOMPUTED_JOIN_BY_BBL_UNIT_QUERY,
+          nyc_last_transaction_engine_table: US_NYC_LAST_TX_ENGINE_V3_REFERENCE,
+          candidate_generator_version: cgv,
+          address_master_normalized: null,
+          address_master_hint_full_addresses: [],
+        },
+      };
+    }
+  }
+
   const aug = await augmentNycTruthCandidatesWithAddressMaster(client, norm);
   let candidatesToUse = aug.candidates;
   if (options?.bblHint?.trim()) {
@@ -521,9 +592,6 @@ export async function queryUSNYCApiTruthWithCandidatesDebug(
     address_master_normalized: aug.masterNormalized,
     address_master_hint_full_addresses: aug.masterHintFullAddresses,
   };
-  const attempts: { candidate: string; rows_returned: number }[] = [];
-  let firstRow: Record<string, unknown> | null = null;
-  const { hasUnit, submitted } = parseUnitOrLotOptions(options);
 
   if (hasUnit && submitted) {
     const unitSuffixesDbg = listNycCardUnitSuffixCandidates(submitted);

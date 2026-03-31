@@ -9,7 +9,10 @@ import { parseUSAddressFromFullString } from "@/lib/address-parse";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
 import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
-import { preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
+import {
+  applyNyLongIslandCityToQueensInAddressLine,
+  preserveQueensInAddressLineIfUserTypedQueens,
+} from "@/lib/us/us-nyc-preserve-queens";
 import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
 import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
 import {
@@ -39,7 +42,9 @@ function logUsNycDebug(label: string, payload: object): void {
 
 async function handle(addressRaw: string, unitOrLotRaw?: string | null, unitParamRaw?: string | null) {
   console.log("[STREETIQ_FORCE_CHECK] handle() called, address:", addressRaw);
-  const { line } = normalizeUSAddressLine(preserveQueensInAddressLineIfUserTypedQueens(addressRaw));
+  const { line } = normalizeUSAddressLine(
+    applyNyLongIslandCityToQueensInAddressLine(preserveQueensInAddressLineIfUserTypedQueens(addressRaw))
+  );
   if (!line) {
     const empty = createEmptyUSNYCApiTruthResponse({
       success: false,
