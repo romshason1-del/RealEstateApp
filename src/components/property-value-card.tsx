@@ -22,6 +22,24 @@ import {
   type UsNycTruthCardData,
 } from "@/components/us/us-nyc-truth-property-card";
 
+/**
+ * When the v4 row has no verified unit-level identifier in BigQuery, the user-entered unit is a label only.
+ * Apply must not depend on a second HTTP call for a different digit (avoids abort/race/cache variance).
+ */
+function isNycBuildingLevelOnlyPayload(p: Record<string, unknown> | null | undefined): boolean {
+  if (!p || typeof p !== "object") return false;
+  if ((p as { data_source?: string }).data_source !== "us_nyc_app_output_v4") return false;
+  if ((p as { success?: boolean }).success !== true) return false;
+  const verified = (p as { nyc_verified_source_unit_for_data?: string | null }).nyc_verified_source_unit_for_data;
+  if (typeof verified === "string" && verified.trim() !== "") return false;
+  const mode = String((p as { nyc_final_display_mode?: string }).nyc_final_display_mode ?? "").toUpperCase().trim();
+  const h = (p as { nyc_display_hierarchy?: string }).nyc_display_hierarchy;
+  const vl = (p as { property_result?: { value_level?: string } }).property_result?.value_level;
+  if (mode === "ASK_APARTMENT" || h === "BUILDING") return true;
+  if (vl === "building-level") return true;
+  return false;
+}
+
 export type PropertyValueCardProps = {
   address: string;
   position: { lat: number; lng: number };
@@ -605,6 +623,27 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     setNycUnitApplyLoading(true);
     setNycUnitApplyError(null);
     try {
+      const basePayload: Record<string, unknown> | null =
+        nycUnitApplyPayload && typeof nycUnitApplyPayload === "object"
+          ? nycUnitApplyPayload
+          : activeInsightsData && typeof activeInsightsData === "object"
+            ? (activeInsightsData as Record<string, unknown>)
+            : null;
+
+      if (basePayload && isNycBuildingLevelOnlyPayload(basePayload)) {
+        if (process.env.NODE_ENV === "development") {
+          console.log("[NYC_APT_DEBUG] building-level apply — skipping network (unit label only)", { unit: t });
+        }
+        const merged: Record<string, unknown> = { ...basePayload };
+        merged.unit_or_lot_submitted = t;
+        merged.should_prompt_for_unit = false;
+        merged.unit_prompt_reason = "not_multi_unit_or_unit_provided";
+        if (merged.status === "requires_unit") delete merged.status;
+        setNycUnitApplyPayload(merged);
+        setNycUnitSubmitted(t);
+        return;
+      }
+
       console.log("[UNIT_FETCH_TRIGGERED] address:", addressForApi.trim(), "unit:", t);
       let addressToSend = addressForApi.trim();
       if (addressToSend.includes("Long Island City")) {
@@ -654,7 +693,16 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     } finally {
       setNycUnitApplyLoading(false);
     }
-  }, [addressForApi, isUS, nycUnitDraft, position?.lat, position?.lng, nycUnitSubmitted]);
+  }, [
+    addressForApi,
+    isUS,
+    nycUnitDraft,
+    position?.lat,
+    position?.lng,
+    nycUnitSubmitted,
+    nycUnitApplyPayload,
+    activeInsightsData,
+  ]);
 
   const nycTruthDisplay =
     isUS &&
