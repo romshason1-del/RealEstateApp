@@ -1,6 +1,7 @@
 /**
- * NYC property card — precomputed BigQuery tables only (US).
- * Joins card output v5 with last-transaction engine v3 on `full_address`.
+ * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → v4).
+ * Pre-v4 join of `us_nyc_card_output_v5` + `us_nyc_last_transaction_engine_v3` on `full_address` (US / BigQuery only).
+ * `normalizeNycBuildingTypeKey` is still imported by the v4 schema module — keep this file for that helper + offline scripts.
  */
 
 import { coerceBigQueryDateToYyyyMmDd } from "./us-bq-date";

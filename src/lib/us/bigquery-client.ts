@@ -1,6 +1,6 @@
 /**
- * US-only BigQuery client. streetiq_gold (NYC truth table) is hosted in EU — client location must be EU.
- * Do not use for France; keep isolated from @/lib/bigquery-client.
+ * US-only BigQuery client (EU location for `streetiq_gold` / `real_estate_us` datasets).
+ * Used by NYC v4 route readers and legacy NYC SQL helpers — not for France; keep isolated from @/lib/bigquery-client.
  */
 if (typeof process !== "undefined") {
   process.env.FAST_QUERY_PATH = "DISABLED";

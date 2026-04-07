@@ -1,6 +1,6 @@
 /**
- * TEMPORARY NYC-only debugging: known Manhattan test addresses.
- * Remove when BigQuery + prompt rules are stable. Not used for France.
+ * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → v4).
+ * NYC-only debug: known Manhattan test addresses (pre-v4 precomputed card rules). Not used for France.
  */
 
 import { computeNycNeedsUnitPrompt, parseFirstUsdAmountFromText } from "./us-nyc-precomputed-card";

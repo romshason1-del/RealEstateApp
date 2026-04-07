@@ -1,7 +1,7 @@
 /**
- * Deterministic NYC building vs unit classification (US only).
- * Uses BigQuery precomputed NYC card row (via `queryUSNYCApiTruthByAddress`), DOB filings, ACRIS deed history.
- * No UI, routes, or France.
+ * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → v4).
+ * Building vs unit classification using pre-v4 `queryUSNYCApiTruthByAddress`, DOB, ACRIS (US only; not France).
+ * Kept for offline analysis; do not add new production routes that depend on this stack.
  */
 
 import { fetchAcrisNycTruthDeedHistory, type AcrisTruthDeed } from "./acris/acris-truth";

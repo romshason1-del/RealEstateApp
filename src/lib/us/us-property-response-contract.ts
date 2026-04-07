@@ -37,7 +37,8 @@ export interface USPropertyValueResponse {
 }
 
 /**
- * NYC: response from BigQuery (precomputed card v5 + last-transaction engine v3, exact `full_address` match).
+ * NYC: shared JSON shape — used by legacy pre-v5 truth helpers and v4 row mapping (field names align across pipelines).
+ * Production v4: `/api/us/nyc-app-output` → `us_nyc_app_output_final_v4`.
  */
 export interface USNYCApiTruthResponse {
   success: boolean;
@@ -81,7 +82,7 @@ export interface USNYCApiTruthResponse {
   nyc_fallback_score_reason?: string | null;
 }
 
-/** NYC main `/api/property-value` payload extensions (after {@link adaptUsNycTruthJsonForMainPropertyValueRoute}). */
+/** NYC main property-value UI extensions (legacy adapter {@link adaptUsNycTruthJsonForMainPropertyValueRoute} — scripts/debug only). */
 export type USNycUnitClassification = "single_property" | "multi_unit_building" | "unknown";
 
 export interface USNycMainPropertyValueUnitFields {

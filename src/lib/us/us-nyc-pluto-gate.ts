@@ -1,9 +1,7 @@
 /**
+ * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → v4).
  * First-pass PLUTO lookup (`us_nyc_pluto_normalized`) for NYC residential multi-unit gating (US / BigQuery only).
- * Must run before card / sales fetches when enforcing strict unit selection.
- *
- * Center Blvd (Queens) / PLUTO range nuance: official PLUTO may list "45-45 CENTER BOULEVARD" while users type
- * "47-20 CENTER BLVD" — we map known cases to BBL `4000210020` and fetch by BBL.
+ * Center Blvd nuance: map known cases to BBL `4000210020`. Kept for scripts / reference against the old pipeline.
  */
 
 import { getUSBigQueryClient } from "./bigquery-client";

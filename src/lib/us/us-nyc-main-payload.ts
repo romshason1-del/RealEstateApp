@@ -1,5 +1,6 @@
 /**
- * Maps `/api/us/property-value` NYC truth JSON into the shape the main property-value UI expects.
+ * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → v4 table).
+ * Adapter for the retired precomputed truth JSON → main property-value UI shape (scripts/debug only).
  * US-only — do not use for France.
  */
 
