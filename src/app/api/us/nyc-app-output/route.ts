@@ -1,5 +1,5 @@
 /**
- * NYC-only: lookup `real_estate_us.us_nyc_app_output_final_v4` by address.
+ * NYC-only: lookup `streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v4` (location US) by address.
  * Source of truth for NYC app card data — see `src/lib/property-value-api.ts` (US → this route).
  * Does not affect France routes or UI.
  */

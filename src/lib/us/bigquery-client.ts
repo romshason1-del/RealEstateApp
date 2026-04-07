@@ -1,5 +1,9 @@
 /**
- * US-only BigQuery client (EU location for `streetiq_gold` / `real_estate_us` datasets).
+ * US-only BigQuery client. Default `projectId` is `BIGQUERY_PROJECT_ID` || `GOOGLE_CLOUD_PROJECT_ID`
+ * (often the Vercel deployment project). That is **not** where NYC v4 data lives: table IDs for
+ * `us_nyc_app_output_final_v4` must be fully qualified via `getNycAppOutputTableReference()`
+ * in `us-nyc-app-output-constants.ts` (pinned to `streetiq-bigquery`).
+ *
  * Used by NYC v4 route readers and legacy NYC SQL helpers — not for France; keep isolated from @/lib/bigquery-client.
  */
 if (typeof process !== "undefined") {

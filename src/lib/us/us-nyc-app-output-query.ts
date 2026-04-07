@@ -11,7 +11,11 @@ import type { BigQuery } from "@google-cloud/bigquery";
 import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
 import { applyNyLongIslandCityToQueensInAddressLine, preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
-import { getNycAppOutputTableReference, US_NYC_APP_OUTPUT_ADDRESS_COL } from "@/lib/us/us-nyc-app-output-constants";
+import {
+  getNycAppOutputTableReference,
+  getNycAppOutputTableResolutionForLog,
+  US_NYC_APP_OUTPUT_ADDRESS_COL,
+} from "@/lib/us/us-nyc-app-output-constants";
 import { NYC_APP_OUTPUT_V4_COL } from "@/lib/us/us-nyc-app-output-schema";
 
 function collapseSpaces(s: string): string {
@@ -133,6 +137,15 @@ export async function queryNycAppOutputFinalV4Row(
   unitOrLot: string | null
 ): Promise<{ row: Record<string, unknown> | null; debug: NycAppOutputQueryDebug }> {
   const table = getNycAppOutputTableReference();
+  const resolution = getNycAppOutputTableResolutionForLog();
+  console.log(
+    "[NYC_BQ_V4_RESOLUTION]",
+    JSON.stringify({
+      ...resolution,
+      sql_from_clause_target: `\`${table}\``,
+      query_batch: "lookup_address_then_property_address",
+    })
+  );
   const lookupCol = US_NYC_APP_OUTPUT_ADDRESS_COL;
   const propertyCol = NYC_APP_OUTPUT_V4_COL.property_address;
   const rawInput = addressRaw.trim();
