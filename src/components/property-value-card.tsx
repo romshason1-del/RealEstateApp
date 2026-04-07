@@ -17,6 +17,7 @@ import {
 } from "@/lib/fr-display-safe";
 import {
   formatNycCardDisplayAddress,
+  NYC_APT_INPUT_CLASS,
   UsNycTruthPropertyCard,
   type UsNycTruthCardData,
 } from "@/components/us/us-nyc-truth-property-card";
@@ -1206,7 +1207,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                   }}
                   placeholder="e.g. 4B"
                   disabled={nycUnitApplyLoading || isLoading}
-                  className="min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-1 text-[10px] leading-tight text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+                  className={NYC_APT_INPUT_CLASS}
                   autoComplete="off"
                 />
                 <button
@@ -1217,7 +1218,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                     console.log("[UNIT_SUBMIT] unit value:", unitValue);
                     void submitNycUnitApply();
                   }}
-                  className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+                  className="shrink-0 self-stretch rounded border border-amber-500/40 bg-amber-500/15 px-2 py-2 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40 sm:py-1"
                 >
                   {nycUnitApplyLoading || isLoading ? "…" : "Apply"}
                 </button>

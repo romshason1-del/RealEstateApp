@@ -101,6 +101,31 @@ function neighborhoodScoreDisplay(row: Record<string, unknown>): string | null {
 }
 
 /**
+ * Optional BigQuery columns — not in {@link NYC_APP_OUTPUT_V4_COL} until INFORMATION_SCHEMA lists them.
+ * If present and non-empty, the UI may show "Data shown from apartment/unit: …".
+ */
+const NYC_ROW_OPTIONAL_VERIFIED_SOURCE_UNIT_KEYS = [
+  "source_unit",
+  "unit_number",
+  "apartment_number",
+  "lot_number",
+  "matched_unit",
+  "source_lot",
+  "source_apartment",
+  "final_source_unit",
+  "verified_source_unit",
+  "nyc_source_unit",
+] as const;
+
+function firstNonEmptyStrFromRow(row: Record<string, unknown>, keys: readonly string[]): string | null {
+  for (const k of keys) {
+    const s = str(row, k);
+    if (s) return s;
+  }
+  return null;
+}
+
+/**
  * @param row — BigQuery row or null when no match
  */
 export function adaptNycAppOutputRowToPropertyPayload(
@@ -150,6 +175,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
       unit_classification: "unknown",
       unit_lookup_status: "not_requested" as const,
       unit_or_lot_submitted: unitSub,
+      nyc_verified_source_unit_for_data: null,
     };
   }
 
@@ -181,6 +207,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
   const neigh = neighborhoodScoreDisplay(row);
   const bldgRaw = str(row, C.building_type);
   const bldgDisplay = formatNycAppOutputBuildingTypeLabel(bldgRaw);
+  const nycVerifiedSourceUnitForData = firstNonEmptyStrFromRow(row, NYC_ROW_OPTIONAL_VERIFIED_SOURCE_UNIT_KEYS);
 
   const showStreetRef =
     !isNone &&
@@ -241,6 +268,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
     unit_classification: shouldPrompt ? "multi_unit_building" : "single_property",
     unit_lookup_status: "not_requested" as const,
     unit_or_lot_submitted: unitSub,
+    nyc_verified_source_unit_for_data: nycVerifiedSourceUnitForData,
   };
 
   if (nyc_has_exact_transaction && lastPrice != null && lastPrice > 0 && lastDate) {

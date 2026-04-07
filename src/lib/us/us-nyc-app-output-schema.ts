@@ -17,6 +17,9 @@ import { normalizeNycBuildingTypeKey } from "@/lib/us/us-nyc-precomputed-card";
  * building_type, has_exact_transaction, has_building_transaction, has_street_transaction,
  * data_confidence, confidence_explanation, neighborhood_score (FLOAT64), neighborhood_*_score,
  * neighborhood_score_label
+ *
+ * There is no dedicated “verified source apartment” column in the current schema; optional unit-level
+ * identifiers may be added later — the adapter checks known names at runtime (see us-nyc-app-output-adapter).
  */
 export const NYC_APP_OUTPUT_V4_COL = {
   lookup_address: "lookup_address",

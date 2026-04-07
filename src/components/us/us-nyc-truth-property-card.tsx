@@ -47,6 +47,11 @@ export type UsNycTruthCardData = {
   nyc_bq_row_matched?: boolean;
   /** Server `final_display_mode` from NYC row (e.g. ASK_APARTMENT). */
   nyc_final_display_mode?: string | null;
+  /**
+   * When the BigQuery row includes an optional verified source unit column (see adapter), non-null means
+   * apartment-level source is available for display. Otherwise the UI must not claim unit-specific data.
+   */
+  nyc_verified_source_unit_for_data?: string | null;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -187,6 +192,10 @@ const badgeBase =
 
 const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-amber-400/85 leading-none";
 
+/** iOS Safari zooms inputs with font-size under 16px; keep 16px on small screens, compact on sm+. Exported for legacy NYC unit row in property-value-card. */
+export const NYC_APT_INPUT_CLASS =
+  "min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-2 text-[16px] leading-snug text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50 sm:py-1 sm:text-[10px] touch-manipulation";
+
 /** Dispatched while NYC apartment/unit inputs are focused so the map skips resize/recenter (see address-explorer). */
 const NYC_APT_INPUT_FOCUS_EVENT = "streetiq-nyc-apartment-input-focus";
 
@@ -231,13 +240,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   /** No valuation/metrics until the user applies a unit (parent sets `submittedApartment` after successful Apply). */
   const isApartmentGatedBeforeUnit = apartmentRequiredFromApi && !hasSubmittedUnit;
 
-  /** True only when the v4 row supports exact property-level figures (not ASK_APARTMENT / building-level). */
-  const isExactApartmentLevel =
-    data.nyc_display_hierarchy === "EXACT" &&
-    data.nyc_has_exact_transaction === true &&
-    data.property_result?.value_level === "property-level";
-  /** After Apply: explain building-level row vs unit — hide when we have a true exact-apartment match. */
-  const showBuildingScopeNote = hasSubmittedUnit && !isExactApartmentLevel;
+  const verifiedSourceRaw = data.nyc_verified_source_unit_for_data;
+  const hasVerifiedSourceUnitInTable =
+    typeof verifiedSourceRaw === "string" && verifiedSourceRaw.trim() !== "";
+  /** After Apply: always show A or B when a unit was submitted (full card path). */
+  const showPostApplyUnitScope = hasSubmittedUnit;
 
   const effectiveStatus = statusProp ?? data.status;
   const ev = data.estimated_value;
@@ -446,7 +453,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                 onKeyDown={onAptKeyDown}
                 placeholder="e.g. 4B"
                 disabled={apartmentSearchInFlight}
-                className="min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-1 text-[10px] leading-tight text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+                className={NYC_APT_INPUT_CLASS}
                 autoComplete="off"
               />
               <button
@@ -458,7 +465,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                   console.log("[UNIT_FETCH_TRIGGERED] address:", addressForFetch ?? "", "unit:", unitValue);
                   onApartmentSearch?.();
                 }}
-                className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+                className="shrink-0 self-stretch rounded border border-amber-500/40 bg-amber-500/15 px-2 py-2 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40 sm:py-1"
               >
                 {apartmentSearchInFlight ? "…" : "Apply"}
               </button>
@@ -495,19 +502,34 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           <span className="font-semibold text-zinc-500">Matched NYC record</span> {data.nyc_matched_record_address}
         </div>
       ) : null}
-      {showBuildingScopeNote ? (
+      {showPostApplyUnitScope ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1 text-[8px] leading-tight text-zinc-300">
           <p>
             <span className="font-semibold text-zinc-500">Unit you entered</span> {(submittedApartment ?? "").trim()}
           </p>
-          <p className="mt-0.5">
-            <span className="font-semibold text-zinc-500">Matched NYC record</span>{" "}
-            {(data.nyc_matched_record_address ?? "").trim() || "—"} — building-level row (same lookup as the NYC final
-            table); not unit-specific.
-          </p>
-          <p className="mt-0.5 text-zinc-400">
-            Valuation and sale details below are for this building record — not verified as unique to your unit only.
-          </p>
+          {hasVerifiedSourceUnitInTable ? (
+            <>
+              <p className="mt-0.5">
+                <span className="font-semibold text-zinc-500">Data shown from apartment/unit</span>{" "}
+                {String(verifiedSourceRaw).trim()}
+              </p>
+              <p className="mt-0.5">
+                <span className="font-semibold text-zinc-500">Matched NYC record</span>{" "}
+                {(data.nyc_matched_record_address ?? "").trim() || "—"}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-0.5 text-zinc-400">
+                No verified source apartment is available in the final NYC table
+              </p>
+              <p className="mt-0.5">
+                <span className="font-semibold text-zinc-500">Matched NYC record</span>{" "}
+                {(data.nyc_matched_record_address ?? "").trim() || "—"}
+              </p>
+              <p className="mt-0.5 text-zinc-400">Showing building-level data only</p>
+            </>
+          )}
         </div>
       ) : null}
       <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2 py-1.5 sm:px-2.5">
@@ -557,7 +579,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               onKeyDown={onAptKeyDown}
               placeholder="e.g. 4B"
               disabled={apartmentSearchInFlight}
-              className="min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-1 text-[10px] leading-tight text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+              className={NYC_APT_INPUT_CLASS}
               autoComplete="off"
             />
             <button
@@ -569,7 +591,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                 console.log("[UNIT_FETCH_TRIGGERED] address:", addressForFetch ?? "", "unit:", unitValue);
                 onApartmentSearch?.();
               }}
-              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+              className="shrink-0 self-stretch rounded border border-amber-500/40 bg-amber-500/15 px-2 py-2 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40 sm:py-1"
             >
               {apartmentSearchInFlight ? "…" : "Apply"}
             </button>
