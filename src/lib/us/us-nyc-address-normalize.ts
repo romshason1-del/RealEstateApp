@@ -6,7 +6,7 @@
 import { preserveQueensInAddressLineIfUserTypedQueens } from "./us-nyc-preserve-queens";
 
 /** Bump when candidate rules change (client cache key + API debug). */
-export const NYC_CANDIDATE_GENERATOR_VERSION = 7;
+export const NYC_CANDIDATE_GENERATOR_VERSION = 8;
 
 const NYC_BOROUGHS_AND_CITY = new Set([
   "BROOKLYN",
@@ -44,9 +44,11 @@ const NYC_STREET_TYPE_PAIRS: readonly [string, string][] = [
   ["STREET", "ST"],
   ["AVENUE", "AVE"],
   ["ROAD", "RD"],
+  ["DRIVE", "DR"],
   ["BOULEVARD", "BLVD"],
   ["PLACE", "PL"],
   ["PARKWAY", "PKWY"],
+  ["LANE", "LN"],
 ];
 
 function collapseSpaces(s: string): string {
@@ -266,6 +268,46 @@ function appendOrdinalVariants(addressOnly: readonly string[]): string[] {
   return out;
 }
 
+/** 1ST ↔ FIRST … 12TH ↔ TWELFTH (NYC avenues / grid streets; exact token swap only). */
+const NYC_GRID_ORDINAL_TH_TO_WORD: readonly [string, string][] = [
+  ["1ST", "FIRST"],
+  ["2ND", "SECOND"],
+  ["3RD", "THIRD"],
+  ["4TH", "FOURTH"],
+  ["5TH", "FIFTH"],
+  ["6TH", "SIXTH"],
+  ["7TH", "SEVENTH"],
+  ["8TH", "EIGHTH"],
+  ["9TH", "NINTH"],
+  ["10TH", "TENTH"],
+  ["11TH", "ELEVENTH"],
+  ["12TH", "TWELFTH"],
+];
+
+/**
+ * Adds spelled-out ordinal ↔ digit ordinal variants (e.g. 5TH AVENUE ↔ FIFTH AVENUE).
+ * Deterministic; no fuzzy matching.
+ */
+function expandOrdinalWordDigitVariants(addressOnly: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const line of addressOnly) {
+    pushUniqueOrdered(out, line);
+  }
+  for (const line of addressOnly) {
+    for (const [th, word] of NYC_GRID_ORDINAL_TH_TO_WORD) {
+      const reTh = new RegExp(`\\b${th}\\b`, "i");
+      const reWord = new RegExp(`\\b${word}\\b`, "i");
+      if (reTh.test(line)) {
+        pushUniqueOrdered(out, collapseSpaces(line.replace(reTh, word)));
+      }
+      if (reWord.test(line)) {
+        pushUniqueOrdered(out, collapseSpaces(line.replace(reWord, th)));
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Priority (lookup order):
  * 1) Address-only: base core + building line, then directional grid aliases, then street-type aliases.
@@ -377,7 +419,8 @@ export function buildNycTruthLookupNormalizationDebug(rawInput: string): NycTrut
   const preferredBorough = extractPreferredNycBoroughFromUserInput(rawInput);
 
   const addressOnly = buildOrderedAddressOnlyCandidates(core, buildingOnly);
-  const candidates = appendGeoSuffixVariants(addressOnly, zip, preferredBorough);
+  const addressOnlyWithOrdinalWords = expandOrdinalWordDigitVariants(addressOnly);
+  const candidates = appendGeoSuffixVariants(addressOnlyWithOrdinalWords, zip, preferredBorough);
 
   return {
     normalized_full_address,

@@ -1,6 +1,10 @@
 /**
  * Lookup rows in `real_estate_us.us_nyc_app_output_final_v4` by normalized address candidates.
  * US only — not used for France.
+ *
+ * Match order (no fuzzy search):
+ * 1) `lookup_address` — try every candidate with exact normalized equality.
+ * 2) `property_address` — same candidates if step 1 found no row.
  */
 
 import type { BigQuery } from "@google-cloud/bigquery";
@@ -8,6 +12,7 @@ import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-n
 import { applyNyLongIslandCityToQueensInAddressLine, preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
 import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
 import { getNycAppOutputTableReference, US_NYC_APP_OUTPUT_ADDRESS_COL } from "@/lib/us/us-nyc-app-output-constants";
+import { NYC_APP_OUTPUT_V4_COL } from "@/lib/us/us-nyc-app-output-schema";
 
 function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
@@ -59,12 +64,21 @@ function expandCandidatesWithUnit(baseCandidates: string[], unitRaw: string | nu
 
 export type NycAppOutputQueryDebug = {
   table: string;
+  /** @deprecated use lookup_column — kept for older debug readers */
   address_column: string;
+  lookup_column: string;
+  property_column: string;
   candidates_tried: string[];
   /** First candidate that returned a row, if any. */
   matched_candidate: string | null;
+  /** Which column matched when row_found. */
+  match_column: "lookup_address" | "property_address" | null;
   row_found: boolean;
 };
+
+function sqlExactNormColumn(col: string): string {
+  return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(\`${col}\`, ''), r'\\s+', ' ')))`;
+}
 
 /**
  * Returns first matching row (SELECT *) or null.
@@ -75,7 +89,8 @@ export async function queryNycAppOutputFinalV4Row(
   unitOrLot: string | null
 ): Promise<{ row: Record<string, unknown> | null; debug: NycAppOutputQueryDebug }> {
   const table = getNycAppOutputTableReference();
-  const col = US_NYC_APP_OUTPUT_ADDRESS_COL;
+  const lookupCol = US_NYC_APP_OUTPUT_ADDRESS_COL;
+  const propertyCol = NYC_APP_OUTPUT_V4_COL.property_address;
 
   const { line } = normalizeUSAddressLine(
     applyNyLongIslandCityToQueensInAddressLine(preserveQueensInAddressLineIfUserTypedQueens(addressRaw))
@@ -88,9 +103,12 @@ export async function queryNycAppOutputFinalV4Row(
 
   const debug: NycAppOutputQueryDebug = {
     table,
-    address_column: col,
+    address_column: lookupCol,
+    lookup_column: lookupCol,
+    property_column: propertyCol,
     candidates_tried: candidates,
     matched_candidate: null,
+    match_column: null,
     row_found: false,
   };
 
@@ -98,17 +116,23 @@ export async function queryNycAppOutputFinalV4Row(
     return { row: null, debug };
   }
 
-  const query = `
+  const queryLookup = `
     SELECT *
     FROM \`${table}\`
-    WHERE UPPER(TRIM(REGEXP_REPLACE(COALESCE(\`${col}\`, ''), r'\\s+', ' '))) = @norm
+    WHERE ${sqlExactNormColumn(lookupCol)} = @norm
+    LIMIT 1
+  `;
+  const queryProperty = `
+    SELECT *
+    FROM \`${table}\`
+    WHERE ${sqlExactNormColumn(propertyCol)} = @norm
     LIMIT 1
   `;
 
   for (const cand of candidates) {
     const normKey = normalizeAddrForMatch(cand);
     const [rows] = await client.query({
-      query,
+      query: queryLookup,
       params: { norm: normKey },
       location: "US",
     });
@@ -116,6 +140,23 @@ export async function queryNycAppOutputFinalV4Row(
     if (first) {
       debug.row_found = true;
       debug.matched_candidate = cand;
+      debug.match_column = "lookup_address";
+      return { row: first, debug };
+    }
+  }
+
+  for (const cand of candidates) {
+    const normKey = normalizeAddrForMatch(cand);
+    const [rows] = await client.query({
+      query: queryProperty,
+      params: { norm: normKey },
+      location: "US",
+    });
+    const first = rows[0] as Record<string, unknown> | undefined;
+    if (first) {
+      debug.row_found = true;
+      debug.matched_candidate = cand;
+      debug.match_column = "property_address";
       return { row: first, debug };
     }
   }

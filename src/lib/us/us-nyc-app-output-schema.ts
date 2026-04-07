@@ -20,6 +20,7 @@ import { normalizeNycBuildingTypeKey } from "@/lib/us/us-nyc-precomputed-card";
  */
 export const NYC_APP_OUTPUT_V4_COL = {
   lookup_address: "lookup_address",
+  property_address: "property_address",
   final_display_mode: "final_display_mode",
   final_confidence: "final_confidence",
   has_exact_transaction: "has_exact_transaction",
