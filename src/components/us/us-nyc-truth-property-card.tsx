@@ -311,6 +311,15 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     }
   };
 
+  const nycAptInputDebug = (phase: "focus" | "change", detail?: Record<string, unknown>) => {
+    if (process.env.NODE_ENV === "production") return;
+    console.log("[NYC_APT_DEBUG] apartment input", phase, {
+      addressForFetch: addressForFetch ?? "",
+      submittedApartment: submittedApartment ?? "",
+      ...detail,
+    });
+  };
+
   if (showCommercialOnlyMessage) {
     return (
       <div className="space-y-1">
@@ -386,7 +395,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               <input
                 type="text"
                 value={apartmentDraft}
-                onChange={(e) => onApartmentDraftChange?.(e.target.value)}
+                onChange={(e) => {
+                  nycAptInputDebug("change", { draftLen: e.target.value.length });
+                  onApartmentDraftChange?.(e.target.value);
+                }}
+                onFocus={() => nycAptInputDebug("focus", { gated: true })}
                 onKeyDown={onAptKeyDown}
                 placeholder="e.g. 4B"
                 disabled={apartmentSearchInFlight}
@@ -476,7 +489,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             <input
               type="text"
               value={apartmentDraft}
-              onChange={(e) => onApartmentDraftChange?.(e.target.value)}
+              onChange={(e) => {
+                nycAptInputDebug("change", { draftLen: e.target.value.length });
+                onApartmentDraftChange?.(e.target.value);
+              }}
+              onFocus={() => nycAptInputDebug("focus", { gated: false })}
               onKeyDown={onAptKeyDown}
               placeholder="e.g. 4B"
               disabled={apartmentSearchInFlight}

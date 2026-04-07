@@ -37,8 +37,8 @@ export function usePropertyValueInsights(
   optionsRef.current = options;
   const abortRef = React.useRef<AbortController | null>(null);
 
-  const doFetch = React.useCallback(() => {
-    if (!address.trim() || !hasProvider) return;
+  const doFetch = React.useCallback((): Promise<void> => {
+    if (!address.trim() || !hasProvider) return Promise.resolve();
     const opts = optionsRef.current;
     const thisRequestId = ++requestIdRef.current;
     abortRef.current?.abort();
@@ -69,7 +69,7 @@ export function usePropertyValueInsights(
         address,
       });
     }
-    fetchPropertyValueInsights(address, fetchOpts)
+    return fetchPropertyValueInsights(address, fetchOpts)
       .then((res) => {
         if (thisRequestId === requestIdRef.current) {
           if (isFR && aptSent) {
@@ -85,8 +85,21 @@ export function usePropertyValueInsights(
         }
       })
       .catch((err) => {
+        const name = (err as { name?: string })?.name;
+        const msg = err instanceof Error ? err.message : String(err);
+        const isAbort =
+          name === "AbortError" || /aborted|AbortError|user aborted/i.test(msg);
         if (thisRequestId === requestIdRef.current) {
-          if ((err as any)?.name !== "AbortError") console.error("[usePropertyValueInsights]", err);
+          if (isAbort) {
+            if (process.env.NODE_ENV === "development") {
+              console.log("[usePropertyValueInsights] request aborted (ignored, stale or superseded)", {
+                requestId: thisRequestId,
+                reason: msg,
+              });
+            }
+            return;
+          }
+          console.error("[usePropertyValueInsights]", err);
           setData({ message: "Failed to fetch", error: String(err) });
         }
       })
@@ -113,9 +126,7 @@ export function usePropertyValueInsights(
     };
   }, []);
 
-  const refetch = React.useCallback(() => {
-    doFetch();
-  }, [doFetch]);
+  const refetch = React.useCallback(() => doFetch(), [doFetch]);
 
   return { data, isLoading, refetch };
 }

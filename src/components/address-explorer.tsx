@@ -184,9 +184,10 @@ const MAP_DARK = {
   containerBg: "#0f1114",
 } as const;
 
+/** Fixed `vh` (not `dvh`) so mobile keyboard / dynamic viewport changes do not resize the map tile area and jolt the camera. */
 const mapContainerStyle: React.CSSProperties = {
   width: "100%",
-  height: "min(55vh, 50dvh)",
+  height: "50vh",
   minHeight: "280px",
   backgroundColor: MAP_DARK.containerBg,
 };
@@ -1168,6 +1169,34 @@ export const AddressExplorer = () => {
     map.setCenter(center);
     map.setZoom(17);
   }, [center, currentLocation, map]);
+
+  /** Keep camera when the layout viewport changes (e.g. mobile keyboard) — card-only typing must not move the map. */
+  React.useEffect(() => {
+    if (!map || typeof window === "undefined" || !window.visualViewport) return;
+    const vv = window.visualViewport;
+    const onResize = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (!c || z == null) return;
+      const lat = c.lat();
+      const lng = c.lng();
+      if (process.env.NODE_ENV === "development") {
+        console.log("[NYC_APT_DEBUG] map visualViewport resize — preserving center/zoom", {
+          vvHeight: vv.height,
+          lat,
+          lng,
+          zoom: z,
+        });
+      }
+      window.requestAnimationFrame(() => {
+        window.google?.maps?.event?.trigger(map, "resize");
+        map.setCenter({ lat, lng });
+        map.setZoom(z);
+      });
+    };
+    vv.addEventListener("resize", onResize);
+    return () => vv.removeEventListener("resize", onResize);
+  }, [map]);
 
   const dismissSelectedBuilding = React.useCallback(() => {
     setDismissedBuilding((current) => current ?? selectedBuilding);

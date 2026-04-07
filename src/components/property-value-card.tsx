@@ -446,7 +446,11 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     aptNumber: searchApt,
     refetchTrigger: aptSearchTrigger,
     postcode: isFR ? postcode : undefined,
-    unitOrLot: isUS && nycUnitSubmitted?.trim() ? nycUnitSubmitted.trim() : undefined,
+    /**
+     * NYC: do NOT pass `unit_or_lot` through the insights hook. Apply uses a dedicated `/api/us/nyc-app-output`
+     * fetch (`nycUnitApplyPayload`). Passing `unitOrLot` here would re-run the hook on submit, abort the
+     * in-flight insights request, and surface spurious "aborted" errors — apartment input must stay card-only.
+     */
   });
 
   React.useEffect(() => {
@@ -573,9 +577,30 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     setNycUnitApplyError(null);
   }, [address, isUS]);
 
+  React.useEffect(() => {
+    if (!isUS) return;
+    if (process.env.NODE_ENV === "development") {
+      console.log("[NYC_APT_DEBUG] PropertyValueCard mount", { address: addressForApi });
+    }
+    return () => {
+      if (process.env.NODE_ENV === "development") {
+        console.log("[NYC_APT_DEBUG] PropertyValueCard unmount", { address: addressForApi });
+      }
+    };
+  }, [isUS, addressForApi]);
+
   const submitNycUnitApply = React.useCallback(async () => {
     const t = nycUnitDraft.trim();
     if (!t || !isUS) return;
+    const submittedBefore = nycUnitSubmitted;
+    const addrBefore = addressForApi.trim();
+    if (process.env.NODE_ENV === "development") {
+      console.log("[NYC_APT_DEBUG] APPLY click", {
+        address: addrBefore,
+        unitDraft: t,
+        submittedApartmentBefore: submittedBefore,
+      });
+    }
     setNycUnitApplyLoading(true);
     setNycUnitApplyError(null);
     try {
@@ -590,10 +615,21 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       if (position?.lat != null && Number.isFinite(position.lat)) params.set("latitude", String(position.lat));
       if (position?.lng != null && Number.isFinite(position.lng)) params.set("longitude", String(position.lng));
       params.set("unit_or_lot", t);
-      const res = await fetch(`/api/us/nyc-app-output?${params.toString()}`, { signal: AbortSignal.timeout(20000) });
+      const url = `/api/us/nyc-app-output?${params.toString()}`;
+      if (process.env.NODE_ENV === "development") {
+        console.log("[NYC_APT_DEBUG] nyc-app-output request start", { url: url.slice(0, 120) });
+      }
+      const ac = new AbortController();
+      const to = window.setTimeout(() => ac.abort(), 20000);
+      const res = await fetch(url, { signal: ac.signal });
+      window.clearTimeout(to);
       const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
-        setNycUnitApplyError(typeof data.message === "string" ? data.message : "Request failed");
+        const msg = typeof data.message === "string" ? data.message : "Request failed";
+        if (process.env.NODE_ENV === "development") {
+          console.log("[NYC_APT_DEBUG] nyc-app-output request failure", { status: res.status, msg });
+        }
+        setNycUnitApplyError(msg);
         return;
       }
       setNycUnitApplyPayload(data);
@@ -602,12 +638,22 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
           ? data.unit_or_lot_submitted.trim()
           : t;
       setNycUnitSubmitted(norm);
+      if (process.env.NODE_ENV === "development") {
+        console.log("[NYC_APT_DEBUG] nyc-app-output request success", {
+          submittedApartmentAfter: norm,
+          addressAfter: addressForApi.trim(),
+        });
+      }
     } catch (e) {
-      setNycUnitApplyError(e instanceof Error ? e.message : "Request failed");
+      const msg = e instanceof Error ? e.message : "Request failed";
+      if (process.env.NODE_ENV === "development") {
+        console.log("[NYC_APT_DEBUG] nyc-app-output request catch", { error: msg, name: e instanceof Error ? e.name : "" });
+      }
+      setNycUnitApplyError(msg);
     } finally {
       setNycUnitApplyLoading(false);
     }
-  }, [addressForApi, isUS, nycUnitDraft, position?.lat, position?.lng]);
+  }, [addressForApi, isUS, nycUnitDraft, position?.lat, position?.lng, nycUnitSubmitted]);
 
   const nycTruthDisplay =
     isUS &&
