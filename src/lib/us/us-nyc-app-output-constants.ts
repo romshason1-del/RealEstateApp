@@ -14,7 +14,10 @@ export const US_NYC_APP_OUTPUT_DATA_PROJECT = "streetiq-bigquery";
 
 const DEFAULT_DATASET_AND_TABLE = "real_estate_us.us_nyc_app_output_final_v4";
 
-/** Fully qualified default: `streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v4` */
+/**
+ * Fully qualified default: `streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v4`.
+ * Production NYC card reads only this table (location US) — do not point the app at EU-hosted datasets.
+ */
 export const US_NYC_APP_OUTPUT_FULL_TABLE_DEFAULT = `${US_NYC_APP_OUTPUT_DATA_PROJECT}.${DEFAULT_DATASET_AND_TABLE}`;
 
 /** Row lookup uses {@link NYC_APP_OUTPUT_V4_COL.lookup_address}. */

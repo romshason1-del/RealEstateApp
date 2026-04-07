@@ -187,6 +187,14 @@ const badgeBase =
 
 const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-amber-400/85 leading-none";
 
+/** Dispatched while NYC apartment/unit inputs are focused so the map skips resize/recenter (see address-explorer). */
+const NYC_APT_INPUT_FOCUS_EVENT = "streetiq-nyc-apartment-input-focus";
+
+function emitNycApartmentInputFocus(active: boolean) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(NYC_APT_INPUT_FOCUS_EVENT, { detail: { active } }));
+}
+
 /**
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
  */
@@ -222,6 +230,14 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const hasSubmittedUnit = !!(submittedApartment ?? "").trim();
   /** No valuation/metrics until the user applies a unit (parent sets `submittedApartment` after successful Apply). */
   const isApartmentGatedBeforeUnit = apartmentRequiredFromApi && !hasSubmittedUnit;
+
+  /** True only when the v4 row supports exact property-level figures (not ASK_APARTMENT / building-level). */
+  const isExactApartmentLevel =
+    data.nyc_display_hierarchy === "EXACT" &&
+    data.nyc_has_exact_transaction === true &&
+    data.property_result?.value_level === "property-level";
+  /** After Apply: explain building-level row vs unit — hide when we have a true exact-apartment match. */
+  const showBuildingScopeNote = hasSubmittedUnit && !isExactApartmentLevel;
 
   const effectiveStatus = statusProp ?? data.status;
   const ev = data.estimated_value;
@@ -320,6 +336,31 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     });
   };
 
+  const nycAptBlurTimerRef = React.useRef<number | null>(null);
+  const onNycAptInputFocus = (gated: boolean) => {
+    if (nycAptBlurTimerRef.current != null) {
+      window.clearTimeout(nycAptBlurTimerRef.current);
+      nycAptBlurTimerRef.current = null;
+    }
+    emitNycApartmentInputFocus(true);
+    nycAptInputDebug("focus", { gated });
+  };
+  const onNycAptInputBlur = () => {
+    nycAptBlurTimerRef.current = window.setTimeout(() => {
+      nycAptBlurTimerRef.current = null;
+      const el = document.activeElement;
+      if (el?.getAttribute("data-nyc-apartment-input") === "1") return;
+      emitNycApartmentInputFocus(false);
+    }, 120);
+  };
+
+  React.useEffect(() => {
+    return () => {
+      if (nycAptBlurTimerRef.current != null) window.clearTimeout(nycAptBlurTimerRef.current);
+      emitNycApartmentInputFocus(false);
+    };
+  }, []);
+
   if (showCommercialOnlyMessage) {
     return (
       <div className="space-y-1">
@@ -394,12 +435,14 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               <input
                 type="text"
+                data-nyc-apartment-input="1"
                 value={apartmentDraft}
                 onChange={(e) => {
                   nycAptInputDebug("change", { draftLen: e.target.value.length });
                   onApartmentDraftChange?.(e.target.value);
                 }}
-                onFocus={() => nycAptInputDebug("focus", { gated: true })}
+                onFocus={() => onNycAptInputFocus(true)}
+                onBlur={onNycAptInputBlur}
                 onKeyDown={onAptKeyDown}
                 placeholder="e.g. 4B"
                 disabled={apartmentSearchInFlight}
@@ -452,6 +495,21 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           <span className="font-semibold text-zinc-500">Matched NYC record</span> {data.nyc_matched_record_address}
         </div>
       ) : null}
+      {showBuildingScopeNote ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1 text-[8px] leading-tight text-zinc-300">
+          <p>
+            <span className="font-semibold text-zinc-500">Unit you entered</span> {(submittedApartment ?? "").trim()}
+          </p>
+          <p className="mt-0.5">
+            <span className="font-semibold text-zinc-500">Matched NYC record</span>{" "}
+            {(data.nyc_matched_record_address ?? "").trim() || "—"} — building-level row (same lookup as the NYC final
+            table); not unit-specific.
+          </p>
+          <p className="mt-0.5 text-zinc-400">
+            Valuation and sale details below are for this building record — not verified as unique to your unit only.
+          </p>
+        </div>
+      ) : null}
       <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2 py-1.5 sm:px-2.5">
         <div className="text-[10px] font-semibold leading-tight tracking-tight text-zinc-100">NYC property record</div>
         <div className="mt-1 flex flex-wrap gap-1">
@@ -488,12 +546,14 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <input
               type="text"
+              data-nyc-apartment-input="1"
               value={apartmentDraft}
               onChange={(e) => {
                 nycAptInputDebug("change", { draftLen: e.target.value.length });
                 onApartmentDraftChange?.(e.target.value);
               }}
-              onFocus={() => nycAptInputDebug("focus", { gated: false })}
+              onFocus={() => onNycAptInputFocus(false)}
+              onBlur={onNycAptInputBlur}
               onKeyDown={onAptKeyDown}
               placeholder="e.g. 4B"
               disabled={apartmentSearchInFlight}

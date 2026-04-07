@@ -1170,11 +1170,33 @@ export const AddressExplorer = () => {
     map.setZoom(17);
   }, [center, currentLocation, map]);
 
+  /** NYC-only: while the user focuses the apartment/unit field in the property card, never touch map camera or trigger resize. */
+  const nycApartmentInputFocusedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const ev = "streetiq-nyc-apartment-input-focus";
+    const onFocusEvt = (e: Event) => {
+      const active = (e as CustomEvent<{ active?: boolean }>).detail?.active === true;
+      nycApartmentInputFocusedRef.current = active;
+      if (process.env.NODE_ENV === "development") {
+        console.log("[NYC_APT_DEBUG] map: NYC apartment input focus gate", { active });
+      }
+    };
+    window.addEventListener(ev, onFocusEvt);
+    return () => window.removeEventListener(ev, onFocusEvt);
+  }, []);
+
   /** Keep camera when the layout viewport changes (e.g. mobile keyboard) — card-only typing must not move the map. */
   React.useEffect(() => {
     if (!map || typeof window === "undefined" || !window.visualViewport) return;
     const vv = window.visualViewport;
     const onResize = () => {
+      if (nycApartmentInputFocusedRef.current) {
+        if (process.env.NODE_ENV === "development") {
+          console.log("[NYC_APT_DEBUG] map visualViewport resize skipped (NYC apartment input focused)");
+        }
+        return;
+      }
       const c = map.getCenter();
       const z = map.getZoom();
       if (!c || z == null) return;
