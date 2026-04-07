@@ -1,0 +1,1 @@
+﻿SELECT 'MEDIUM_no_exact' AS qa_case, lookup_address, final_display_mode, final_confidence, has_exact_transaction FROM \streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v4\ WHERE final_confidence = 'MEDIUM' AND has_exact_transaction IS NOT TRUE AND lookup_address LIKE '%, NY%' LIMIT 1

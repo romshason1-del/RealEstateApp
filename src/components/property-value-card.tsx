@@ -58,6 +58,10 @@ function formatCurrency(value: number, symbol: string): string {
   return `${symbol}${Math.round(value).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
 
+function isUsNycDataSource(ds: string | undefined): boolean {
+  return ds === "us_nyc_truth" || ds === "us_nyc_app_output_v4";
+}
+
 /** Universal first-card label and support text by value level */
 function getFirstCardWording(valueLevel: string | undefined): { label: string; supportText: string } {
   const label = "Estimated value for this property";
@@ -538,7 +542,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       should_prompt_for_unit?: boolean;
       nyc_pending_unit_prompt?: boolean | null;
     };
-    if (d.data_source !== "us_nyc_truth" || d.success !== true) return false;
+    if (!isUsNycDataSource(d.data_source) || d.success !== true) return false;
     return d.should_prompt_for_unit === true || d.nyc_pending_unit_prompt === true;
   }, [isUS, activeInsightsData]);
 
@@ -567,7 +571,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       if (position?.lat != null && Number.isFinite(position.lat)) params.set("latitude", String(position.lat));
       if (position?.lng != null && Number.isFinite(position.lng)) params.set("longitude", String(position.lng));
       params.set("unit_or_lot", t);
-      const res = await fetch(`/api/property-value?${params.toString()}`, { signal: AbortSignal.timeout(20000) });
+      const res = await fetch(`/api/us/nyc-app-output?${params.toString()}`, { signal: AbortSignal.timeout(20000) });
       const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
         setNycUnitApplyError(typeof data.message === "string" ? data.message : "Request failed");
@@ -590,7 +594,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     isUS &&
     activeInsightsData &&
     typeof activeInsightsData === "object" &&
-    ((activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" ||
+    (isUsNycDataSource((activeInsightsData as { data_source?: string }).data_source) ||
       (activeInsightsData as { status?: string }).status === "requires_unit" ||
       (activeInsightsData as { status?: string }).status === "commercial_property")
       ? (nycUnitApplyPayload ?? (activeInsightsData as Record<string, unknown>))
@@ -715,7 +719,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       (activeInsightsData?.sales_history != null && activeInsightsData.sales_history.length > 0) ||
       (activeInsightsData &&
         typeof activeInsightsData === "object" &&
-        (activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth" &&
+        isUsNycDataSource((activeInsightsData as { data_source?: string }).data_source) &&
         (activeInsightsData as { success?: boolean }).success === true));
   const unitRequired = isUS && (activeInsightsData?.error === "UNIT_REQUIRED" || activeInsightsData?.debug?.unit_required === true);
   const noDataAvailable =
@@ -912,7 +916,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     isUS &&
     insightsForTitle &&
     typeof insightsForTitle === "object" &&
-    (insightsForTitle as { data_source?: string }).data_source === "us_nyc_truth";
+    isUsNycDataSource((insightsForTitle as { data_source?: string }).data_source);
   const formatProviderAddress = (a: { city?: string; street?: string; house_number?: string }) =>
     [a.house_number, a.street, a.city].filter(Boolean).join(", ").trim() || "";
   const displayAddress =
@@ -1403,7 +1407,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
           ) : isUS &&
             activeInsightsData &&
             typeof activeInsightsData === "object" &&
-            (((activeInsightsData as { data_source?: string }).data_source === "us_nyc_truth") ||
+            (isUsNycDataSource((activeInsightsData as { data_source?: string }).data_source) ||
               isUsRequiresUnit ||
               isUsCommercial) ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
@@ -1429,6 +1433,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                   setNycUnitApplyError(null);
                   refetch();
                 }}
+                onSearchAnotherAddress={onClose}
               />
               {nycUnitApplyError ? (
                 <p className="text-[9px] text-amber-400/90">{nycUnitApplyError}</p>

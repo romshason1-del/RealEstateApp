@@ -24,6 +24,21 @@ export type UsNycTruthCardData = {
   acris_last_sale_price?: number | null;
   acris_last_sale_date?: string | null;
   acris_has_multiple_deeds?: boolean;
+  /** NYC `us_nyc_app_output_final_v4` — server-derived; do not recompute on the client. */
+  nyc_display_hierarchy?: "EXACT" | "BUILDING" | "STREET" | "NONE";
+  nyc_match_confidence?: "HIGH" | "LOW" | "NONE" | "MEDIUM";
+  nyc_has_exact_transaction?: boolean;
+  nyc_show_street_reference?: boolean;
+  nyc_street_reference?: {
+    price: number | null;
+    date: string | null;
+    source_address: string | null;
+  } | null;
+  nyc_show_search_another_cta?: boolean;
+  /** Server-normalized neighborhood score / label from BigQuery row. */
+  nyc_neighborhood_score?: string | null;
+  /** Server-normalized building category label. */
+  nyc_building_type_display?: string | null;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -96,6 +111,25 @@ function nycEstimatedSubtitle(valueLevel: string | undefined): string {
   }
 }
 
+function nycSubtitleFromHierarchy(data: UsNycTruthCardData): string {
+  const h = data.nyc_display_hierarchy;
+  if (h) {
+    switch (h) {
+      case "EXACT":
+        return "Based on exact property match";
+      case "BUILDING":
+        return "Based on building transaction history";
+      case "STREET":
+        return "Based on recent sales on this street";
+      case "NONE":
+        return "No property record at this location";
+      default:
+        break;
+    }
+  }
+  return nycEstimatedSubtitle(data.property_result?.value_level);
+}
+
 function saleIndicatesMultipleUnits(totalUnits: number | null | undefined): boolean {
   if (totalUnits == null || !Number.isFinite(totalUnits)) return false;
   return totalUnits > 1;
@@ -133,6 +167,8 @@ export type UsNycTruthPropertyCardProps = {
   apartmentSearchInFlight?: boolean;
   submittedApartment?: string;
   onCheckAnotherApartment?: () => void;
+  /** Closes the card so the user can pick another address (NONE / no-data CTA). */
+  onSearchAnotherAddress?: () => void;
 };
 
 const block =
@@ -147,7 +183,6 @@ const sectionLabel = "text-[7px] font-semibold uppercase tracking-[0.12em] text-
  * NYC gold-layer truth only — US-only styling; no France imports or shared card.
  */
 export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
-  console.log("[NYC_CARD_STATUS]", props.status, "isCommercial:", props.isCommercial);
   const {
     data,
     currencySymbol,
@@ -162,6 +197,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     apartmentSearchInFlight = false,
     submittedApartment,
     onCheckAnotherApartment,
+    onSearchAnotherAddress,
   } = props;
   const effectiveStatus = statusProp ?? data.status;
   const ev = data.estimated_value;
@@ -185,11 +221,23 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const multiUnit = saleIndicatesMultipleUnits(data.latest_sale_total_units ?? null);
   const isPropertyLevel = valueLevel === "property-level";
 
+  const isV4Style =
+    data.nyc_display_hierarchy !== undefined ||
+    data.nyc_match_confidence !== undefined ||
+    data.nyc_has_exact_transaction !== undefined;
+  const showLastTxSection = isV4Style
+    ? data.nyc_has_exact_transaction === true && data.nyc_display_hierarchy !== "NONE"
+    : true;
+
+  const showLegacyAcrisStripe = !isV4Style;
+
   const showAcrisVerified =
+    showLegacyAcrisStripe &&
     nycPricesMatchForAcris(data.latest_sale_price, data.acris_last_sale_price) &&
     nycSaleDateKeyForCompare(data.latest_sale_date) !== "" &&
     nycSaleDateKeyForCompare(data.latest_sale_date) === nycSaleDateKeyForCompare(data.acris_last_sale_date);
   const showAcrisMultipleDeedsLine =
+    showLegacyAcrisStripe &&
     data.acris_has_multiple_deeds === true &&
     (data.acris_last_sale_price != null || data.acris_last_sale_date != null);
 
@@ -211,6 +259,28 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             🏢 Commercial Property — No residential data available
           </p>
         </div>
+      </div>
+    );
+  }
+
+  if (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) {
+    return (
+      <div className="space-y-1">
+        <div className={block}>
+          <div className={sectionLabel}>No NYC property record</div>
+          <p className="mt-0.5 text-[9px] text-zinc-400">
+            We couldn&apos;t match this address in our NYC records. It may be outside coverage or need a small correction.
+          </p>
+        </div>
+        {onSearchAnotherAddress ? (
+          <button
+            type="button"
+            onClick={onSearchAnotherAddress}
+            className="w-full rounded-md border border-amber-500/40 bg-amber-500/[0.08] py-1.5 text-[10px] font-semibold leading-tight tracking-wide text-amber-100/95 transition-colors hover:bg-amber-500/15"
+          >
+            Search another address
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -300,27 +370,78 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
               {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "Unavailable"}
             </div>
-            <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycEstimatedSubtitle(valueLevel)}</div>
+            <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycSubtitleFromHierarchy(data)}</div>
           </div>
 
-          <div className={block}>
-            <div className={sectionLabel}>Last transaction</div>
-            <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-              {price != null && price > 0 ? (
-                <>
-                  {formatCurrency(price, currencySymbol)}
-                  {dateStr ? ` · ${dateStr}` : ""}
-                </>
-              ) : (
-                "No official sale recorded"
-              )}
-            </div>
-            {multiUnit ? (
-              <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
-                Transaction includes multiple units
+          {showLastTxSection ? (
+            <div className={block}>
+              <div className={sectionLabel}>Last transaction</div>
+              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                {price != null && price > 0 ? (
+                  <>
+                    {formatCurrency(price, currencySymbol)}
+                    {dateStr ? ` · ${dateStr}` : ""}
+                  </>
+                ) : (
+                  "No official sale recorded"
+                )}
               </div>
-            ) : null}
-          </div>
+              {multiUnit ? (
+                <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
+                  Transaction includes multiple units
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {data.nyc_show_street_reference === true && data.nyc_street_reference ? (
+            <div className={block}>
+              <div className={sectionLabel}>Street-level reference</div>
+              <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+                Not this property&apos;s last transaction — a comparable sale on the street (confidence is low).
+              </p>
+              {data.nyc_street_reference.source_address ? (
+                <p className="mt-0.5 text-[9px] text-zinc-400">
+                  Source address: {data.nyc_street_reference.source_address}
+                </p>
+              ) : null}
+              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                {data.nyc_street_reference.price != null && data.nyc_street_reference.price > 0 ? (
+                  <>
+                    {formatCurrency(data.nyc_street_reference.price, currencySymbol)}
+                    {data.nyc_street_reference.date
+                      ? ` · ${formatNycSaleDate(data.nyc_street_reference.date)}`
+                      : ""}
+                  </>
+                ) : data.nyc_street_reference.date ? (
+                  formatNycSaleDate(data.nyc_street_reference.date)
+                ) : (
+                  "—"
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {isV4Style ? (
+            <div className={block}>
+              <div className={sectionLabel}>Neighborhood score</div>
+              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                {data.nyc_neighborhood_score != null && String(data.nyc_neighborhood_score).trim() !== ""
+                  ? String(data.nyc_neighborhood_score)
+                  : "Unavailable"}
+              </div>
+            </div>
+          ) : (
+            <div className={block}>
+              <div className={sectionLabel}>Local market context</div>
+              <div className="mt-0.5 text-[9px] leading-tight text-zinc-300">
+                Neighborhood demand and trends are not shown here.
+              </div>
+              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+                Broader market context will appear when available.
+              </div>
+            </div>
+          )}
 
           <div className={block}>
             <div className={sectionLabel}>Price per ft²</div>
@@ -329,14 +450,19 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             </div>
             <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
           </div>
+
+          {isV4Style ? (
+            <div className={block}>
+              <div className={sectionLabel}>Building type</div>
+              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                {data.nyc_building_type_display != null && String(data.nyc_building_type_display).trim() !== ""
+                  ? String(data.nyc_building_type_display)
+                  : "Unavailable"}
+              </div>
+            </div>
+          ) : null}
         </>
       )}
-
-      <div className={block}>
-        <div className={sectionLabel}>Local market context</div>
-        <div className="mt-0.5 text-[9px] leading-tight text-zinc-300">Neighborhood demand and trends are not shown here.</div>
-        <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Broader market context will appear when available.</div>
-      </div>
 
       {apartmentFlowEnabled ? (
         <button

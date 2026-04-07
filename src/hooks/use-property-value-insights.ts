@@ -17,7 +17,7 @@ export type UsePropertyValueInsightsOptions = {
   postcode?: string;
   /** Increment to force refetch (e.g. when user clicks Search for apartment) */
   refetchTrigger?: number;
-  /** US NYC: optional unit/lot — passed as `unit_or_lot` to `/api/property-value` (same as Apply flow). */
+  /** US NYC: optional unit/lot — passed as `unit_or_lot` to `/api/us/nyc-app-output` (same as Apply flow). */
   unitOrLot?: string;
 };
 

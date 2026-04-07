@@ -68,3 +68,4 @@ data/
 *.zip
 data/us/nyc/raw/pluto/*.csv
 tmp_check.sql
+us_migration_merged/*.parquet

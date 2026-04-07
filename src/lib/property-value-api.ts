@@ -81,7 +81,18 @@ export type PropertyValueInsightsResponse = {
     /** @deprecated Use gross_rent_yield_percent. Kept for backward compatibility. */
     estimated_roi_percent?: number;
   };
-  data_source?: "live" | "cache" | "mock";
+  data_source?: "live" | "cache" | "mock" | "us_nyc_truth" | "us_nyc_app_output_v4";
+  /** NYC `us_nyc_app_output_final_v4`: server-normalized; UI must not recompute. */
+  nyc_display_hierarchy?: "EXACT" | "BUILDING" | "STREET" | "NONE";
+  nyc_match_confidence?: "HIGH" | "LOW" | "NONE" | "MEDIUM";
+  nyc_has_exact_transaction?: boolean;
+  nyc_show_street_reference?: boolean;
+  nyc_street_reference?: { price: number | null; date: string | null; source_address: string | null } | null;
+  nyc_show_search_another_cta?: boolean;
+  nyc_neighborhood_score?: string | null;
+  nyc_building_type_display?: string | null;
+  /** Raw BigQuery row when returned by `/api/us/nyc-app-output` (omitted from production debug stripping only for nested debug keys). */
+  row?: Record<string, unknown> | null;
   market_trend?: { hpi_index: number; change_1y_percent: number; latest_date?: string };
   fr_dvf?: { transaction_count: number; radius_used_m: number; price_per_sqm: number | null };
   /** France: true when multiple units found at address; user must enter apt number */
@@ -319,7 +330,9 @@ export async function fetchPropertyValueInsights(
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
     if (code === "US" && options?.unitOrLot?.trim()) params.set("unit_or_lot", options.unitOrLot.trim());
-    const res = await fetch(`/api/property-value?${params.toString()}`, {
+    // US / NYC: `real_estate_us.us_nyc_app_output_final_v4` via dedicated route (not `/api/property-value` truth pipeline).
+    const apiPath = code === "US" ? `/api/us/nyc-app-output?${params.toString()}` : `/api/property-value?${params.toString()}`;
+    const res = await fetch(apiPath, {
       signal: options?.signal ?? AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });
     const data: PropertyValueInsightsResponse = await res.json().catch(() => ({
@@ -340,7 +353,8 @@ export async function fetchPropertyValueInsights(
       code === "US" &&
       data &&
       typeof data === "object" &&
-      (data as { data_source?: string }).data_source === "us_nyc_truth" &&
+      ((data as { data_source?: string }).data_source === "us_nyc_truth" ||
+        (data as { data_source?: string }).data_source === "us_nyc_app_output_v4") &&
       (data as { success?: boolean }).success === true;
     const hasValidData =
       frHasRealData ||

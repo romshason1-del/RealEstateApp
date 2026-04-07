@@ -21,21 +21,8 @@ import { fetchUKNeighborhoodStats, computeUKLivabilityRating } from "@/lib/prope
 import { fetchEPCFloorArea, fetchEPCFloorAreasForArea, isEPCConfigured } from "@/lib/property-value-providers/uk-epc-provider";
 import { isUSMockEnabled } from "@/lib/property-value-providers/config";
 import { emptyFranceResponse, type FrancePropertyResponse } from "@/lib/france-response-contract";
-import { adaptUsNycTruthJsonForMainPropertyValueRoute } from "@/lib/us/us-nyc-main-payload";
 import { omitUsNycDebugFromPayload } from "@/lib/us/us-nyc-api-response-debug";
-import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
-import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
-import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
-import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
-import {
-  normalizeNycAddressMasterV1Line,
-  queryBuildingTruthFullAddressesFromAddressMaster,
-} from "@/lib/us/us-nyc-address-master";
-import { queryPlutoResidentialMultiUnitGate } from "@/lib/us/us-nyc-pluto-gate";
-import {
-  applyNyLongIslandCityToQueensInAddressLine,
-  preserveQueensInAddressLineIfUserTypedQueens,
-} from "@/lib/us/us-nyc-preserve-queens";
+import { applyNyLongIslandCityToQueensInAddressLine } from "@/lib/us/us-nyc-preserve-queens";
 
 const CACHE = new Map<string, { data: Record<string, unknown>; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -509,8 +496,8 @@ export async function GET(request: NextRequest) {
   const isIL = (countryCode ?? "").toUpperCase() === "IL";
   const usMockMode = isUS && isUSMockEnabled();
 
-  // US / NYC: delegates to /api/us/property-value, which resolves candidates via BigQuery
-  // (us_nyc_card_output_v5) with optional full_address hints from us_nyc_address_master_v1 (suffix normalization).
+  // US / NYC: BigQuery `real_estate_us.us_nyc_app_output_final_v4` via `/api/us/nyc-app-output`
+  // (same entry point as `src/lib/property-value-api.ts`). Legacy `/api/us/property-value` is not used here.
   if (isUS) {
     if (state.trim().toUpperCase() === "NY" && city.trim().toLowerCase() === "long island city") {
       city = "Queens";
@@ -528,205 +515,13 @@ export async function GET(request: NextRequest) {
     const unitFromParam = (searchParams.get("unit") ?? "").trim();
     const combinedUnit = (unitFromParam || unitOrLot) || null;
 
-    if (isUSBigQueryConfigured()) {
-      const { line } = normalizeUSAddressLine(preserveQueensInAddressLineIfUserTypedQueens(usAddress));
-      if (line) {
-        const norm = buildNycTruthLookupNormalizationDebug(line);
-        if (norm) {
-          try {
-            const client = getUSBigQueryClient();
-            const hasSubmittedUnitPrefetch =
-              typeof combinedUnit === "string" && combinedUnit.trim() !== "";
-            const plutoGatePrefetch = await queryPlutoResidentialMultiUnitGate(
-              client,
-              norm.normalized_building_address,
-              norm.zip_from_input ?? null,
-              usAddress
-            );
-            if (
-              plutoGatePrefetch.hit &&
-              plutoGatePrefetch.strictMultiUnitResidential &&
-              !hasSubmittedUnitPrefetch
-            ) {
-              console.log(
-                `[NYC-DEBUG] Input: ${usAddress} | Assigned BBL: ${plutoGatePrefetch.bbl ?? "null"} | Status: requires_unit`
-              );
-              return NextResponse.json(
-                {
-                  success: true,
-                  status: "requires_unit",
-                  message: "Please enter a unit number to see specific valuation and sales history",
-                  estimated_value: null,
-                  latest_sale_price: null,
-                  latest_sale_date: null,
-                  has_truth_property_row: false,
-                  property: null,
-                  valuation: null,
-                  lastTransaction: null,
-                  nyc_pluto_strict_unit_gate: true,
-                  nyc_truth_fetch_skipped: true,
-                },
-                { status: 200 }
-              );
-            }
-            const masterLine =
-              norm.normalized_building_address.trim() ||
-              norm.normalized_full_address.split(",")[0]?.replace(/\s+/g, " ").trim() ||
-              "";
-            const masterNorm = normalizeNycAddressMasterV1Line(masterLine);
-            const masterGate = await queryBuildingTruthFullAddressesFromAddressMaster(
-              client,
-              masterNorm,
-              combinedUnit
-            );
-            console.log("[MASTER_GATE_FULL]", JSON.stringify(masterGate));
-            if (masterGate.isCommercial) {
-              return NextResponse.json(
-                {
-                  status: "commercial_property",
-                  message: "Commercial property — limited residential data available",
-                  property: null,
-                  valuation: null,
-                  lastTransaction: null,
-                },
-                { status: 200 }
-              );
-            }
-            console.log(
-              "[GATE_RESULT]",
-              JSON.stringify({
-                requiresUnit: masterGate.requiresUnit,
-                isCommercial: masterGate.isCommercial,
-                unitstotal: masterGate.unitstotal,
-                bldgclass: masterGate.bldgclass,
-                unitTrim: combinedUnit?.trim() ?? "",
-              })
-            );
-            if (masterGate.requiresUnit && !hasSubmittedUnitPrefetch) {
-              const prefetchBbl =
-                masterGate.requiresUnit && "buildingData" in masterGate
-                  ? masterGate.buildingData.bbl ?? null
-                  : null;
-              console.log(
-                `[NYC-DEBUG] Input: ${usAddress} | Assigned BBL: ${prefetchBbl ?? "null"} | Status: requires_unit`
-              );
-              return NextResponse.json(
-                {
-                  success: true,
-                  status: "requires_unit",
-                  message: "Please enter a unit number to see specific valuation and sales history",
-                  estimated_value: null,
-                  latest_sale_price: null,
-                  latest_sale_date: null,
-                  has_truth_property_row: false,
-                  property: null,
-                  valuation: null,
-                  lastTransaction: null,
-                  nyc_truth_fetch_skipped: true,
-                },
-                { status: 200 }
-              );
-            }
-          } catch {
-            /* fall through to /api/us/property-value */
-          }
-        }
-      }
-    }
+    const nycUrl = new URL("/api/us/nyc-app-output", request.nextUrl.origin);
+    nycUrl.searchParams.set("address", usAddress);
+    if (combinedUnit) nycUrl.searchParams.set("unit_or_lot", combinedUnit);
 
-    const usUrl = new URL("/api/us/property-value", request.nextUrl.origin);
-    usUrl.searchParams.set("address", usAddress);
-    if (unitOrLot) usUrl.searchParams.set("unit_or_lot", unitOrLot);
-    if (unitFromParam) usUrl.searchParams.set("unit", unitFromParam);
-    const usRes = await fetch(usUrl.toString(), { cache: "no-store" });
-    const usData = (await usRes.json().catch(() => ({}))) as Record<string, unknown>;
-
-    // CRITICAL: Pass through special statuses without adaptation (no adaptUsNycTruthJsonForMainPropertyValueRoute)
-    if (usData.status === "commercial_property") {
-      console.log("[MAIN_ROUTE_COMMERCIAL]", usData.status, (usData as { isCommercial?: unknown }).isCommercial);
-      const passthrough = { ...(usData as Record<string, unknown>), status: usData.status };
-      console.log("[MAIN_ROUTE] final status being sent to client:", passthrough?.status);
-      return NextResponse.json(passthrough, { status: 200 });
-    }
-    if (usData.status === "requires_unit") {
-      const passthrough = { ...(usData as Record<string, unknown>), status: usData?.status ?? null };
-      console.log("[MAIN_ROUTE] final status being sent to client:", passthrough?.status);
-      return NextResponse.json(passthrough, { status: 200 });
-    }
-
-    if (usRes.ok) {
-      const adapted = await adaptUsNycTruthJsonForMainPropertyValueRoute(usData, {
-        city: city.trim(),
-        street: street.trim(),
-        houseNumber: houseNumber.trim(),
-      });
-      const finalPayload = adapted as Record<string, unknown>;
-
-      // Derive status from existing fields if status is null
-      if (!finalPayload.status) {
-        if (finalPayload.should_prompt_for_unit === true || finalPayload.nyc_pending_unit_prompt === true) {
-          finalPayload.status = "requires_unit";
-        }
-      }
-
-      console.log("[FINAL_STATUS]", finalPayload.status);
-
-      const adaptedPayload: Record<string, unknown> = { ...finalPayload };
-
-      // Passthrough critical status flags from US route
-      const criticalStatus = usData?.status ?? adaptedPayload?.status ?? null;
-      if (criticalStatus === "commercial_property" || criticalStatus === "requires_unit") {
-        adaptedPayload.status = criticalStatus;
-      } else {
-        adaptedPayload.status = usData?.status ?? adaptedPayload.status ?? null;
-      }
-
-      if (process.env.NYC_LOG_PROPERTY_VALUE_FIELDS === "1") {
-        const dbg = usData.us_nyc_debug as Record<string, unknown> | undefined;
-        const row = dbg?.first_row_if_any as Record<string, unknown> | undefined;
-        const pr = adaptedPayload.property_result as Record<string, unknown> | undefined;
-        const raw = usData as Record<string, unknown>;
-        try {
-          console.log(
-            "[NYC_PROPERTY_VALUE_FIELDS]",
-            JSON.stringify({
-              route: "main_property_value",
-              address_searched: usAddress,
-              address_master_normalized: dbg?.address_master_normalized ?? null,
-              address_master_hint_full_addresses: dbg?.address_master_hint_full_addresses ?? null,
-              matched_full_address: row?.full_address ?? raw.nyc_card_full_address ?? null,
-              building_type: row?.building_type ?? null,
-              unit_count: row?.unit_count ?? null,
-              nyc_pending_unit_prompt: raw.nyc_pending_unit_prompt ?? null,
-              should_prompt_for_unit: adaptedPayload.should_prompt_for_unit ?? null,
-              unit_prompt_reason: adaptedPayload.unit_prompt_reason ?? null,
-              unit_lookup_status: raw.unit_lookup_status ?? null,
-              nyc_final_match_level: raw.nyc_final_match_level ?? null,
-              nyc_final_transaction_match_level: raw.nyc_final_transaction_match_level ?? null,
-              estimated_value: raw.estimated_value ?? null,
-              latest_sale_price: raw.latest_sale_price ?? null,
-              latest_sale_date: raw.latest_sale_date ?? null,
-              property_result_value_level: pr?.value_level ?? null,
-              property_result_exact_value_message: pr?.exact_value_message ?? null,
-            })
-          );
-        } catch {
-          /* ignore */
-        }
-      }
-      if (usData?.status) adaptedPayload.status = usData.status;
-      console.log("[MAIN_ROUTE] final status being sent to client:", adaptedPayload?.status);
-      return NextResponse.json(omitUsNycDebugFromPayload(adaptedPayload), { status: 200 });
-    }
-    const errorPayload: Record<string, unknown> = { ...(usData as Record<string, unknown>) };
-    const criticalStatusErr = usData?.status ?? errorPayload.status ?? null;
-    if (criticalStatusErr === "commercial_property" || criticalStatusErr === "requires_unit") {
-      errorPayload.status = criticalStatusErr;
-    } else {
-      errorPayload.status = usData?.status ?? errorPayload.status ?? null;
-    }
-    console.log("[MAIN_ROUTE] final status being sent to client:", errorPayload?.status);
-    return NextResponse.json(omitUsNycDebugFromPayload(errorPayload), { status: usRes.status });
+    const nycRes = await fetch(nycUrl.toString(), { cache: "no-store" });
+    const nycData = (await nycRes.json().catch(() => ({}))) as Record<string, unknown>;
+    return NextResponse.json(omitUsNycDebugFromPayload(nycData), { status: nycRes.status });
   }
 
   if (isIL) {
