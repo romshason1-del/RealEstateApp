@@ -118,6 +118,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
     return {
       success: true,
       data_source: "us_nyc_app_output_v4",
+      nyc_bq_row_matched: false,
       message: "No Data Available",
       status: null,
       address,
@@ -157,11 +158,12 @@ export function adaptNycAppOutputRowToPropertyPayload(
 
   const isBlockedCommercial = displayModeRaw.toUpperCase().trim() === "BLOCKED_NON_RESIDENTIAL";
   const isNoDataMode = displayModeRaw.toUpperCase().trim() === "NO_DATA";
-  const isNone =
-    hierarchyRaw === "NONE" ||
-    confidenceRaw === "NONE" ||
-    isNoDataMode ||
-    isBlockedCommercial;
+  /**
+   * Only true no-data rows in BigQuery: explicit NO_DATA or blocked commercial.
+   * Do NOT treat LOW confidence, ASK_APARTMENT, or confidence NONE/RESTRICTED alone as missing data —
+   * those still have a real row and must return a full card payload.
+   */
+  const isNone = isNoDataMode || isBlockedCommercial;
 
   const hasExactRaw = bool(row, C.has_exact_transaction);
   const nyc_has_exact_transaction = !isNone && hasExactRaw;
@@ -189,6 +191,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
   const out: Record<string, unknown> = {
     success: true,
     data_source: "us_nyc_app_output_v4",
+    nyc_bq_row_matched: true,
     message: isNone ? "No Data Available" : null,
     nyc_display_hierarchy: isNone ? "NONE" : hierarchyRaw,
     nyc_match_confidence: isNone ? "NONE" : confidenceRaw,

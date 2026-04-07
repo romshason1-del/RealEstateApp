@@ -655,10 +655,15 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     typeof activeInsightsData === "object" &&
     (activeInsightsData as { estimated_value?: number | null }).estimated_value != null;
 
-  /** Align with US route: null/empty status + estimated_value ⇒ treat as success for UI. */
+  /**
+   * Align with US route: null/empty status + estimated_value ⇒ treat as success for UI.
+   * Never map to "success" when the NYC row requires a unit — that hid requires_unit / apartment UI.
+   */
   const usNycDisplayStatusResolved = React.useMemo(() => {
     if (!isUS) return undefined;
     if (usNycMergedStatus === "success") return "success";
+    if (usNycMergedStatus === "requires_unit") return "requires_unit";
+    if (usNycApartmentFlowEnabled) return "requires_unit";
     if (
       usNycHasEstimatedValue &&
       (usNycMergedStatus == null || usNycMergedStatus === "")
@@ -666,7 +671,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       return "success";
     }
     return usNycMergedStatus;
-  }, [isUS, usNycMergedStatus, usNycHasEstimatedValue]);
+  }, [isUS, usNycMergedStatus, usNycHasEstimatedValue, usNycApartmentFlowEnabled]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -735,10 +740,32 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
   const apartmentNotMatched = activeInsightsData && "apartment_not_matched" in activeInsightsData && (activeInsightsData as { apartment_not_matched?: boolean }).apartment_not_matched === true;
   const availableLots = activeInsightsData && "available_lots" in activeInsightsData ? (activeInsightsData as { available_lots?: string[] }).available_lots : undefined;
   const averageBuildingValue = activeInsightsData && "average_building_value" in activeInsightsData ? (activeInsightsData as { average_building_value?: number }).average_building_value : undefined;
-  const hasPropertyData = activeInsightsData?.address != null;
+  const hasUsNycSuccessfulPayload =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    isUsNycDataSource((activeInsightsData as { data_source?: string }).data_source) &&
+    (activeInsightsData as { success?: boolean }).success === true;
+
+  const usNycBqRowPresent =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    isUsNycDataSource((activeInsightsData as { data_source?: string }).data_source) &&
+    ((activeInsightsData as { nyc_bq_row_matched?: boolean }).nyc_bq_row_matched === true ||
+      ((activeInsightsData as { row?: unknown }).row != null &&
+        typeof (activeInsightsData as { row?: unknown }).row === "object"));
+
+  const hasPropertyData =
+    activeInsightsData?.address != null ||
+    usNycBqRowPresent ||
+    (hasUsNycSuccessfulPayload &&
+      (usNycApartmentFlowEnabled ||
+        (activeInsightsData as { estimated_value?: number | null }).estimated_value != null));
+
   const isUsRequiresUnit =
     isUS &&
-    usNycMergedStatus === "requires_unit" &&
+    (usNycMergedStatus === "requires_unit" || usNycApartmentFlowEnabled) &&
     usNycDisplayStatusResolved !== "success";
   const isUsCommercial = isUS && usNycMergedStatus === "commercial_property";
   const resolvedStatus =
@@ -968,7 +995,66 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
   const apiStatus = isUS
     ? (usNycDisplayStatusResolved ?? (insightsData as { status?: string } | null | undefined)?.status)
     : (insightsData as { status?: string } | null | undefined)?.status;
-  console.log("[PROPERTY_CARD] received status:", apiStatus);
+
+  const isUsNycV4DataSource =
+    isUS &&
+    activeInsightsData &&
+    typeof activeInsightsData === "object" &&
+    (activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v4";
+
+  React.useEffect(() => {
+    if (!isDev || !isUS || !activeInsightsData || typeof activeInsightsData !== "object") return;
+    if ((activeInsightsData as { data_source?: string }).data_source !== "us_nyc_app_output_v4") return;
+    const d = activeInsightsData as {
+      status?: string;
+      nyc_display_hierarchy?: string;
+      nyc_match_confidence?: string;
+      should_prompt_for_unit?: boolean;
+      requires_apartment_number?: boolean;
+      nyc_bq_row_matched?: boolean;
+      row?: unknown;
+    };
+    const entersParentNoRecord =
+      !hasPropertyData && !ukLandRegistry && !isUsRequiresUnit && !isUsCommercial;
+    const rendersUsNycTruthCard =
+      activeInsightsData &&
+      (isUsNycDataSource((activeInsightsData as { data_source?: string }).data_source) ||
+        isUsRequiresUnit ||
+        isUsCommercial);
+    console.log("[NYC_UI_FLOW_DEBUG]", {
+      apiStatus,
+      usNycMergedStatus,
+      usNycDisplayStatusResolved,
+      hasPropertyData,
+      nyc_bq_row_matched: d.nyc_bq_row_matched,
+      has_row_object: d.row != null && typeof d.row === "object",
+      nyc_display_hierarchy: d.nyc_display_hierarchy,
+      nyc_match_confidence: d.nyc_match_confidence,
+      should_prompt_for_unit: d.should_prompt_for_unit,
+      requires_apartment_number: d.requires_apartment_number,
+      entersParentNoDataBranch: entersParentNoRecord,
+      rendersMinimalRequiresUnitBlock:
+        !isUsNycV4DataSource && apiStatus === "requires_unit" && hasOfficialProvider,
+      rendersUsNycTruthCardBranch: rendersUsNycTruthCard,
+      rendersApartmentSheet:
+        (usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial && nycUnitSubmitted == null,
+    });
+  }, [
+    isDev,
+    isUS,
+    activeInsightsData,
+    apiStatus,
+    usNycMergedStatus,
+    usNycDisplayStatusResolved,
+    hasPropertyData,
+    ukLandRegistry,
+    isUsRequiresUnit,
+    isUsCommercial,
+    isUsNycV4DataSource,
+    hasOfficialProvider,
+    nycUnitSubmitted,
+    usNycApartmentFlowEnabled,
+  ]);
 
   return (
     <div
@@ -1053,7 +1139,10 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
                 🏢 Commercial Property — No residential data available
               </p>
             </div>
-          ) : isUS && apiStatus === "requires_unit" && hasOfficialProvider ? (
+          ) : isUS &&
+            apiStatus === "requires_unit" &&
+            hasOfficialProvider &&
+            !isUsNycV4DataSource ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <p>Please enter a unit number</p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">

@@ -11,22 +11,59 @@ import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { adaptNycAppOutputRowToPropertyPayload } from "@/lib/us/us-nyc-app-output-adapter";
 import { queryNycAppOutputFinalV4Row } from "@/lib/us/us-nyc-app-output-query";
 import { omitUsNycDebugFromPayload, shouldIncludeUsNycDebugInApiResponse } from "@/lib/us/us-nyc-api-response-debug";
+import type { NycAppOutputQueryDebug } from "@/lib/us/us-nyc-app-output-query";
+import { NYC_APP_OUTPUT_V4_COL as NYC_COL } from "@/lib/us/us-nyc-app-output-schema";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function logNycAppOutputV4(payload: Record<string, unknown>): void {
+function logNycAppOutputV4(
+  address: string,
+  row: Record<string, unknown> | null,
+  payload: Record<string, unknown>,
+  debug: NycAppOutputQueryDebug,
+  responseStatus: "row_matched" | "no_row"
+): void {
   try {
+    const r = row;
+    const rowSnapshot = r ? { ...r } : null;
     console.log(
-      "[NYC_APP_OUTPUT_V4]",
+      "[NYC_APP_OUTPUT_V4] BQ_ROW_RAW",
       JSON.stringify({
-        address_submitted: payload.address_submitted ?? null,
-        matched_candidate: payload.matched_candidate ?? null,
-        row_found: payload.row_found ?? null,
-        hierarchy: payload.nyc_display_hierarchy ?? null,
-        confidence: payload.nyc_match_confidence ?? null,
-        has_exact_transaction: payload.nyc_has_exact_transaction ?? null,
-        should_prompt_for_unit: payload.should_prompt_for_unit ?? null,
+        address_submitted: address,
+        table: debug.table,
+        row_found: debug.row_found,
+        match_column: debug.match_column,
+        matched_candidate: debug.matched_candidate,
+        row: rowSnapshot,
+      })
+    );
+    console.log(
+      "[NYC_APP_OUTPUT_V4] BQ_ROW_KEY_FIELDS",
+      JSON.stringify({
+        address_submitted: address,
+        row_found: debug.row_found,
+        [NYC_COL.final_display_mode]: r?.[NYC_COL.final_display_mode] ?? null,
+        [NYC_COL.final_confidence]: r?.[NYC_COL.final_confidence] ?? null,
+        [NYC_COL.requires_apartment_number]: r?.[NYC_COL.requires_apartment_number] ?? null,
+        [NYC_COL.has_exact_transaction]: r?.[NYC_COL.has_exact_transaction] ?? null,
+        [NYC_COL.final_value_amount]: r?.[NYC_COL.final_value_amount] ?? null,
+      })
+    );
+    console.log("[NYC_APP_OUTPUT_V4] API_PAYLOAD_FINAL", JSON.stringify({ address_submitted: address, response_status: responseStatus, ...payload }));
+    console.log(
+      "[NYC_APP_OUTPUT_V4] MATCH_SUMMARY",
+      JSON.stringify({
+        table: debug.table,
+        response_status: responseStatus,
+        raw_input: debug.raw_input,
+        normalized_pipeline_input: debug.normalized_pipeline_input,
+        candidates_count: debug.candidates_tried.length,
+        norm_keys_tried: debug.norm_keys_tried,
+        match_column: debug.match_column,
+        matched_norm_key: debug.matched_norm_key,
+        matched_stored_lookup_address: debug.matched_stored_lookup_address,
+        matched_stored_property_address: debug.matched_stored_property_address,
       })
     );
   } catch {
@@ -60,15 +97,13 @@ export async function GET(req: NextRequest) {
       { unitOrLotSubmitted: unitOrLot }
     );
 
-    logNycAppOutputV4({
-      address_submitted: address,
-      matched_candidate: debug.matched_candidate,
-      row_found: debug.row_found,
-      nyc_display_hierarchy: payload.nyc_display_hierarchy,
-      nyc_match_confidence: payload.nyc_match_confidence,
-      nyc_has_exact_transaction: payload.nyc_has_exact_transaction,
-      should_prompt_for_unit: payload.should_prompt_for_unit,
-    });
+    logNycAppOutputV4(
+      address,
+      row,
+      payload,
+      debug,
+      debug.row_found ? "row_matched" : "no_row"
+    );
 
     const body: Record<string, unknown> = {
       ...payload,

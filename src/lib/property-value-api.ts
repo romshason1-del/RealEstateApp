@@ -93,6 +93,8 @@ export type PropertyValueInsightsResponse = {
   nyc_building_type_display?: string | null;
   /** Raw BigQuery row when returned by `/api/us/nyc-app-output` (omitted from production debug stripping only for nested debug keys). */
   row?: Record<string, unknown> | null;
+  /** NYC v4: true when BigQuery returned a row for this lookup (set by adapter). */
+  nyc_bq_row_matched?: boolean;
   market_trend?: { hpi_index: number; change_1y_percent: number; latest_date?: string };
   fr_dvf?: { transaction_count: number; radius_used_m: number; price_per_sqm: number | null };
   /** France: true when multiple units found at address; user must enter apt number */

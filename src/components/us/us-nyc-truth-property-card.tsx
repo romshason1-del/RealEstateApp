@@ -43,6 +43,8 @@ export type UsNycTruthCardData = {
   nyc_searched_address_line?: string | null;
   /** BigQuery matched row (`property_address` or `lookup_address`) when present. */
   nyc_matched_record_address?: string | null;
+  /** True when `/api/us/nyc-app-output` matched a BigQuery row (adapter). */
+  nyc_bq_row_matched?: boolean;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -203,12 +205,20 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     onCheckAnotherApartment,
     onSearchAnotherAddress,
   } = props;
+  /** Server flags only — never treat as empty-state when a unit is still required for the row. */
+  const apartmentRequiredFromApi =
+    data.should_prompt_for_unit === true ||
+    (data as { nyc_pending_unit_prompt?: boolean | null }).nyc_pending_unit_prompt === true ||
+    data.status === "requires_unit" ||
+    (data as { requires_apartment_number?: boolean }).requires_apartment_number === true;
+
   const effectiveStatus = statusProp ?? data.status;
   const ev = data.estimated_value;
   /** Full NYC card when API says success or omitted status but value row exists. */
   const treatAsSuccessWithData =
-    effectiveStatus === "success" ||
-    ((effectiveStatus == null || effectiveStatus === "") && ev != null);
+    !apartmentRequiredFromApi &&
+    (effectiveStatus === "success" ||
+      ((effectiveStatus == null || effectiveStatus === "") && ev != null));
   const requiresUnitOnly = effectiveStatus === "requires_unit" && !treatAsSuccessWithData;
   const commercialPropertyOnly =
     isCommercialProp === true || effectiveStatus === "commercial_property";
@@ -218,6 +228,37 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
       ((effectiveStatus == null || effectiveStatus === "") &&
         !!(submittedApartment ?? "").trim() &&
         !apartmentSearchInFlight));
+
+  React.useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    console.log("[NYC_TRUTH_CARD_UI_DEBUG]", {
+      status: data.status,
+      statusProp,
+      nyc_bq_row_matched: data.nyc_bq_row_matched,
+      nyc_display_hierarchy: data.nyc_display_hierarchy,
+      nyc_match_confidence: data.nyc_match_confidence,
+      should_prompt_for_unit: data.should_prompt_for_unit,
+      requires_apartment_number: (data as { requires_apartment_number?: boolean }).requires_apartment_number,
+      apartmentRequiredFromApi,
+      entersNoRecordEmptyState:
+        !apartmentRequiredFromApi &&
+        (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) &&
+        !(
+          data.nyc_bq_row_matched === true &&
+          (data.nyc_display_hierarchy === "BUILDING" ||
+            data.nyc_display_hierarchy === "EXACT" ||
+            data.nyc_display_hierarchy === "STREET")
+        ),
+      rendersApartmentSheet: apartmentFlowEnabled && showApartmentInput,
+    });
+  }, [
+    apartmentFlowEnabled,
+    apartmentRequiredFromApi,
+    data,
+    showApartmentInput,
+    statusProp,
+  ]);
+
   const price = data.latest_sale_price;
   const dateStr = formatNycSaleDate(data.latest_sale_date ?? null);
   const ppsf = data.price_per_sqft;
@@ -267,7 +308,16 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     );
   }
 
-  if (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) {
+  if (
+    !apartmentRequiredFromApi &&
+    (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) &&
+    !(
+      data.nyc_bq_row_matched === true &&
+      (data.nyc_display_hierarchy === "BUILDING" ||
+        data.nyc_display_hierarchy === "EXACT" ||
+        data.nyc_display_hierarchy === "STREET")
+    )
+  ) {
     return (
       <div className="space-y-1">
         {data.nyc_searched_address_line ? (
@@ -392,8 +442,8 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             Please enter a unit number to see specific valuation and sales history
           </p>
         </div>
-      ) : (
-        <>
+      ) : null}
+      <>
           <div className={block}>
             <div className={sectionLabel}>Estimated value for this property</div>
             <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
@@ -491,7 +541,6 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             </div>
           ) : null}
         </>
-      )}
 
       {apartmentFlowEnabled ? (
         <button
