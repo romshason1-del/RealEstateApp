@@ -145,6 +145,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
         livability_rating: "FAIR" as const,
       },
       should_prompt_for_unit: false,
+      nyc_final_display_mode: null,
       unit_prompt_reason: "insufficient_evidence",
       unit_classification: "unknown",
       unit_lookup_status: "not_requested" as const,
@@ -186,12 +187,16 @@ export function adaptNycAppOutputRowToPropertyPayload(
     confidenceRaw === "LOW" &&
     ((streetRefPrice != null && streetRefPrice > 0) || streetRefDate != null || (streetRefAddr?.length ?? 0) > 0);
 
-  const shouldPrompt = !isNone && bool(row, C.requires_apartment_number);
+  const displayModeUpper = displayModeRaw.toUpperCase().trim();
+  const shouldPrompt =
+    !isNone &&
+    (bool(row, C.requires_apartment_number) || displayModeUpper === "ASK_APARTMENT");
 
   const out: Record<string, unknown> = {
     success: true,
     data_source: "us_nyc_app_output_v4",
     nyc_bq_row_matched: true,
+    nyc_final_display_mode: displayModeRaw.trim() ? displayModeRaw : null,
     message: isNone ? "No Data Available" : null,
     nyc_display_hierarchy: isNone ? "NONE" : hierarchyRaw,
     nyc_match_confidence: isNone ? "NONE" : confidenceRaw,

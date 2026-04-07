@@ -45,6 +45,8 @@ export type UsNycTruthCardData = {
   nyc_matched_record_address?: string | null;
   /** True when `/api/us/nyc-app-output` matched a BigQuery row (adapter). */
   nyc_bq_row_matched?: boolean;
+  /** Server `final_display_mode` from NYC row (e.g. ASK_APARTMENT). */
+  nyc_final_display_mode?: string | null;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -206,11 +208,20 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     onSearchAnotherAddress,
   } = props;
   /** Server flags only — never treat as empty-state when a unit is still required for the row. */
+  const askApartmentMode =
+    String(data.nyc_final_display_mode ?? "")
+      .toUpperCase()
+      .trim() === "ASK_APARTMENT";
   const apartmentRequiredFromApi =
     data.should_prompt_for_unit === true ||
     (data as { nyc_pending_unit_prompt?: boolean | null }).nyc_pending_unit_prompt === true ||
     data.status === "requires_unit" ||
-    (data as { requires_apartment_number?: boolean }).requires_apartment_number === true;
+    (data as { requires_apartment_number?: boolean }).requires_apartment_number === true ||
+    askApartmentMode;
+
+  const hasSubmittedUnit = !!(submittedApartment ?? "").trim();
+  /** No valuation/metrics until the user applies a unit (parent sets `submittedApartment` after successful Apply). */
+  const isApartmentGatedBeforeUnit = apartmentRequiredFromApi && !hasSubmittedUnit;
 
   const effectiveStatus = statusProp ?? data.status;
   const ev = data.estimated_value;
@@ -238,8 +249,10 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
       nyc_display_hierarchy: data.nyc_display_hierarchy,
       nyc_match_confidence: data.nyc_match_confidence,
       should_prompt_for_unit: data.should_prompt_for_unit,
+      nyc_final_display_mode: data.nyc_final_display_mode,
       requires_apartment_number: (data as { requires_apartment_number?: boolean }).requires_apartment_number,
       apartmentRequiredFromApi,
+      isApartmentGatedBeforeUnit,
       entersNoRecordEmptyState:
         !apartmentRequiredFromApi &&
         (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) &&
@@ -257,6 +270,8 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     data,
     showApartmentInput,
     statusProp,
+    submittedApartment,
+    isApartmentGatedBeforeUnit,
   ]);
 
   const price = data.latest_sale_price;
@@ -345,6 +360,64 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             Search another address
           </button>
         ) : null}
+      </div>
+    );
+  }
+
+  if (isApartmentGatedBeforeUnit) {
+    return (
+      <div className="space-y-1">
+        <div className={block}>
+          <div className={sectionLabel}>Multi-unit property</div>
+          <p className="mt-0.5 text-[9px] text-zinc-400">
+            This building has multiple units. A unit or apartment number is required before we show valuation, sales, or
+            other property details.
+          </p>
+        </div>
+        {apartmentFlowEnabled && showApartmentInput ? (
+          <div className="rounded-md border border-amber-500/30 bg-black/55 px-2 py-1.5 sm:px-2.5">
+            <div className="text-[10px] font-semibold leading-tight tracking-tight text-amber-100/95">
+              Enter apartment / unit number
+            </div>
+            <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+              Results appear after you enter a unit and tap Apply.
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <input
+                type="text"
+                value={apartmentDraft}
+                onChange={(e) => onApartmentDraftChange?.(e.target.value)}
+                onKeyDown={onAptKeyDown}
+                placeholder="e.g. 4B"
+                disabled={apartmentSearchInFlight}
+                className="min-w-[5rem] flex-1 rounded border border-amber-500/25 bg-black/60 px-1.5 py-1 text-[10px] leading-tight text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30 disabled:opacity-50"
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                disabled={apartmentSearchInFlight || !apartmentDraft.trim()}
+                onClick={() => {
+                  const unitValue = apartmentDraft.trim();
+                  console.log("[UNIT_SUBMIT] unit value:", unitValue);
+                  console.log("[UNIT_FETCH_TRIGGERED] address:", addressForFetch ?? "", "unit:", unitValue);
+                  onApartmentSearch?.();
+                }}
+                className="shrink-0 rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:pointer-events-none disabled:opacity-40"
+              >
+                {apartmentSearchInFlight ? "…" : "Apply"}
+              </button>
+            </div>
+            {apartmentSearchInFlight ? (
+              <p className="mt-1.5 text-[8px] leading-tight text-zinc-500">Searching…</p>
+            ) : null}
+          </div>
+        ) : (
+          <div className={block}>
+            <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+              A unit number is required before results can be shown.
+            </p>
+          </div>
+        )}
       </div>
     );
   }
