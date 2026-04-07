@@ -332,6 +332,12 @@ export async function fetchPropertyValueInsights(
     if (code === "US" && options?.unitOrLot?.trim()) params.set("unit_or_lot", options.unitOrLot.trim());
     // US / NYC: `real_estate_us.us_nyc_app_output_final_v4` via dedicated route (not `/api/property-value` truth pipeline).
     const apiPath = code === "US" ? `/api/us/nyc-app-output?${params.toString()}` : `/api/property-value?${params.toString()}`;
+    if (code === "US" && process.env.NODE_ENV === "development") {
+      console.log("[NYC_SEARCH_DEBUG]", {
+        phase: "fetchPropertyValueInsights",
+        addressSentToNycApi: addressParam,
+      });
+    }
     const res = await fetch(apiPath, {
       signal: options?.signal ?? AbortSignal.timeout(code === "FR" ? 60000 : 20000),
     });

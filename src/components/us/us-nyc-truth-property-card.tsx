@@ -39,6 +39,10 @@ export type UsNycTruthCardData = {
   nyc_neighborhood_score?: string | null;
   /** Server-normalized building category label. */
   nyc_building_type_display?: string | null;
+  /** Full address string sent to `/api/us/nyc-app-output` (user’s intended lookup line). */
+  nyc_searched_address_line?: string | null;
+  /** BigQuery matched row (`property_address` or `lookup_address`) when present. */
+  nyc_matched_record_address?: string | null;
 };
 
 /** UI-only: natural US line; does not affect matching/normalization elsewhere. */
@@ -266,6 +270,16 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   if (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) {
     return (
       <div className="space-y-1">
+        {data.nyc_searched_address_line ? (
+          <div className="rounded-md border border-zinc-600/40 bg-black/40 px-2 py-1 text-[8px] leading-tight text-zinc-400">
+            <span className="font-semibold text-zinc-500">You searched</span> {data.nyc_searched_address_line}
+          </div>
+        ) : null}
+        {data.nyc_matched_record_address ? (
+          <div className="rounded-md border border-zinc-600/40 bg-black/40 px-2 py-1 text-[8px] leading-tight text-zinc-400">
+            <span className="font-semibold text-zinc-500">NYC record (if any)</span> {data.nyc_matched_record_address}
+          </div>
+        ) : null}
         <div className={block}>
           <div className={sectionLabel}>No NYC property record</div>
           <p className="mt-0.5 text-[9px] text-zinc-400">
@@ -285,8 +299,23 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     );
   }
 
+  const showMatchedLine =
+    (data.nyc_matched_record_address ?? "").trim() !== "" &&
+    (data.nyc_searched_address_line ?? "").trim().toLowerCase() !==
+      (data.nyc_matched_record_address ?? "").trim().toLowerCase();
+
   return (
     <div className="space-y-1">
+      {data.nyc_searched_address_line ? (
+        <div className="rounded-md border border-zinc-600/40 bg-black/40 px-2 py-1 text-[8px] leading-tight text-zinc-400">
+          <span className="font-semibold text-zinc-500">You searched</span> {data.nyc_searched_address_line}
+        </div>
+      ) : null}
+      {showMatchedLine ? (
+        <div className="rounded-md border border-zinc-600/40 bg-black/40 px-2 py-1 text-[8px] leading-tight text-zinc-400">
+          <span className="font-semibold text-zinc-500">Matched NYC record</span> {data.nyc_matched_record_address}
+        </div>
+      ) : null}
       <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2 py-1.5 sm:px-2.5">
         <div className="text-[10px] font-semibold leading-tight tracking-tight text-zinc-100">NYC property record</div>
         <div className="mt-1 flex flex-wrap gap-1">

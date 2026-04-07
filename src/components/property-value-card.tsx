@@ -39,6 +39,11 @@ export type PropertyValueCardProps = {
   typedAddressForFrance?: string;
   /** France: postcode from Google address_components (avoids "Postcode required") */
   postcode?: string;
+  /**
+   * US / NYC: full address line the user typed and submitted with Enter on main search (not Google’s formatted rewrite).
+   * When set, NYC API lookup uses this string; map center / `address` prop may still reflect geocoder for display.
+   */
+  usNycLookupAddress?: string;
 };
 
 function formatSaleDate(dateStr: string | null): string {
@@ -381,7 +386,6 @@ function DebugPanel({ address, parsed, canonical, insightsData, latest, currency
 }
 
 export function PropertyValueCard(props: PropertyValueCardProps) {
-  console.log("[CARD_PROPS_FULL]", JSON.stringify(props).substring(0, 500));
   const {
     address,
     position,
@@ -395,6 +399,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     selectedFormattedAddress,
     typedAddressForFrance,
     postcode,
+    usNycLookupAddress,
   } = props;
   const isDev = process.env.NODE_ENV !== "production";
   const isIsrael = countryCode === "IL";
@@ -407,7 +412,21 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     () => calculatePropertyValue(position.lat, position.lng, currencySymbol),
     [position.lat, position.lng, currencySymbol]
   );
-  const addressForApi = isFR && typedAddressForFrance?.trim() ? typedAddressForFrance.trim() : address;
+  const addressForApi = React.useMemo(() => {
+    if (isFR && typedAddressForFrance?.trim()) return typedAddressForFrance.trim();
+    if (isUS && usNycLookupAddress?.trim()) return usNycLookupAddress.trim();
+    return address;
+  }, [isFR, isUS, typedAddressForFrance, usNycLookupAddress, address]);
+
+  React.useEffect(() => {
+    if (!isUS || process.env.NODE_ENV !== "development") return;
+    console.log("[NYC_SEARCH_DEBUG]", {
+      phase: "property_value_card",
+      addressPropForDisplay: address,
+      usNycLookupAddress: usNycLookupAddress ?? null,
+      addressSentToNycApi: addressForApi,
+    });
+  }, [isUS, address, usNycLookupAddress, addressForApi]);
   const [aptNumber, setAptNumber] = React.useState("");
   const [searchApt, setSearchApt] = React.useState<string | undefined>(undefined);
   const [aptSearchTrigger, setAptSearchTrigger] = React.useState(0);
@@ -599,6 +618,23 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       (activeInsightsData as { status?: string }).status === "commercial_property")
       ? (nycUnitApplyPayload ?? (activeInsightsData as Record<string, unknown>))
       : null;
+
+  const usNycTruthCardDataMerged = React.useMemo(() => {
+    if (!isUS) return null;
+    const base = (nycTruthDisplay ?? activeInsightsData) as Record<string, unknown> | null | undefined;
+    if (!base || typeof base !== "object") return base ?? null;
+    const row = base.row as Record<string, unknown> | undefined;
+    const matched =
+      row && typeof row === "object"
+        ? String(row.property_address ?? "").trim() || String(row.lookup_address ?? "").trim() || null
+        : null;
+    const searched = (addressForApi ?? "").trim();
+    return {
+      ...base,
+      nyc_searched_address_line: searched || null,
+      nyc_matched_record_address: matched,
+    };
+  }, [isUS, nycTruthDisplay, activeInsightsData, addressForApi]);
 
   /** Prefer Apply response status so UI leaves requires_unit after unit submit. */
   const usNycMergedStatus = React.useMemo(() => {
@@ -1412,7 +1448,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
               isUsCommercial) ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <UsNycTruthPropertyCard
-                data={(nycTruthDisplay ?? activeInsightsData) as UsNycTruthCardData}
+                data={(usNycTruthCardDataMerged ?? (nycTruthDisplay ?? activeInsightsData)) as UsNycTruthCardData}
                 addressForFetch={addressForApi}
                 currencySymbol={currencySymbol}
                 status={resolvedStatus}

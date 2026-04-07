@@ -110,6 +110,11 @@ type BuildingInsight = {
   postcode?: string;
   /** Debug: raw country short_name from Google address_components (e.g. FR, RE) */
   debugCountryFromComponents?: string;
+  /**
+   * US / NYC only: full address line the user typed and submitted with Enter (not Google’s formatted string).
+   * When set, `/api/us/nyc-app-output` must use this for lookup — never map center or a silently rewritten search box.
+   */
+  usNycLookupAddress?: string;
 };
 
 type GeocodeResult = {
@@ -903,7 +908,9 @@ export const AddressExplorer = () => {
       }
       const formattedAddress = results[0].formatted_address ?? typedAddress;
       const countryProfile = resolveCountryProfile(formattedAddress);
-      const addressForCard = countryProfile.countryCode === "FR" ? typedAddress : formattedAddress;
+      const isUS = countryProfile.countryCode === "US";
+      const addressForCard =
+        countryProfile.countryCode === "FR" ? typedAddress : isUS ? typedAddress : formattedAddress;
 
       setSearchPredictions([]);
       setCenter(nextCenter);
@@ -916,6 +923,7 @@ export const AddressExplorer = () => {
         ...insight,
         typedAddressForFrance: countryProfile.countryCode === "FR" ? typedAddress : undefined,
         rawInputAddressForFrance: countryProfile.countryCode === "FR" ? typedAddress : undefined,
+        ...(isUS ? { usNycLookupAddress: typedAddress } : {}),
       });
       setDismissedBuilding(null);
       setError(null);
@@ -924,6 +932,18 @@ export const AddressExplorer = () => {
       if (countryProfile.countryCode === "FR") {
         rawTypedInputRef.current = typedAddress;
         setQuery(typedAddress);
+      } else if (isUS) {
+        rawTypedInputRef.current = typedAddress;
+        setQuery(typedAddress);
+        if (process.env.NODE_ENV === "development") {
+          console.log("[NYC_SEARCH_DEBUG]", {
+            phase: "handleSearch_enter",
+            rawTyped,
+            googleFormatted: formattedAddress,
+            usedForNycLookup: typedAddress,
+            geocodeLatLng: nextCenter,
+          });
+        }
       } else {
         rawTypedInputRef.current = formattedAddress;
         setQuery(formattedAddress);
@@ -1097,6 +1117,17 @@ export const AddressExplorer = () => {
         const { results, status } = await geocodeRequest({ location: position });
         if (status === "OK" && results?.[0]?.formatted_address) {
           displayAddress = results[0].formatted_address;
+        }
+        const cc = results?.[0]?.address_components
+          ?.find((c) => c.types.includes("country"))
+          ?.short_name?.toUpperCase();
+        if (process.env.NODE_ENV === "development" && cc === "US") {
+          console.log("[NYC_SEARCH_DEBUG]", {
+            phase: "map_click_reverse_geocode",
+            mapClickLatLng: position,
+            reverseGeocodedAddress: displayAddress,
+            note: "Map click does not change the search bar; Property Value uses reverse-geocoded line for this pin only.",
+          });
         }
       } catch {
         // Keep coordinates fallback
@@ -1345,6 +1376,14 @@ export const AddressExplorer = () => {
         setRestaurants([]);
         restaurantMarkersRef.current.forEach((ov) => ov.setMap(null));
         restaurantMarkersRef.current = [];
+        if (process.env.NODE_ENV === "development" && (countryFromComponents ?? "").toUpperCase() === "US") {
+          console.log("[NYC_SEARCH_DEBUG]", {
+            phase: "autocomplete_place_selected",
+            rawTypedBeforeSelection: rawTyped,
+            googleFormattedAddress: displayAddress,
+            usedForNycLookup: displayAddress,
+          });
+        }
         hydrateSearchContext(nextCenter, displayAddress);
         map?.panTo(nextCenter);
         map?.setZoom(16);
@@ -2522,6 +2561,7 @@ export const AddressExplorer = () => {
                 countryCode={selectedBuilding.countryCode}
                 onClose={dismissSelectedBuilding}
                 rawInputAddress={selectedBuilding.rawInputAddress}
+                usNycLookupAddress={selectedBuilding.usNycLookupAddress}
                 selectedFormattedAddress={selectedBuilding.selectedFormattedAddress}
                 typedAddressForFrance={selectedBuilding.typedAddressForFrance}
                 postcode={selectedBuilding.postcode}

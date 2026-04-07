@@ -20,6 +20,7 @@ function logNycAppOutputV4(payload: Record<string, unknown>): void {
     console.log(
       "[NYC_APP_OUTPUT_V4]",
       JSON.stringify({
+        address_submitted: payload.address_submitted ?? null,
         matched_candidate: payload.matched_candidate ?? null,
         row_found: payload.row_found ?? null,
         hierarchy: payload.nyc_display_hierarchy ?? null,
@@ -60,6 +61,7 @@ export async function GET(req: NextRequest) {
     );
 
     logNycAppOutputV4({
+      address_submitted: address,
       matched_candidate: debug.matched_candidate,
       row_found: debug.row_found,
       nyc_display_hierarchy: payload.nyc_display_hierarchy,
