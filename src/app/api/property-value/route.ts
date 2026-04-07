@@ -496,7 +496,7 @@ export async function GET(request: NextRequest) {
   const isIL = (countryCode ?? "").toUpperCase() === "IL";
   const usMockMode = isUS && isUSMockEnabled();
 
-  // US / NYC: BigQuery `real_estate_us.us_nyc_app_output_final_v4` via `/api/us/nyc-app-output`
+  // US / NYC: BigQuery `real_estate_us.us_nyc_app_output_final_v5` via `/api/us/nyc-app-output`
   // (same entry point as `src/lib/property-value-api.ts`). Legacy `/api/us/property-value` is not used here.
   if (isUS) {
     if (state.trim().toUpperCase() === "NY" && city.trim().toLowerCase() === "long island city") {

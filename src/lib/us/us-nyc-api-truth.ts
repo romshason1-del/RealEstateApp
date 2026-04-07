@@ -1,5 +1,5 @@
 /**
- * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → `us_nyc_app_output_final_v4`).
+ * LEGACY — not used by the current NYC production path (`/api/us/nyc-app-output` → `us_nyc_app_output_final_v5`).
  * Pre-v4 BigQuery stack: `us_nyc_card_output_v5` + `us_nyc_last_transaction_engine_v3` + address master (exact `full_address`).
  * Kept for scripts (`scripts/debug-nyc-property-value.ts`, `nyc-live-e2e-probe.ts`) and shared helpers (e.g. ACRIS unit normalization).
  * Do not wire new app features here.

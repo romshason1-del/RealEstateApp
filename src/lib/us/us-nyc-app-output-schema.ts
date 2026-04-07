@@ -1,5 +1,5 @@
 /**
- * Canonical BigQuery column names for `real_estate_us.us_nyc_app_output_final_v4` (production: `streetiq-bigquery`, location **US**).
+ * Canonical BigQuery column names for `real_estate_us.us_nyc_app_output_final_v5` (production: `streetiq-bigquery`, location **US**).
  * Verified against INFORMATION_SCHEMA — update only this map when the table changes.
  */
 
@@ -7,23 +7,16 @@ import { normalizeNycBuildingTypeKey } from "@/lib/us/us-nyc-precomputed-card";
 
 /**
  * One semantic → one column name (no alternate fallbacks elsewhere).
- * Production columns (ordinal order from INFORMATION_SCHEMA):
- * BBL, lookup_address, property_address, ZIP_CODE, product_asset_type, property_structure_type,
- * requires_apartment_number, building_class, landuse, residential_units, total_units, gross_sqft,
- * year_built, final_display_mode, final_confidence, is_valid_property, final_value_amount,
- * final_value_source, last_transaction_amount, last_transaction_date, last_transaction_source,
- * building_transaction_*, street_transaction_*, market_price_per_sqft, market_price_source,
- * final_specific_price_per_sqft, final_specific_price_per_sqm, final_specific_price_source,
- * building_type, has_exact_transaction, has_building_transaction, has_street_transaction,
- * data_confidence, confidence_explanation, neighborhood_score (FLOAT64), neighborhood_*_score,
- * neighborhood_score_label
+ * v5 adds `match_scope` (EXACT_UNIT | BUILDING), `unit`, `normalized_unit_number` for address+unit matching.
  *
- * There is no dedicated “verified source apartment” column in the current schema; optional unit-level
- * identifiers may be added later — the adapter checks known names at runtime (see us-nyc-app-output-adapter).
+ * {@link NYC_APP_OUTPUT_V4_COL} is a legacy alias for scripts that still import the old name.
  */
-export const NYC_APP_OUTPUT_V4_COL = {
+export const NYC_APP_OUTPUT_V5_COL = {
   lookup_address: "lookup_address",
   property_address: "property_address",
+  match_scope: "match_scope",
+  unit: "unit",
+  normalized_unit_number: "normalized_unit_number",
   final_display_mode: "final_display_mode",
   final_confidence: "final_confidence",
   has_exact_transaction: "has_exact_transaction",
@@ -40,6 +33,9 @@ export const NYC_APP_OUTPUT_V4_COL = {
   building_type: "building_type",
   requires_apartment_number: "requires_apartment_number",
 } as const;
+
+/** @deprecated Use {@link NYC_APP_OUTPUT_V5_COL}. */
+export const NYC_APP_OUTPUT_V4_COL = NYC_APP_OUTPUT_V5_COL;
 
 /** Human-readable building category for NYC card (matches gold-layer display conventions). */
 export function formatNycAppOutputBuildingTypeLabel(raw: string | null | undefined): string {

@@ -24,8 +24,12 @@ export type UsNycTruthCardData = {
   acris_last_sale_price?: number | null;
   acris_last_sale_date?: string | null;
   acris_has_multiple_deeds?: boolean;
-  /** NYC `us_nyc_app_output_final_v4` — server-derived; do not recompute on the client. */
+  /** NYC `us_nyc_app_output_final_v5` — server-derived; do not recompute on the client. */
   nyc_display_hierarchy?: "EXACT" | "BUILDING" | "STREET" | "NONE";
+  /** v5 BigQuery `match_scope` (EXACT_UNIT | BUILDING) when present. */
+  nyc_match_scope?: string | null;
+  /** v5: which last-sale block to show — exact unit vs building-level. */
+  nyc_last_transaction_scope?: "exact_unit" | "building" | null;
   nyc_match_confidence?: "HIGH" | "LOW" | "NONE" | "MEDIUM";
   nyc_has_exact_transaction?: boolean;
   nyc_show_street_reference?: boolean;
@@ -243,6 +247,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const verifiedSourceRaw = data.nyc_verified_source_unit_for_data;
   const hasVerifiedSourceUnitInTable =
     typeof verifiedSourceRaw === "string" && verifiedSourceRaw.trim() !== "";
+  const nycMatchScopeUpper = String(data.nyc_match_scope ?? "").toUpperCase().trim();
   /** After Apply: always show A or B when a unit was submitted (full card path). */
   const showPostApplyUnitScope = hasSubmittedUnit;
 
@@ -308,8 +313,12 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     data.nyc_display_hierarchy !== undefined ||
     data.nyc_match_confidence !== undefined ||
     data.nyc_has_exact_transaction !== undefined;
+  const lastTxScope = (data as { nyc_last_transaction_scope?: string | null }).nyc_last_transaction_scope;
   const showLastTxSection = isV4Style
-    ? data.nyc_has_exact_transaction === true && data.nyc_display_hierarchy !== "NONE"
+    ? data.nyc_display_hierarchy !== "NONE" &&
+      (lastTxScope === "exact_unit" ||
+        lastTxScope === "building" ||
+        (lastTxScope == null && data.nyc_has_exact_transaction === true))
     : true;
 
   const showLegacyAcrisStripe = !isV4Style;
@@ -507,7 +516,29 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           <p>
             <span className="font-semibold text-zinc-500">Unit you entered</span> {(submittedApartment ?? "").trim()}
           </p>
-          {hasVerifiedSourceUnitInTable ? (
+          {nycMatchScopeUpper === "EXACT_UNIT" ? (
+            <>
+              <p className="mt-0.5">
+                <span className="font-semibold text-zinc-500">Data shown from apartment/unit</span>{" "}
+                {String(verifiedSourceRaw ?? submittedApartment ?? "").trim() || "—"}
+              </p>
+              <p className="mt-0.5">
+                <span className="font-semibold text-zinc-500">Matched NYC record</span>{" "}
+                {(data.nyc_matched_record_address ?? "").trim() || "—"}
+              </p>
+            </>
+          ) : nycMatchScopeUpper === "BUILDING" ? (
+            <>
+              <p className="mt-0.5 text-zinc-400">
+                No exact unit row in our NYC table for this address — your unit is for reference only.
+              </p>
+              <p className="mt-0.5">
+                <span className="font-semibold text-zinc-500">Matched NYC record</span>{" "}
+                {(data.nyc_matched_record_address ?? "").trim() || "—"}
+              </p>
+              <p className="mt-0.5 text-zinc-400">Showing building-level data only</p>
+            </>
+          ) : hasVerifiedSourceUnitInTable ? (
             <>
               <p className="mt-0.5">
                 <span className="font-semibold text-zinc-500">Data shown from apartment/unit</span>{" "}

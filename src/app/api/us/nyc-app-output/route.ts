@@ -1,5 +1,5 @@
 /**
- * NYC-only: lookup `streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v4` (location US) by address.
+ * NYC-only: lookup `streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v5` (location US) by address.
  * Source of truth for NYC app card data — see `src/lib/property-value-api.ts` (US → this route).
  * Does not affect France routes or UI.
  */
@@ -9,15 +9,15 @@ import { parseUSAddressFromFullString } from "@/lib/address-parse";
 import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
 import { adaptNycAppOutputRowToPropertyPayload } from "@/lib/us/us-nyc-app-output-adapter";
-import { queryNycAppOutputFinalV4Row } from "@/lib/us/us-nyc-app-output-query";
+import { queryNycAppOutputFinalV5Row } from "@/lib/us/us-nyc-app-output-query";
 import { omitUsNycDebugFromPayload, shouldIncludeUsNycDebugInApiResponse } from "@/lib/us/us-nyc-api-response-debug";
 import type { NycAppOutputQueryDebug } from "@/lib/us/us-nyc-app-output-query";
-import { NYC_APP_OUTPUT_V4_COL as NYC_COL } from "@/lib/us/us-nyc-app-output-schema";
+import { NYC_APP_OUTPUT_V5_COL as NYC_COL } from "@/lib/us/us-nyc-app-output-schema";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function logNycAppOutputV4(
+function logNycAppOutputV5(
   address: string,
   row: Record<string, unknown> | null,
   payload: Record<string, unknown>,
@@ -28,21 +28,23 @@ function logNycAppOutputV4(
     const r = row;
     const rowSnapshot = r ? { ...r } : null;
     console.log(
-      "[NYC_APP_OUTPUT_V4] BQ_ROW_RAW",
+      "[NYC_APP_OUTPUT_V5] BQ_ROW_RAW",
       JSON.stringify({
         address_submitted: address,
         table: debug.table,
         row_found: debug.row_found,
         match_column: debug.match_column,
+        match_tier: debug.match_tier,
         matched_candidate: debug.matched_candidate,
         row: rowSnapshot,
       })
     );
     console.log(
-      "[NYC_APP_OUTPUT_V4] BQ_ROW_KEY_FIELDS",
+      "[NYC_APP_OUTPUT_V5] BQ_ROW_KEY_FIELDS",
       JSON.stringify({
         address_submitted: address,
         row_found: debug.row_found,
+        [NYC_COL.match_scope]: r?.[NYC_COL.match_scope] ?? null,
         [NYC_COL.final_display_mode]: r?.[NYC_COL.final_display_mode] ?? null,
         [NYC_COL.final_confidence]: r?.[NYC_COL.final_confidence] ?? null,
         [NYC_COL.requires_apartment_number]: r?.[NYC_COL.requires_apartment_number] ?? null,
@@ -50,9 +52,9 @@ function logNycAppOutputV4(
         [NYC_COL.final_value_amount]: r?.[NYC_COL.final_value_amount] ?? null,
       })
     );
-    console.log("[NYC_APP_OUTPUT_V4] API_PAYLOAD_FINAL", JSON.stringify({ address_submitted: address, response_status: responseStatus, ...payload }));
+    console.log("[NYC_APP_OUTPUT_V5] API_PAYLOAD_FINAL", JSON.stringify({ address_submitted: address, response_status: responseStatus, ...payload }));
     console.log(
-      "[NYC_APP_OUTPUT_V4] MATCH_SUMMARY",
+      "[NYC_APP_OUTPUT_V5] MATCH_SUMMARY",
       JSON.stringify({
         table: debug.table,
         response_status: responseStatus,
@@ -60,7 +62,9 @@ function logNycAppOutputV4(
         normalized_pipeline_input: debug.normalized_pipeline_input,
         candidates_count: debug.candidates_tried.length,
         norm_keys_tried: debug.norm_keys_tried,
+        unit_norm_keys_tried: debug.unit_norm_keys_tried,
         match_column: debug.match_column,
+        match_tier: debug.match_tier,
         matched_norm_key: debug.matched_norm_key,
         matched_stored_lookup_address: debug.matched_stored_lookup_address,
         matched_stored_property_address: debug.matched_stored_property_address,
@@ -89,7 +93,7 @@ export async function GET(req: NextRequest) {
   try {
     const parsed = parseUSAddressFromFullString(address);
     const client = getUSBigQueryClient();
-    const { row, debug } = await queryNycAppOutputFinalV4Row(client, address, unitOrLot);
+    const { row, debug } = await queryNycAppOutputFinalV5Row(client, address, unitOrLot);
 
     const payload = adaptNycAppOutputRowToPropertyPayload(
       row,
@@ -97,7 +101,7 @@ export async function GET(req: NextRequest) {
       { unitOrLotSubmitted: unitOrLot }
     );
 
-    logNycAppOutputV4(
+    logNycAppOutputV5(
       address,
       row,
       payload,

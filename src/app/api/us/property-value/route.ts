@@ -1,5 +1,5 @@
 /**
- * LEGACY URL ALIAS — forwards to `/api/us/nyc-app-output` (BigQuery `real_estate_us.us_nyc_app_output_final_v4`).
+ * LEGACY URL ALIAS — forwards to `/api/us/nyc-app-output` (BigQuery `real_estate_us.us_nyc_app_output_final_v5`).
  *
  * The retired PLUTO prefetch + precomputed card v5 + `us-nyc-api-truth` HTTP pipeline is not implemented here.
  * Production NYC: `src/lib/property-value-api.ts` and `/api/property-value` (US) → `/api/us/nyc-app-output`.

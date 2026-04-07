@@ -28,8 +28,12 @@ import {
  */
 function isNycBuildingLevelOnlyPayload(p: Record<string, unknown> | null | undefined): boolean {
   if (!p || typeof p !== "object") return false;
-  if ((p as { data_source?: string }).data_source !== "us_nyc_app_output_v4") return false;
+  const ds = (p as { data_source?: string }).data_source;
+  if (ds !== "us_nyc_app_output_v4" && ds !== "us_nyc_app_output_v5") return false;
   if ((p as { success?: boolean }).success !== true) return false;
+  const ms = String((p as { nyc_match_scope?: string | null }).nyc_match_scope ?? "").toUpperCase().trim();
+  if (ms === "BUILDING") return true;
+  if (ds === "us_nyc_app_output_v5") return false;
   const verified = (p as { nyc_verified_source_unit_for_data?: string | null }).nyc_verified_source_unit_for_data;
   if (typeof verified === "string" && verified.trim() !== "") return false;
   const mode = String((p as { nyc_final_display_mode?: string }).nyc_final_display_mode ?? "").toUpperCase().trim();
@@ -83,7 +87,7 @@ function formatCurrency(value: number, symbol: string): string {
 }
 
 function isUsNycDataSource(ds: string | undefined): boolean {
-  return ds === "us_nyc_truth" || ds === "us_nyc_app_output_v4";
+  return ds === "us_nyc_truth" || ds === "us_nyc_app_output_v4" || ds === "us_nyc_app_output_v5";
 }
 
 /** Universal first-card label and support text by value level */
@@ -1091,15 +1095,17 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     ? (usNycDisplayStatusResolved ?? (insightsData as { status?: string } | null | undefined)?.status)
     : (insightsData as { status?: string } | null | undefined)?.status;
 
-  const isUsNycV4DataSource =
+  const isUsNycAppOutputDataSource =
     isUS &&
     activeInsightsData &&
     typeof activeInsightsData === "object" &&
-    (activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v4";
+    ((activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v4" ||
+      (activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v5");
 
   React.useEffect(() => {
     if (!isDev || !isUS || !activeInsightsData || typeof activeInsightsData !== "object") return;
-    if ((activeInsightsData as { data_source?: string }).data_source !== "us_nyc_app_output_v4") return;
+    const ds = (activeInsightsData as { data_source?: string }).data_source;
+    if (ds !== "us_nyc_app_output_v4" && ds !== "us_nyc_app_output_v5") return;
     const d = activeInsightsData as {
       status?: string;
       nyc_display_hierarchy?: string;
@@ -1129,7 +1135,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       requires_apartment_number: d.requires_apartment_number,
       entersParentNoDataBranch: entersParentNoRecord,
       rendersMinimalRequiresUnitBlock:
-        !isUsNycV4DataSource && apiStatus === "requires_unit" && hasOfficialProvider,
+        !isUsNycAppOutputDataSource && apiStatus === "requires_unit" && hasOfficialProvider,
       rendersUsNycTruthCardBranch: rendersUsNycTruthCard,
       rendersApartmentSheet:
         (usNycApartmentFlowEnabled || isUsRequiresUnit) && !isUsCommercial && nycUnitSubmitted == null,
@@ -1145,7 +1151,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     ukLandRegistry,
     isUsRequiresUnit,
     isUsCommercial,
-    isUsNycV4DataSource,
+    isUsNycAppOutputDataSource,
     hasOfficialProvider,
     nycUnitSubmitted,
     usNycApartmentFlowEnabled,
@@ -1237,7 +1243,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
           ) : isUS &&
             apiStatus === "requires_unit" &&
             hasOfficialProvider &&
-            !isUsNycV4DataSource ? (
+            !isUsNycAppOutputDataSource ? (
             <div className="space-y-2 rounded-lg border border-amber-500/15 bg-zinc-950/85 p-2.5 shadow-inner shadow-black/30">
               <p>Please enter a unit number</p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">

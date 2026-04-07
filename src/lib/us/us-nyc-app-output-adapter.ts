@@ -1,13 +1,13 @@
 /**
- * Maps a BigQuery row from `us_nyc_app_output_final_v4` into the main property-value payload shape.
- * Uses only {@link NYC_APP_OUTPUT_V4_COL}. Presentation rules live here — not on the client.
+ * Maps a BigQuery row from `us_nyc_app_output_final_v5` into the main property-value payload shape.
+ * Uses only {@link NYC_APP_OUTPUT_V5_COL}. Presentation rules live here — not on the client.
  * US only.
  */
 
 import { coerceBigQueryDateToYyyyMmDd } from "@/lib/us/us-bq-date";
 import {
   formatNycAppOutputBuildingTypeLabel,
-  NYC_APP_OUTPUT_V4_COL as C,
+  NYC_APP_OUTPUT_V5_COL as C,
 } from "@/lib/us/us-nyc-app-output-schema";
 
 function num(row: Record<string, unknown>, key: string): number | null {
@@ -101,10 +101,12 @@ function neighborhoodScoreDisplay(row: Record<string, unknown>): string | null {
 }
 
 /**
- * Optional BigQuery columns — not in {@link NYC_APP_OUTPUT_V4_COL} until INFORMATION_SCHEMA lists them.
+ * Optional BigQuery columns — fallback if `unit` / `normalized_unit_number` are empty.
  * If present and non-empty, the UI may show "Data shown from apartment/unit: …".
  */
 const NYC_ROW_OPTIONAL_VERIFIED_SOURCE_UNIT_KEYS = [
+  C.normalized_unit_number,
+  C.unit,
   "source_unit",
   "unit_number",
   "apartment_number",
@@ -142,7 +144,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
   if (!row) {
     return {
       success: true,
-      data_source: "us_nyc_app_output_v4",
+      data_source: "us_nyc_app_output_v5",
       nyc_bq_row_matched: false,
       message: "No Data Available",
       status: null,
@@ -176,12 +178,15 @@ export function adaptNycAppOutputRowToPropertyPayload(
       unit_lookup_status: "not_requested" as const,
       unit_or_lot_submitted: unitSub,
       nyc_verified_source_unit_for_data: null,
+      nyc_match_scope: null,
+      nyc_last_transaction_scope: null,
     };
   }
 
   const displayModeRaw = str(row, C.final_display_mode) ?? "";
-  const hierarchyRaw = mapFinalDisplayModeToHierarchy(displayModeRaw);
-  const confidenceRaw = mapFinalConfidence(str(row, C.final_confidence) ?? "");
+  const matchScopeRaw = str(row, C.match_scope)?.toUpperCase().trim() ?? "";
+  const isExactUnitScope = matchScopeRaw === "EXACT_UNIT";
+  const isBuildingScope = matchScopeRaw === "BUILDING";
 
   const isBlockedCommercial = displayModeRaw.toUpperCase().trim() === "BLOCKED_NON_RESIDENTIAL";
   const isNoDataMode = displayModeRaw.toUpperCase().trim() === "NO_DATA";
@@ -192,8 +197,20 @@ export function adaptNycAppOutputRowToPropertyPayload(
    */
   const isNone = isNoDataMode || isBlockedCommercial;
 
+  const hierarchyFromMode = mapFinalDisplayModeToHierarchy(displayModeRaw);
+  const hierarchyRaw: NycDisplayHierarchy = isNone
+    ? "NONE"
+    : isExactUnitScope
+      ? "EXACT"
+      : isBuildingScope
+        ? "BUILDING"
+        : hierarchyFromMode;
+
+  const confidenceRaw = mapFinalConfidence(str(row, C.final_confidence) ?? "");
+
   const hasExactRaw = bool(row, C.has_exact_transaction);
-  const nyc_has_exact_transaction = !isNone && hasExactRaw;
+  /** v5: true only for EXACT_UNIT rows with a flagged unit-level sale; legacy rows without `match_scope` use `has_exact_transaction`. */
+  const nyc_has_exact_transaction = !isNone && (matchScopeRaw ? isExactUnitScope && hasExactRaw : hasExactRaw);
 
   const ev = num(row, C.final_value_amount);
   const lastPrice = num(row, C.last_transaction_amount);
@@ -207,7 +224,27 @@ export function adaptNycAppOutputRowToPropertyPayload(
   const neigh = neighborhoodScoreDisplay(row);
   const bldgRaw = str(row, C.building_type);
   const bldgDisplay = formatNycAppOutputBuildingTypeLabel(bldgRaw);
-  const nycVerifiedSourceUnitForData = firstNonEmptyStrFromRow(row, NYC_ROW_OPTIONAL_VERIFIED_SOURCE_UNIT_KEYS);
+
+  const nycVerifiedSourceUnitForData =
+    isNone || isBuildingScope ? null : firstNonEmptyStrFromRow(row, NYC_ROW_OPTIONAL_VERIFIED_SOURCE_UNIT_KEYS);
+
+  /** Official last sale block: unit-level (EXACT_UNIT) or building-level (BUILDING); legacy rows follow `has_exact_transaction`. */
+  const hasOfficialLastSale =
+    !isNone &&
+    lastPrice != null &&
+    lastPrice > 0 &&
+    (matchScopeRaw ? isExactUnitScope || isBuildingScope : hasExactRaw);
+  const nyc_last_transaction_scope: "exact_unit" | "building" | null = !isNone
+    ? matchScopeRaw
+      ? isExactUnitScope && lastPrice != null && lastPrice > 0
+        ? "exact_unit"
+        : isBuildingScope && lastPrice != null && lastPrice > 0
+          ? "building"
+          : null
+      : lastPrice != null && lastPrice > 0 && hasExactRaw
+        ? "exact_unit"
+        : null
+    : null;
 
   const showStreetRef =
     !isNone &&
@@ -215,15 +252,21 @@ export function adaptNycAppOutputRowToPropertyPayload(
     ((streetRefPrice != null && streetRefPrice > 0) || streetRefDate != null || (streetRefAddr?.length ?? 0) > 0);
 
   const displayModeUpper = displayModeRaw.toUpperCase().trim();
+  const unitSubmitted = !!unitSub?.trim();
   const shouldPrompt =
     !isNone &&
+    !unitSubmitted &&
     (bool(row, C.requires_apartment_number) || displayModeUpper === "ASK_APARTMENT");
+
+  const showLastSaleFields = hasOfficialLastSale;
 
   const out: Record<string, unknown> = {
     success: true,
-    data_source: "us_nyc_app_output_v4",
+    data_source: "us_nyc_app_output_v5",
     nyc_bq_row_matched: true,
     nyc_final_display_mode: displayModeRaw.trim() ? displayModeRaw : null,
+    nyc_match_scope: !isNone && matchScopeRaw ? matchScopeRaw : null,
+    nyc_last_transaction_scope,
     message: isNone ? "No Data Available" : null,
     nyc_display_hierarchy: isNone ? "NONE" : hierarchyRaw,
     nyc_match_confidence: isNone ? "NONE" : confidenceRaw,
@@ -241,8 +284,8 @@ export function adaptNycAppOutputRowToPropertyPayload(
     nyc_building_type_display: isNone ? null : bldgDisplay,
     address,
     estimated_value: isNone ? null : ev,
-    latest_sale_price: isNone || !nyc_has_exact_transaction ? null : lastPrice,
-    latest_sale_date: isNone || !nyc_has_exact_transaction ? null : lastDate,
+    latest_sale_price: isNone || !showLastSaleFields ? null : lastPrice,
+    latest_sale_date: isNone || !showLastSaleFields ? null : lastDate,
     latest_sale_total_units: num(row, C.total_units),
     price_per_sqft: isNone ? null : ppsf,
     property_result: {
@@ -250,10 +293,10 @@ export function adaptNycAppOutputRowToPropertyPayload(
       exact_value_message: isNone ? null : ev != null && ev > 0 ? null : "Unavailable",
       value_level: hierarchyToValueLevel(isNone ? "NONE" : hierarchyRaw),
       last_transaction: {
-        amount: isNone || !nyc_has_exact_transaction ? 0 : (lastPrice ?? 0),
-        date: isNone || !nyc_has_exact_transaction ? null : lastDate,
+        amount: isNone || !showLastSaleFields ? 0 : (lastPrice ?? 0),
+        date: isNone || !showLastSaleFields ? null : lastDate,
         message:
-          isNone || !nyc_has_exact_transaction
+          isNone || !showLastSaleFields
             ? null
             : lastPrice != null && lastPrice > 0
               ? undefined
@@ -271,7 +314,7 @@ export function adaptNycAppOutputRowToPropertyPayload(
     nyc_verified_source_unit_for_data: nycVerifiedSourceUnitForData,
   };
 
-  if (nyc_has_exact_transaction && lastPrice != null && lastPrice > 0 && lastDate) {
+  if (showLastSaleFields && lastPrice != null && lastPrice > 0 && lastDate) {
     out.last_sale = { price: lastPrice, date: lastDate };
   }
 
