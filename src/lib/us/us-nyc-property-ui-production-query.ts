@@ -1,9 +1,11 @@
 /**
  * Single-row lookup for `us_nyc_property_ui_production_v10` by normalized `lookup_address`
- * and optional unit (`normalized_unit_number` / `unit`, `match_scope` EXACT_UNIT vs BUILDING).
- * US only — not used for France.
+ * and optional `normalized_unit_number` (user `unit_or_lot`).
  *
- * Uses `lookup_address` only (indexed); no `property_address` fallback on this table.
+ * Uses BigQuery columns: `lookup_address`, `normalized_unit_number`, `final_match_scope` only
+ * (no `match_scope`, no `unit` column on this table).
+ *
+ * US only — not used for France.
  */
 
 import type { BigQuery } from "@google-cloud/bigquery";
@@ -54,11 +56,13 @@ function sqlExactNormColumn(col: string): string {
   return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(\`${col}\`, ''), r'\\s+', ' ')))`;
 }
 
+/** Normalized unit key from `normalized_unit_number` only (no `unit` column in v10). */
 function sqlNormUnitExpr(): string {
-  return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(CAST(t.normalized_unit_number AS STRING), CAST(t.unit AS STRING), ''), r'\\s+', ' ')))`;
+  return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(CAST(t.normalized_unit_number AS STRING), ''), r'\\s+', ' ')))`;
 }
 
-function buildExactUnitMatchQuery(table: string, column: string): string {
+/** Address + non-empty unit on row (EXACT_UNIT_*, etc.). */
+function buildLookupWithUnitMatchQuery(table: string, column: string): string {
   const normAddrExpr = sqlExactNormColumn(column);
   return `
     SELECT * EXCEPT(cand_ord, unit_ord)
@@ -69,14 +73,18 @@ function buildExactUnitMatchQuery(table: string, column: string): string {
       CROSS JOIN UNNEST(@unit_norms) AS unit_norm WITH OFFSET unit_ord
       WHERE ${normAddrExpr} = norm
         AND ${sqlNormUnitExpr()} = unit_norm
-        AND UPPER(TRIM(COALESCE(t.match_scope, ''))) = 'EXACT_UNIT'
+        AND t.normalized_unit_number IS NOT NULL
+        AND TRIM(CAST(t.normalized_unit_number AS STRING)) != ''
       ORDER BY cand_ord ASC, unit_ord ASC
       LIMIT 1
     ) sub
   `;
 }
 
-function buildBuildingScopeMatchQuery(table: string, column: string): string {
+/**
+ * Building / house / aggregate rows: empty `normalized_unit_number` and allowed `final_match_scope`.
+ */
+function buildBuildingOrHouseMatchQuery(table: string, column: string): string {
   const normAddrExpr = sqlExactNormColumn(column);
   return `
     SELECT * EXCEPT(cand_ord)
@@ -85,7 +93,12 @@ function buildBuildingScopeMatchQuery(table: string, column: string): string {
       FROM \`${table}\` t
       CROSS JOIN UNNEST(@norms) AS norm WITH OFFSET cand_ord
       WHERE ${normAddrExpr} = norm
-        AND UPPER(TRIM(COALESCE(t.match_scope, ''))) = 'BUILDING'
+        AND (t.normalized_unit_number IS NULL OR TRIM(CAST(t.normalized_unit_number AS STRING)) = '')
+        AND UPPER(TRIM(COALESCE(t.final_match_scope, ''))) IN (
+          'BUILDING',
+          'BUILDING_RECENT_SALES',
+          'EXACT_HOUSE'
+        )
       ORDER BY cand_ord ASC
       LIMIT 1
     ) sub
@@ -114,7 +127,7 @@ export async function queryNycPropertyUiProductionV10Row(
     JSON.stringify({
       ...resolution,
       sql_from_clause_target: `\`${table}\``,
-      query_batch: "lookup_only_exact_unit_then_building",
+      query_batch: "lookup_unit_then_building_house",
     })
   );
 
@@ -150,8 +163,8 @@ export async function queryNycPropertyUiProductionV10Row(
     return { row: null, debug };
   }
 
-  const queryExactLookup = buildExactUnitMatchQuery(table, LOOKUP_COL);
-  const queryBuildingLookup = buildBuildingScopeMatchQuery(table, LOOKUP_COL);
+  const queryWithUnit = buildLookupWithUnitMatchQuery(table, LOOKUP_COL);
+  const queryBuilding = buildBuildingOrHouseMatchQuery(table, LOOKUP_COL);
 
   const applyMatch = (
     row: Record<string, unknown> | undefined,
@@ -173,21 +186,21 @@ export async function queryNycPropertyUiProductionV10Row(
   };
 
   if (unitNormKeys.length > 0) {
-    const [lookupExactRows] = await client.query({
-      query: queryExactLookup,
+    const [withUnitRows] = await client.query({
+      query: queryWithUnit,
       params: { norms: normKeys, unit_norms: unitNormKeys },
       location: "US",
     });
-    const hit = applyMatch(lookupExactRows[0] as Record<string, unknown> | undefined, "exact_unit");
+    const hit = applyMatch(withUnitRows[0] as Record<string, unknown> | undefined, "exact_unit");
     if (hit) return { row: hit.row, debug: hit.debug };
   }
 
-  const [lookupBldRows] = await client.query({
-    query: queryBuildingLookup,
+  const [buildingRows] = await client.query({
+    query: queryBuilding,
     params: { norms: normKeys },
     location: "US",
   });
-  const hitB = applyMatch(lookupBldRows[0] as Record<string, unknown> | undefined, "building");
+  const hitB = applyMatch(buildingRows[0] as Record<string, unknown> | undefined, "building");
   if (hitB) return { row: hitB.row, debug: hitB.debug };
 
   return { row: null, debug };

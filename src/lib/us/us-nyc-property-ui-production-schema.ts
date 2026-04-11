@@ -1,16 +1,65 @@
 /**
  * BigQuery column names for `real_estate_us.us_nyc_property_ui_production_v10` (streetiq-bigquery, US).
- * Pass-through only — do not rename in the API layer.
- *
- * `match_scope` is used for address+unit SQL matching (same semantics as prior NYC gold tables).
+ * Aligned to INFORMATION_SCHEMA — pass-through keys only, no renames.
  */
 
+/** Every column on the production table (for 1:1 API passthrough). */
+export const NYC_PROPERTY_UI_PRODUCTION_V10_BQ_COLUMNS = [
+  "lookup_address",
+  "bbl",
+  "normalized_unit_number",
+  "final_match_scope",
+  "property_bucket",
+  "property_type_display",
+  "confidence_label",
+  "estimated_value_v8",
+  "value_is_estimate_v4",
+  "last_transaction_amount",
+  "last_transaction_date",
+  "since_last_sale_pct_display",
+  "size_sqft_final",
+  "size_is_estimate",
+  "primary_cta_label",
+  "value_source",
+  "comps_or_fallback_value",
+  "estimated_value_low",
+  "estimated_value_high",
+  "comps_or_fallback_value_is_estimate",
+  "trend_pct",
+  "value_source_v2",
+  "final_display_value",
+  "final_value_is_estimate",
+  "final_value_explanation",
+  "ui_card_type",
+  "below_or_above_market_pct",
+  "below_or_above_market_label",
+  "explanation_display",
+  "nearby_sales_count",
+  "display_estimated_value",
+  "display_estimated_value_low",
+  "display_estimated_value_high",
+  "value_display_type",
+  "display_value_is_estimate",
+  "value_explanation",
+  "potential_deal_display",
+  "fallback_message",
+  "market_component",
+  "evidence_component",
+  "confidence_component",
+  "last_sale_component",
+  "deal_score_numeric_v2",
+  "market_component_v2",
+  "evidence_component_v2",
+  "confidence_component_v2",
+  "last_sale_component_v2",
+  "deal_score_numeric_v3",
+  "deal_score_numeric",
+] as const;
+
+/** Semantic aliases → exact BigQuery names (for typed access in adapter). */
 export const NYC_PROPERTY_UI_PRODUCTION_V10_COL = {
   lookup_address: "lookup_address",
-  /** Row grain for SQL matching (EXACT_UNIT | BUILDING); required for lookup. */
-  match_scope: "match_scope",
-  /** Unit identifiers for SQL + verified-source display. */
-  unit: "unit",
+  final_match_scope: "final_match_scope",
   normalized_unit_number: "normalized_unit_number",
   property_type_display: "property_type_display",
   size_sqft_final: "size_sqft_final",
@@ -33,5 +82,4 @@ export const NYC_PROPERTY_UI_PRODUCTION_V10_COL = {
   ui_card_type: "ui_card_type",
   fallback_message: "fallback_message",
   primary_cta_label: "primary_cta_label",
-  requires_apartment_number: "requires_apartment_number",
 } as const;

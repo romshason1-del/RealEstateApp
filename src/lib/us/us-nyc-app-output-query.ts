@@ -1,13 +1,13 @@
 /**
- * Lookup rows in `us_nyc_app_output_final_v5` (see {@link getNycAppOutputTableReference}) by normalized address
- * and optional unit. US only — not used for France.
+ * Lookup rows in {@link getNycAppOutputTableReference} (default `us_nyc_property_ui_production_v10`) by normalized
+ * address and optional unit. US only — not used for France.
  *
  * Match order (exact normalized equality only; no fuzzy search):
  * When `unit_or_lot` is provided:
- *   1) `lookup_address` + unit vs `normalized_unit_number`/`unit` + `match_scope = EXACT_UNIT`
- *   2) `lookup_address` + `match_scope = BUILDING` (building row for address)
+ *   1) `lookup_address` + unit vs non-empty `normalized_unit_number`
+ *   2) `lookup_address` + empty `normalized_unit_number` + `final_match_scope` in BUILDING / BUILDING_RECENT_SALES / EXACT_HOUSE
  * When no unit:
- *   1) `lookup_address` + BUILDING
+ *   1) same building/house branch
  */
 
 import type { BigQuery } from "@google-cloud/bigquery";
@@ -27,7 +27,7 @@ function normalizeAddrForMatch(s: string): string {
   return collapseSpaces(s).toUpperCase();
 }
 
-/** Aligns with SQL `normalize` on `normalized_unit_number` / `unit`. */
+/** Aligns with SQL normalize on `normalized_unit_number` (v10 has no `unit` column). */
 function normalizeNycUnitForMatch(unitRaw: string): string {
   return normalizeAddrForMatch(unitRaw);
 }
@@ -86,7 +86,7 @@ function sqlExactNormColumn(col: string): string {
 }
 
 function sqlNormUnitExpr(): string {
-  return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(CAST(t.normalized_unit_number AS STRING), CAST(t.unit AS STRING), ''), r'\\s+', ' ')))`;
+  return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(CAST(t.normalized_unit_number AS STRING), ''), r'\\s+', ' ')))`;
 }
 
 /**
@@ -113,7 +113,8 @@ function buildExactUnitMatchQuery(table: string, column: string): string {
       CROSS JOIN UNNEST(@unit_norms) AS unit_norm WITH OFFSET unit_ord
       WHERE ${normAddrExpr} = norm
         AND ${sqlNormUnitExpr()} = unit_norm
-        AND UPPER(TRIM(COALESCE(t.match_scope, ''))) = 'EXACT_UNIT'
+        AND t.normalized_unit_number IS NOT NULL
+        AND TRIM(CAST(t.normalized_unit_number AS STRING)) != ''
       ORDER BY cand_ord ASC, unit_ord ASC
       LIMIT 1
     ) sub
@@ -129,7 +130,12 @@ function buildBuildingScopeMatchQuery(table: string, column: string): string {
       FROM \`${table}\` t
       CROSS JOIN UNNEST(@norms) AS norm WITH OFFSET cand_ord
       WHERE ${normAddrExpr} = norm
-        AND UPPER(TRIM(COALESCE(t.match_scope, ''))) = 'BUILDING'
+        AND (t.normalized_unit_number IS NULL OR TRIM(CAST(t.normalized_unit_number AS STRING)) = '')
+        AND UPPER(TRIM(COALESCE(t.final_match_scope, ''))) IN (
+          'BUILDING',
+          'BUILDING_RECENT_SALES',
+          'EXACT_HOUSE'
+        )
       ORDER BY cand_ord ASC
       LIMIT 1
     ) sub

@@ -4,7 +4,10 @@
  */
 
 import { coerceBigQueryDateToYyyyMmDd } from "@/lib/us/us-bq-date";
-import { NYC_PROPERTY_UI_PRODUCTION_V10_COL as P } from "@/lib/us/us-nyc-property-ui-production-schema";
+import {
+  NYC_PROPERTY_UI_PRODUCTION_V10_BQ_COLUMNS,
+  NYC_PROPERTY_UI_PRODUCTION_V10_COL as P,
+} from "@/lib/us/us-nyc-property-ui-production-schema";
 
 function num(row: Record<string, unknown>, key: string): number | null {
   const v = row[key];
@@ -65,6 +68,55 @@ function normalizeUiCardType(raw: string | null): string {
     .replace(/\s+/g, "_");
 }
 
+/** BQ `value_display_type` may be `RANGE`, `Estimated Market Range`, etc. */
+function isRangeValueDisplayType(raw: string | null): boolean {
+  const s = String(raw ?? "").toUpperCase().trim();
+  return s === "RANGE" || s.includes("RANGE");
+}
+
+function finalMatchScopeUpper(row: Record<string, unknown>): string {
+  return str(row, P.final_match_scope)?.toUpperCase().trim() ?? "";
+}
+
+/** Unit-level row (any EXACT_UNIT* grain). */
+function isExactUnitFinalScope(scopeUpper: string): boolean {
+  return scopeUpper.startsWith("EXACT_UNIT");
+}
+
+function isBuildingGrainFinalScope(scopeUpper: string): boolean {
+  return (
+    scopeUpper === "BUILDING" ||
+    scopeUpper === "BUILDING_RECENT_SALES" ||
+    scopeUpper === "EXACT_HOUSE"
+  );
+}
+
+/**
+ * Legacy `nyc_match_scope` bucket for existing clients — derived only from `final_match_scope`.
+ */
+function legacyNycMatchScopeFromFinal(scopeUpper: string): string | null {
+  if (!scopeUpper) return null;
+  if (isExactUnitFinalScope(scopeUpper)) return "EXACT_UNIT";
+  if (isBuildingGrainFinalScope(scopeUpper)) return "BUILDING";
+  return scopeUpper;
+}
+
+function productionPassthroughAll(row: Record<string, unknown>): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const col of NYC_PROPERTY_UI_PRODUCTION_V10_BQ_COLUMNS) {
+    o[col] = passthrough(row, col);
+  }
+  return o;
+}
+
+function nullProductionAll(): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const col of NYC_PROPERTY_UI_PRODUCTION_V10_BQ_COLUMNS) {
+    o[col] = null;
+  }
+  return o;
+}
+
 /**
  * @param row — BigQuery row or null when no match
  */
@@ -120,43 +172,23 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
     },
  };
 
-  const nullProduction: Record<string, unknown> = {
-    [P.lookup_address]: null,
-    [P.property_type_display]: null,
-    [P.size_sqft_final]: null,
-    [P.display_estimated_value]: null,
-    [P.display_estimated_value_low]: null,
-    [P.display_estimated_value_high]: null,
-    [P.value_display_type]: null,
-    [P.value_explanation]: null,
-    [P.display_value_is_estimate]: null,
-    [P.last_transaction_amount]: null,
-    [P.last_transaction_date]: null,
-    [P.since_last_sale_pct_display]: null,
-    [P.deal_score_numeric]: null,
-    [P.below_or_above_market_pct]: null,
-    [P.below_or_above_market_label]: null,
-    [P.nearby_sales_count]: null,
-    [P.confidence_label]: null,
-    [P.explanation_display]: null,
-    [P.potential_deal_display]: null,
-    [P.ui_card_type]: null,
-    [P.fallback_message]: null,
-    [P.primary_cta_label]: null,
-  };
+  const nullProduction = nullProductionAll();
 
   if (!row) {
     return { ...emptyCore, ...nullProduction };
   }
 
-  const matchScopeRaw = str(row, P.match_scope)?.toUpperCase().trim() ?? "";
-  const isExactUnitScope = matchScopeRaw === "EXACT_UNIT";
-  const isBuildingScope = matchScopeRaw === "BUILDING";
+  const finalScopeUpper = finalMatchScopeUpper(row);
+  const isExactUnitScope = isExactUnitFinalScope(finalScopeUpper);
+  const isBuildingScope = isBuildingGrainFinalScope(finalScopeUpper);
+  const legacyMatchScope = legacyNycMatchScopeFromFinal(finalScopeUpper);
   const unitSubmitted = !!unitSub?.trim();
   const shouldPrompt =
-    !unitSubmitted && bool(row, P.requires_apartment_number);
+    !unitSubmitted &&
+    "requires_apartment_number" in row &&
+    bool(row, "requires_apartment_number");
 
-  const valueType = str(row, P.value_display_type)?.toUpperCase().trim() ?? "";
+  const valueTypeRaw = str(row, P.value_display_type);
   const pointVal = num(row, P.display_estimated_value);
   const lastAmt = num(row, P.last_transaction_amount);
   const lastDateRaw = row[P.last_transaction_date];
@@ -171,36 +203,13 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
         ? "building"
         : "exact_unit";
 
-  const estimatedValueBridge = valueType === "RANGE" ? null : pointVal ?? null;
+  const estimatedValueBridge = isRangeValueDisplayType(valueTypeRaw) ? null : pointVal ?? null;
 
   const confidenceLabel = str(row, P.confidence_label);
   const uiCardNorm = normalizeUiCardType(str(row, P.ui_card_type));
   const isNonResidential = uiCardNorm === "NON_RESIDENTIAL_BLOCKED";
 
-  const productionFlat: Record<string, unknown> = {
-    [P.lookup_address]: passthrough(row, P.lookup_address),
-    [P.property_type_display]: passthrough(row, P.property_type_display),
-    [P.size_sqft_final]: passthrough(row, P.size_sqft_final),
-    [P.display_estimated_value]: passthrough(row, P.display_estimated_value),
-    [P.display_estimated_value_low]: passthrough(row, P.display_estimated_value_low),
-    [P.display_estimated_value_high]: passthrough(row, P.display_estimated_value_high),
-    [P.value_display_type]: passthrough(row, P.value_display_type),
-    [P.value_explanation]: passthrough(row, P.value_explanation),
-    [P.display_value_is_estimate]: passthrough(row, P.display_value_is_estimate),
-    [P.last_transaction_amount]: passthrough(row, P.last_transaction_amount),
-    [P.last_transaction_date]: passthrough(row, P.last_transaction_date),
-    [P.since_last_sale_pct_display]: passthrough(row, P.since_last_sale_pct_display),
-    [P.deal_score_numeric]: passthrough(row, P.deal_score_numeric),
-    [P.below_or_above_market_pct]: passthrough(row, P.below_or_above_market_pct),
-    [P.below_or_above_market_label]: passthrough(row, P.below_or_above_market_label),
-    [P.nearby_sales_count]: passthrough(row, P.nearby_sales_count),
-    [P.confidence_label]: passthrough(row, P.confidence_label),
-    [P.explanation_display]: passthrough(row, P.explanation_display),
-    [P.potential_deal_display]: passthrough(row, P.potential_deal_display),
-    [P.ui_card_type]: passthrough(row, P.ui_card_type),
-    [P.fallback_message]: passthrough(row, P.fallback_message),
-    [P.primary_cta_label]: passthrough(row, P.primary_cta_label),
-  };
+  const productionFlat = productionPassthroughAll(row);
 
   const out: Record<string, unknown> = {
     ...productionFlat,
@@ -213,12 +222,10 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
     status: isNonResidential ? "non_residential_blocked" : shouldPrompt ? "requires_unit" : null,
     address,
     nyc_final_display_mode: shouldPrompt ? "ASK_APARTMENT" : null,
-    nyc_match_scope: matchScopeRaw || null,
+    nyc_match_scope: legacyMatchScope,
     nyc_last_transaction_scope,
     nyc_verified_source_unit_for_data:
-      isNonResidential || isBuildingScope
-        ? null
-        : str(row, P.normalized_unit_number) ?? str(row, P.unit),
+      isNonResidential || isBuildingScope ? null : str(row, P.normalized_unit_number),
     nyc_display_hierarchy: isNonResidential ? "NONE" : isBuildingScope ? "BUILDING" : "EXACT",
     nyc_match_confidence: isNonResidential ? "NONE" : mapConfidenceLabel(confidenceLabel),
     nyc_has_exact_transaction: !isNonResidential && hasLastSale,
