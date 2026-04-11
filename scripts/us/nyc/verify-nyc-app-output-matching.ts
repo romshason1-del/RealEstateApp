@@ -1,5 +1,5 @@
 /**
- * One-off NYC v5 address matching verification (US BigQuery).
+ * One-off NYC production UI v10 address matching verification (US BigQuery).
  * Usage: npx tsx scripts/us/nyc/verify-nyc-app-output-matching.ts
  */
 
@@ -7,8 +7,8 @@ import { getUSBigQueryClient } from "../../../src/lib/us/bigquery-client";
 import { isUSBigQueryConfigured } from "../../../src/lib/us/us-bigquery";
 import {
   buildNycAppOutputLookupPipelineInput,
-  queryNycAppOutputFinalV5Row,
 } from "../../../src/lib/us/us-nyc-app-output-query";
+import { queryNycPropertyUiProductionV10Row } from "../../../src/lib/us/us-nyc-property-ui-production-query";
 import { buildNycTruthLookupNormalizationDebug } from "../../../src/lib/us/us-nyc-address-normalize";
 
 const ADDRESSES = [
@@ -33,7 +33,7 @@ async function main() {
     const lineIn = buildNycAppOutputLookupPipelineInput(typed.trim());
     const norm = buildNycTruthLookupNormalizationDebug(lineIn);
     const lineInDisplay = norm?.normalized_full_address ?? lineIn;
-    const { row, debug } = await queryNycAppOutputFinalV5Row(client, typed.trim(), null);
+    const { row, debug } = await queryNycPropertyUiProductionV10Row(client, typed.trim(), null);
     const la = row && typeof row === "object" ? String((row as { lookup_address?: unknown }).lookup_address ?? "") : "";
     const pa = row && typeof row === "object" ? String((row as { property_address?: unknown }).property_address ?? "") : "";
     console.log(

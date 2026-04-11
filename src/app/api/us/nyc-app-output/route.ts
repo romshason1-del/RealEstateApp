@@ -1,5 +1,5 @@
 /**
- * NYC-only: lookup `streetiq-bigquery.real_estate_us.us_nyc_app_output_final_v5` (location US) by address.
+ * NYC-only: lookup `streetiq-bigquery.real_estate_us.us_nyc_property_ui_production_v10` (location US) by address.
  * Source of truth for NYC app card data — see `src/lib/property-value-api.ts` (US → this route).
  * Does not affect France routes or UI.
  */
@@ -8,16 +8,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseUSAddressFromFullString } from "@/lib/address-parse";
 import { getUSBigQueryClient } from "@/lib/us/bigquery-client";
 import { isUSBigQueryConfigured } from "@/lib/us/us-bigquery";
-import { adaptNycAppOutputRowToPropertyPayload } from "@/lib/us/us-nyc-app-output-adapter";
-import { queryNycAppOutputFinalV5Row } from "@/lib/us/us-nyc-app-output-query";
+import { adaptNycPropertyUiProductionRowToPropertyPayload } from "@/lib/us/us-nyc-property-ui-production-adapter";
+import { queryNycPropertyUiProductionV10Row } from "@/lib/us/us-nyc-property-ui-production-query";
 import { omitUsNycDebugFromPayload, shouldIncludeUsNycDebugInApiResponse } from "@/lib/us/us-nyc-api-response-debug";
-import type { NycAppOutputQueryDebug } from "@/lib/us/us-nyc-app-output-query";
-import { NYC_APP_OUTPUT_V5_COL as NYC_COL } from "@/lib/us/us-nyc-app-output-schema";
+import type { NycAppOutputQueryDebug } from "@/lib/us/us-nyc-property-ui-production-query";
+import { NYC_PROPERTY_UI_PRODUCTION_V10_COL as NYC_COL } from "@/lib/us/us-nyc-property-ui-production-schema";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function logNycAppOutputV5(
+function normalizeUiCardType(raw: unknown): string {
+  return String(raw ?? "")
+    .toUpperCase()
+    .trim()
+    .replace(/\s+/g, "_");
+}
+
+function logNycPropertyUiV10(
   address: string,
   row: Record<string, unknown> | null,
   payload: Record<string, unknown>,
@@ -28,7 +35,7 @@ function logNycAppOutputV5(
     const r = row;
     const rowSnapshot = r ? { ...r } : null;
     console.log(
-      "[NYC_APP_OUTPUT_V5] BQ_ROW_RAW",
+      "[NYC_PROPERTY_UI_V10] BQ_ROW_RAW",
       JSON.stringify({
         address_submitted: address,
         table: debug.table,
@@ -40,21 +47,24 @@ function logNycAppOutputV5(
       })
     );
     console.log(
-      "[NYC_APP_OUTPUT_V5] BQ_ROW_KEY_FIELDS",
+      "[NYC_PROPERTY_UI_V10] BQ_ROW_KEY_FIELDS",
       JSON.stringify({
         address_submitted: address,
         row_found: debug.row_found,
-        [NYC_COL.match_scope]: r?.[NYC_COL.match_scope] ?? null,
-        [NYC_COL.final_display_mode]: r?.[NYC_COL.final_display_mode] ?? null,
-        [NYC_COL.final_confidence]: r?.[NYC_COL.final_confidence] ?? null,
-        [NYC_COL.requires_apartment_number]: r?.[NYC_COL.requires_apartment_number] ?? null,
-        [NYC_COL.has_exact_transaction]: r?.[NYC_COL.has_exact_transaction] ?? null,
-        [NYC_COL.final_value_amount]: r?.[NYC_COL.final_value_amount] ?? null,
+        ui_card_type: r ? normalizeUiCardType(r[NYC_COL.ui_card_type]) : null,
+        [NYC_COL.lookup_address]: r?.[NYC_COL.lookup_address] ?? null,
+        [NYC_COL.confidence_label]: r?.[NYC_COL.confidence_label] ?? null,
+        [NYC_COL.deal_score_numeric]: r?.[NYC_COL.deal_score_numeric] ?? null,
+        [NYC_COL.display_estimated_value]: r?.[NYC_COL.display_estimated_value] ?? null,
+        [NYC_COL.last_transaction_amount]: r?.[NYC_COL.last_transaction_amount] ?? null,
       })
     );
-    console.log("[NYC_APP_OUTPUT_V5] API_PAYLOAD_FINAL", JSON.stringify({ address_submitted: address, response_status: responseStatus, ...payload }));
     console.log(
-      "[NYC_APP_OUTPUT_V5] MATCH_SUMMARY",
+      "[NYC_PROPERTY_UI_V10] API_PAYLOAD_FINAL",
+      JSON.stringify({ address_submitted: address, response_status: responseStatus, ...payload })
+    );
+    console.log(
+      "[NYC_PROPERTY_UI_V10] MATCH_SUMMARY",
       JSON.stringify({
         table: debug.table,
         response_status: responseStatus,
@@ -93,15 +103,15 @@ export async function GET(req: NextRequest) {
   try {
     const parsed = parseUSAddressFromFullString(address);
     const client = getUSBigQueryClient();
-    const { row, debug } = await queryNycAppOutputFinalV5Row(client, address, unitOrLot);
+    const { row, debug } = await queryNycPropertyUiProductionV10Row(client, address, unitOrLot);
 
-    const payload = adaptNycAppOutputRowToPropertyPayload(
+    const payload = adaptNycPropertyUiProductionRowToPropertyPayload(
       row,
       { city: parsed.city, street: parsed.street, houseNumber: parsed.houseNumber },
       { unitOrLotSubmitted: unitOrLot }
     );
 
-    logNycAppOutputV5(
+    logNycPropertyUiV10(
       address,
       row,
       payload,

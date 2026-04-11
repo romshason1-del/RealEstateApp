@@ -29,11 +29,12 @@ import {
 function isNycBuildingLevelOnlyPayload(p: Record<string, unknown> | null | undefined): boolean {
   if (!p || typeof p !== "object") return false;
   const ds = (p as { data_source?: string }).data_source;
-  if (ds !== "us_nyc_app_output_v4" && ds !== "us_nyc_app_output_v5") return false;
+  if (ds !== "us_nyc_app_output_v4" && ds !== "us_nyc_app_output_v5" && ds !== "us_nyc_property_ui_production_v10")
+    return false;
   if ((p as { success?: boolean }).success !== true) return false;
   const ms = String((p as { nyc_match_scope?: string | null }).nyc_match_scope ?? "").toUpperCase().trim();
   if (ms === "BUILDING") return true;
-  if (ds === "us_nyc_app_output_v5") return false;
+  if (ds === "us_nyc_app_output_v5" || ds === "us_nyc_property_ui_production_v10") return false;
   const verified = (p as { nyc_verified_source_unit_for_data?: string | null }).nyc_verified_source_unit_for_data;
   if (typeof verified === "string" && verified.trim() !== "") return false;
   const mode = String((p as { nyc_final_display_mode?: string }).nyc_final_display_mode ?? "").toUpperCase().trim();
@@ -87,7 +88,12 @@ function formatCurrency(value: number, symbol: string): string {
 }
 
 function isUsNycDataSource(ds: string | undefined): boolean {
-  return ds === "us_nyc_truth" || ds === "us_nyc_app_output_v4" || ds === "us_nyc_app_output_v5";
+  return (
+    ds === "us_nyc_truth" ||
+    ds === "us_nyc_app_output_v4" ||
+    ds === "us_nyc_app_output_v5" ||
+    ds === "us_nyc_property_ui_production_v10"
+  );
 }
 
 /** Universal first-card label and support text by value level */
@@ -763,6 +769,21 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     if (usNycMergedStatus === "success") return "success";
     if (usNycMergedStatus === "requires_unit") return "requires_unit";
     if (usNycApartmentFlowEnabled) return "requires_unit";
+    const nycDs = activeInsightsData && typeof activeInsightsData === "object"
+      ? (activeInsightsData as { data_source?: string }).data_source
+      : undefined;
+    const nycRowOk =
+      activeInsightsData &&
+      typeof activeInsightsData === "object" &&
+      isUsNycDataSource(nycDs) &&
+      (activeInsightsData as { nyc_bq_row_matched?: boolean }).nyc_bq_row_matched === true;
+    if (
+      nycRowOk &&
+      (usNycMergedStatus == null || usNycMergedStatus === "") &&
+      (activeInsightsData as { status?: string }).status !== "requires_unit"
+    ) {
+      return "success";
+    }
     if (
       usNycHasEstimatedValue &&
       (usNycMergedStatus == null || usNycMergedStatus === "")
@@ -770,7 +791,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
       return "success";
     }
     return usNycMergedStatus;
-  }, [isUS, usNycMergedStatus, usNycHasEstimatedValue, usNycApartmentFlowEnabled]);
+  }, [isUS, usNycMergedStatus, usNycHasEstimatedValue, usNycApartmentFlowEnabled, activeInsightsData]);
 
   const isMobileViewport = React.useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -1100,12 +1121,18 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     activeInsightsData &&
     typeof activeInsightsData === "object" &&
     ((activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v4" ||
-      (activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v5");
+      (activeInsightsData as { data_source?: string }).data_source === "us_nyc_app_output_v5" ||
+      (activeInsightsData as { data_source?: string }).data_source === "us_nyc_property_ui_production_v10");
 
   React.useEffect(() => {
     if (!isDev || !isUS || !activeInsightsData || typeof activeInsightsData !== "object") return;
     const ds = (activeInsightsData as { data_source?: string }).data_source;
-    if (ds !== "us_nyc_app_output_v4" && ds !== "us_nyc_app_output_v5") return;
+    if (
+      ds !== "us_nyc_app_output_v4" &&
+      ds !== "us_nyc_app_output_v5" &&
+      ds !== "us_nyc_property_ui_production_v10"
+    )
+      return;
     const d = activeInsightsData as {
       status?: string;
       nyc_display_hierarchy?: string;

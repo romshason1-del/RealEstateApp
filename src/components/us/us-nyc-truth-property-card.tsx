@@ -147,6 +147,24 @@ function nycSubtitleFromHierarchy(data: UsNycTruthCardData): string {
   return nycEstimatedSubtitle(data.property_result?.value_level);
 }
 
+function normalizeNycUiCardType(raw: unknown): string {
+  return String(raw ?? "")
+    .toUpperCase()
+    .trim()
+    .replace(/\s+/g, "_");
+}
+
+function nycRawNum(d: Record<string, unknown>, k: string): number | null {
+  const v = d[k];
+  if (v == null || v === "") return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const x = Number(v);
+    if (Number.isFinite(x)) return x;
+  }
+  return null;
+}
+
 function saleIndicatesMultipleUnits(totalUnits: number | null | undefined): boolean {
   if (totalUnits == null || !Number.isFinite(totalUnits)) return false;
   return totalUnits > 1;
@@ -244,6 +262,18 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   /** No valuation/metrics until the user applies a unit (parent sets `submittedApartment` after successful Apply). */
   const isApartmentGatedBeforeUnit = apartmentRequiredFromApi && !hasSubmittedUnit;
 
+  const raw = data as unknown as Record<string, unknown>;
+  const isNycProdV10 = raw.data_source === "us_nyc_property_ui_production_v10";
+  const uiCardT = normalizeNycUiCardType(raw.ui_card_type);
+  const showFullDeal = isNycProdV10 && uiCardT === "FULL_DEAL_CARD";
+  const showWeakDeal = isNycProdV10 && uiCardT === "WEAK_DEAL_CARD";
+  const showInsight = isNycProdV10 && uiCardT === "PROPERTY_INSIGHT_CARD";
+  const showDealSection = showFullDeal || showWeakDeal;
+  const valType = String(raw.value_display_type ?? "").toUpperCase();
+  const valueLow = nycRawNum(raw, "display_estimated_value_low");
+  const valueHigh = nycRawNum(raw, "display_estimated_value_high");
+  const showProdRange = isNycProdV10 && valType === "RANGE" && valueLow != null && valueHigh != null;
+
   const verifiedSourceRaw = data.nyc_verified_source_unit_for_data;
   const hasVerifiedSourceUnitInTable =
     typeof verifiedSourceRaw === "string" && verifiedSourceRaw.trim() !== "";
@@ -257,7 +287,9 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const treatAsSuccessWithData =
     !apartmentRequiredFromApi &&
     (effectiveStatus === "success" ||
-      ((effectiveStatus == null || effectiveStatus === "") && ev != null));
+      (isNycProdV10 && effectiveStatus === "non_residential_blocked") ||
+      ((effectiveStatus == null || effectiveStatus === "") &&
+        (ev != null || (isNycProdV10 && data.nyc_bq_row_matched === true))));
   const requiresUnitOnly = effectiveStatus === "requires_unit" && !treatAsSuccessWithData;
   const commercialPropertyOnly =
     isCommercialProp === true || effectiveStatus === "commercial_property";
@@ -312,7 +344,8 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const isV4Style =
     data.nyc_display_hierarchy !== undefined ||
     data.nyc_match_confidence !== undefined ||
-    data.nyc_has_exact_transaction !== undefined;
+    data.nyc_has_exact_transaction !== undefined ||
+    isNycProdV10;
   const lastTxScope = (data as { nyc_last_transaction_scope?: string | null }).nyc_last_transaction_scope;
   const showLastTxSection = isV4Style
     ? data.nyc_display_hierarchy !== "NONE" &&
@@ -389,7 +422,19 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     );
   }
 
+  if (isNycProdV10 && uiCardT === "NON_RESIDENTIAL_BLOCKED") {
+    const fm = raw.fallback_message != null ? String(raw.fallback_message) : "";
+    return (
+      <div className="space-y-1">
+        <div className={block}>
+          <p className="mt-0.5 text-[9px] leading-tight text-zinc-400">{fm}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (
+    !(data as { nyc_ui_non_residential_blocked?: boolean }).nyc_ui_non_residential_blocked &&
     !apartmentRequiredFromApi &&
     (data.nyc_display_hierarchy === "NONE" || data.nyc_show_search_another_cta === true) &&
     !(
@@ -647,11 +692,57 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
         </div>
       ) : null}
       <>
+          {showDealSection ? (
+            <div className={block}>
+              <div className={sectionLabel}>Deal score</div>
+              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                {raw.deal_score_numeric != null && String(raw.deal_score_numeric).trim() !== ""
+                  ? String(raw.deal_score_numeric)
+                  : "—"}
+              </div>
+              {showFullDeal ? (
+                <>
+                  {raw.below_or_above_market_pct != null || raw.below_or_above_market_label != null ? (
+                    <div className="mt-0.5 text-[9px] leading-tight text-zinc-400">
+                      {raw.below_or_above_market_pct != null ? String(raw.below_or_above_market_pct) : ""}
+                      {raw.below_or_above_market_label != null
+                        ? `${raw.below_or_above_market_pct != null ? " · " : ""}${String(raw.below_or_above_market_label)}`
+                        : ""}
+                    </div>
+                  ) : null}
+                  {raw.nearby_sales_count != null ? (
+                    <div className="mt-0.5 text-[9px] leading-tight text-zinc-400">
+                      Nearby sales: {String(raw.nearby_sales_count)}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              {(showWeakDeal || showFullDeal) &&
+              raw.potential_deal_display != null &&
+              String(raw.potential_deal_display).trim() !== "" ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+                  {String(raw.potential_deal_display)}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className={block}>
             <div className={sectionLabel}>Estimated value for this property</div>
             <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
-              {ev != null && ev > 0 ? formatCurrency(ev, currencySymbol) : "Unavailable"}
+              {showProdRange && valueLow != null && valueHigh != null
+                ? `${formatCurrency(valueLow, currencySymbol)} – ${formatCurrency(valueHigh, currencySymbol)}`
+                : ev != null && ev > 0
+                  ? formatCurrency(ev, currencySymbol)
+                  : "Unavailable"}
             </div>
+            {isNycProdV10 && raw.display_value_is_estimate != null ? (
+              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.display_value_is_estimate)}</div>
+            ) : null}
+            {isNycProdV10 &&
+            raw.value_explanation != null &&
+            String(raw.value_explanation).trim() !== "" ? (
+              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.value_explanation)}</div>
+            ) : null}
             <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycSubtitleFromHierarchy(data)}</div>
           </div>
 
@@ -668,6 +759,13 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                   "No official sale recorded"
                 )}
               </div>
+              {isNycProdV10 &&
+              raw.since_last_sale_pct_display != null &&
+              String(raw.since_last_sale_pct_display).trim() !== "" ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+                  Since last sale: {String(raw.since_last_sale_pct_display)}
+                </div>
+              ) : null}
               {multiUnit ? (
                 <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
                   Transaction includes multiple units
@@ -712,6 +810,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                   ? String(data.nyc_neighborhood_score)
                   : "Unavailable"}
               </div>
+              {isNycProdV10 &&
+              raw.explanation_display != null &&
+              String(raw.explanation_display).trim() !== "" ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.explanation_display)}</div>
+              ) : null}
             </div>
           ) : (
             <div className={block}>
@@ -731,6 +834,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "Unavailable"}
             </div>
             <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
+            {isNycProdV10 && raw.size_sqft_final != null && String(raw.size_sqft_final).trim() !== "" ? (
+              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+                Size: {String(raw.size_sqft_final)} sq ft
+              </div>
+            ) : null}
           </div>
 
           {isV4Style ? (
@@ -741,6 +849,14 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                   ? String(data.nyc_building_type_display)
                   : "Unavailable"}
               </div>
+            </div>
+          ) : null}
+
+          {showInsight &&
+          raw.fallback_message != null &&
+          String(raw.fallback_message).trim() !== "" ? (
+            <div className={block}>
+              <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.fallback_message)}</p>
             </div>
           ) : null}
         </>

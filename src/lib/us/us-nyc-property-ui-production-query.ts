@@ -1,24 +1,24 @@
 /**
- * Lookup rows in `us_nyc_app_output_final_v5` (see {@link getNycAppOutputTableReference}) by normalized address
- * and optional unit. US only — not used for France.
+ * Single-row lookup for `us_nyc_property_ui_production_v10` by normalized `lookup_address`
+ * and optional unit (`normalized_unit_number` / `unit`, `match_scope` EXACT_UNIT vs BUILDING).
+ * US only — not used for France.
  *
- * Match order (exact normalized equality only; no fuzzy search):
- * When `unit_or_lot` is provided:
- *   1) `lookup_address` + unit vs `normalized_unit_number`/`unit` + `match_scope = EXACT_UNIT`
- *   2) `lookup_address` + `match_scope = BUILDING` (building row for address)
- * When no unit:
- *   1) `lookup_address` + BUILDING
+ * Uses `lookup_address` only (indexed); no `property_address` fallback on this table.
  */
 
 import type { BigQuery } from "@google-cloud/bigquery";
 import { buildNycTruthLookupNormalizationDebug } from "@/lib/us/us-nyc-address-normalize";
-import { applyNyLongIslandCityToQueensInAddressLine, preserveQueensInAddressLineIfUserTypedQueens } from "@/lib/us/us-nyc-preserve-queens";
-import { normalizeUSAddressLine } from "@/lib/us/us-address-normalize";
 import {
   getNycAppOutputTableReference,
   getNycAppOutputTableResolutionForLog,
   US_NYC_APP_OUTPUT_ADDRESS_COL,
 } from "@/lib/us/us-nyc-app-output-constants";
+import {
+  buildNycAppOutputLookupPipelineInput,
+  type NycAppOutputQueryDebug,
+} from "@/lib/us/us-nyc-app-output-query";
+export type { NycAppOutputQueryDebug };
+
 function collapseSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
@@ -27,12 +27,10 @@ function normalizeAddrForMatch(s: string): string {
   return collapseSpaces(s).toUpperCase();
 }
 
-/** Aligns with SQL `normalize` on `normalized_unit_number` / `unit`. */
 function normalizeNycUnitForMatch(unitRaw: string): string {
   return normalizeAddrForMatch(unitRaw);
 }
 
-/** A few spellings so the user’s "4D" / "UNIT 4D" / "#4D" match the stored normalized unit. */
 function listNycUnitNormalizationCandidates(unitRaw: string): string[] {
   const u = unitRaw.replace(/\s+/g, " ").trim();
   if (!u) return [];
@@ -52,54 +50,12 @@ function uniqPreserveOrder(cands: string[]): string[] {
   return out;
 }
 
-export type NycAppOutputQueryDebug = {
-  table: string;
-  /** @deprecated use lookup_column — kept for older debug readers */
-  address_column: string;
-  lookup_column: string;
-  property_column: string;
-  /** Exact user-entered address string (trimmed) before NYC normalization. */
-  raw_input: string;
-  /** Line fed into {@link buildNycTruthLookupNormalizationDebug} (after LIC/Queens + PRK/uppercase). */
-  normalized_pipeline_input: string;
-  candidates_tried: string[];
-  /** Normalized equality keys (uppercase, collapsed spaces) in same order as candidates. */
-  norm_keys_tried: string[];
-  /** Normalized unit keys tried when a unit was submitted (empty if none). */
-  unit_norm_keys_tried: string[];
-  /** First candidate that returned a row, if any. */
-  matched_candidate: string | null;
-  /** Normalized key that matched the stored column value. */
-  matched_norm_key: string | null;
-  /** Which column matched when row_found. */
-  match_column: "lookup_address" | "property_address" | null;
-  /** Stored DB value for the matched column (trimmed string). */
-  matched_stored_lookup_address: string | null;
-  matched_stored_property_address: string | null;
-  row_found: boolean;
-  /** v5: EXACT_UNIT vs BUILDING row, or null when no row. */
-  match_tier: "exact_unit" | "building" | null;
-};
-
 function sqlExactNormColumn(col: string): string {
   return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(\`${col}\`, ''), r'\\s+', ' ')))`;
 }
 
 function sqlNormUnitExpr(): string {
   return `UPPER(TRIM(REGEXP_REPLACE(COALESCE(CAST(t.normalized_unit_number AS STRING), CAST(t.unit AS STRING), ''), r'\\s+', ' ')))`;
-}
-
-/**
- * User-entered line for NYC v5 matching: safe rewrites only (Queens/LIC, PRK→PARK, uppercase).
- * All street-type / ordinal variants are generated inside {@link buildNycTruthLookupNormalizationDebug}.
- */
-export function buildNycAppOutputLookupPipelineInput(addressRaw: string): string {
-  const trimmed = addressRaw.trim();
-  if (!trimmed) return "";
-  const preserved = preserveQueensInAddressLineIfUserTypedQueens(trimmed);
-  const lic = applyNyLongIslandCityToQueensInAddressLine(preserved);
-  const { line } = normalizeUSAddressLine(lic);
-  return line ?? "";
 }
 
 function buildExactUnitMatchQuery(table: string, column: string): string {
@@ -144,11 +100,9 @@ function stripSyntheticOrdField(row: Record<string, unknown>): Record<string, un
   return rest;
 }
 
-/**
- * Returns first matching row (SELECT *) or null.
- * v5: EXACT_UNIT (address + unit) → BUILDING fallback → no row.
- */
-export async function queryNycAppOutputFinalV5Row(
+const LOOKUP_COL = US_NYC_APP_OUTPUT_ADDRESS_COL;
+
+export async function queryNycPropertyUiProductionV10Row(
   client: BigQuery,
   addressRaw: string,
   unitOrLot: string | null
@@ -156,16 +110,15 @@ export async function queryNycAppOutputFinalV5Row(
   const table = getNycAppOutputTableReference();
   const resolution = getNycAppOutputTableResolutionForLog();
   console.log(
-    "[NYC_BQ_V5_RESOLUTION]",
+    "[NYC_BQ_PROPERTY_UI_V10]",
     JSON.stringify({
       ...resolution,
       sql_from_clause_target: `\`${table}\``,
-      query_batch: "exact_unit_then_building",
+      query_batch: "lookup_only_exact_unit_then_building",
     })
   );
-  const lookupCol = US_NYC_APP_OUTPUT_ADDRESS_COL;
-  const rawInput = addressRaw.trim();
 
+  const rawInput = addressRaw.trim();
   const lineForNorm = buildNycAppOutputLookupPipelineInput(addressRaw);
   const norm = buildNycTruthLookupNormalizationDebug(lineForNorm);
   let candidates = norm?.candidates?.length ? [...norm.candidates] : lineForNorm ? [lineForNorm] : [];
@@ -176,9 +129,9 @@ export async function queryNycAppOutputFinalV5Row(
 
   const debug: NycAppOutputQueryDebug = {
     table,
-    address_column: lookupCol,
-    lookup_column: lookupCol,
-    property_column: lookupCol,
+    address_column: LOOKUP_COL,
+    lookup_column: LOOKUP_COL,
+    property_column: LOOKUP_COL,
     raw_input: rawInput,
     normalized_pipeline_input: lineForNorm,
     candidates_tried: candidates,
@@ -197,8 +150,8 @@ export async function queryNycAppOutputFinalV5Row(
     return { row: null, debug };
   }
 
-  const queryExactLookup = buildExactUnitMatchQuery(table, lookupCol);
-  const queryBuildingLookup = buildBuildingScopeMatchQuery(table, lookupCol);
+  const queryExactLookup = buildExactUnitMatchQuery(table, LOOKUP_COL);
+  const queryBuildingLookup = buildBuildingScopeMatchQuery(table, LOOKUP_COL);
 
   const applyMatch = (
     row: Record<string, unknown> | undefined,
@@ -206,7 +159,7 @@ export async function queryNycAppOutputFinalV5Row(
   ): { row: Record<string, unknown>; debug: NycAppOutputQueryDebug } | null => {
     if (!row) return null;
     const r = stripSyntheticOrdField(row);
-    const la = String(r[lookupCol] ?? "").trim();
+    const la = String(r[LOOKUP_COL] ?? "").trim();
     const matchedNormKey = normalizeAddrForMatch(la);
     const idx = normKeys.findIndex((k) => k === matchedNormKey);
     debug.row_found = true;
@@ -219,35 +172,23 @@ export async function queryNycAppOutputFinalV5Row(
     return { row: r, debug: { ...debug } };
   };
 
-  const runWithUnit = async (hasUnit: boolean) => {
-    if (hasUnit && unitNormKeys.length > 0) {
-      const [lookupExactRows] = await client.query({
-        query: queryExactLookup,
-        params: { norms: normKeys, unit_norms: unitNormKeys },
-        location: "US",
-      });
-      const hit = applyMatch(lookupExactRows[0] as Record<string, unknown> | undefined, "exact_unit");
-      if (hit) return hit;
-    }
-
-    const [lookupBldRows] = await client.query({
-      query: queryBuildingLookup,
-      params: { norms: normKeys },
+  if (unitNormKeys.length > 0) {
+    const [lookupExactRows] = await client.query({
+      query: queryExactLookup,
+      params: { norms: normKeys, unit_norms: unitNormKeys },
       location: "US",
     });
-    const hitB = applyMatch(lookupBldRows[0] as Record<string, unknown> | undefined, "building");
-    if (hitB) return hitB;
-
-    return null;
-  };
-
-  const result = await runWithUnit(unitNormKeys.length > 0);
-  if (result) {
-    return { row: result.row, debug: result.debug };
+    const hit = applyMatch(lookupExactRows[0] as Record<string, unknown> | undefined, "exact_unit");
+    if (hit) return { row: hit.row, debug: hit.debug };
   }
+
+  const [lookupBldRows] = await client.query({
+    query: queryBuildingLookup,
+    params: { norms: normKeys },
+    location: "US",
+  });
+  const hitB = applyMatch(lookupBldRows[0] as Record<string, unknown> | undefined, "building");
+  if (hitB) return { row: hitB.row, debug: hitB.debug };
 
   return { row: null, debug };
 }
-
-/** @deprecated Use {@link queryNycAppOutputFinalV5Row}. */
-export const queryNycAppOutputFinalV4Row = queryNycAppOutputFinalV5Row;

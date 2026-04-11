@@ -38,7 +38,7 @@ export interface USPropertyValueResponse {
 
 /**
  * NYC: shared JSON shape — used by legacy pre-v5 truth helpers and v4 row mapping (field names align across pipelines).
- * Production v5: `/api/us/nyc-app-output` → `us_nyc_app_output_final_v5`.
+ * Production: `/api/us/nyc-app-output` → `us_nyc_property_ui_production_v10`.
  */
 export interface USNYCApiTruthResponse {
   success: boolean;

@@ -81,8 +81,15 @@ export type PropertyValueInsightsResponse = {
     /** @deprecated Use gross_rent_yield_percent. Kept for backward compatibility. */
     estimated_roi_percent?: number;
   };
-  data_source?: "live" | "cache" | "mock" | "us_nyc_truth" | "us_nyc_app_output_v4" | "us_nyc_app_output_v5";
-  /** NYC `us_nyc_app_output_final_v5`: server-normalized; UI must not recompute. */
+  data_source?:
+    | "live"
+    | "cache"
+    | "mock"
+    | "us_nyc_truth"
+    | "us_nyc_app_output_v4"
+    | "us_nyc_app_output_v5"
+    | "us_nyc_property_ui_production_v10";
+  /** NYC production UI table: server-normalized; UI must not recompute. */
   nyc_display_hierarchy?: "EXACT" | "BUILDING" | "STREET" | "NONE";
   nyc_match_confidence?: "HIGH" | "LOW" | "NONE" | "MEDIUM";
   nyc_has_exact_transaction?: boolean;
@@ -363,7 +370,8 @@ export async function fetchPropertyValueInsights(
       typeof data === "object" &&
       ((data as { data_source?: string }).data_source === "us_nyc_truth" ||
         (data as { data_source?: string }).data_source === "us_nyc_app_output_v4" ||
-        (data as { data_source?: string }).data_source === "us_nyc_app_output_v5") &&
+        (data as { data_source?: string }).data_source === "us_nyc_app_output_v5" ||
+        (data as { data_source?: string }).data_source === "us_nyc_property_ui_production_v10") &&
       (data as { success?: boolean }).success === true;
     const hasValidData =
       frHasRealData ||
