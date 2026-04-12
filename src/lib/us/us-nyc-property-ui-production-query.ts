@@ -106,8 +106,31 @@ function buildBuildingOrHouseMatchQuery(table: string, column: string): string {
 }
 
 /**
- * User did not pass `unit_or_lot` but the table only has unit-level rows at this `lookup_address`.
- * Pick a deterministic row so the API can set `requires_unit` / apartment prompt instead of "no record".
+ * User did not pass `unit_or_lot` but there are EXACT_UNIT* rows at this `lookup_address`.
+ * Pick a deterministic row so the API can set `requires_unit` before surfacing a BUILDING / WEAK card.
+ * (Same BBL is implied by matching `lookup_address` in the production table.)
+ */
+function buildExactUnitRowsAtAddressForUnitPromptQuery(table: string, column: string): string {
+  const normAddrExpr = sqlExactNormColumn(column);
+  return `
+    SELECT * EXCEPT(cand_ord)
+    FROM (
+      SELECT t.*, cand_ord
+      FROM \`${table}\` t
+      CROSS JOIN UNNEST(@norms) AS norm WITH OFFSET cand_ord
+      WHERE ${normAddrExpr} = norm
+        AND t.normalized_unit_number IS NOT NULL
+        AND TRIM(CAST(t.normalized_unit_number AS STRING)) != ''
+        AND STARTS_WITH(UPPER(TRIM(COALESCE(CAST(t.final_match_scope AS STRING), ''))), 'EXACT_UNIT')
+      ORDER BY cand_ord ASC, TRIM(CAST(t.normalized_unit_number AS STRING)) ASC
+      LIMIT 1
+    ) sub
+  `;
+}
+
+/**
+ * Fallback when no EXACT_UNIT rows match: any row with a unit designator (legacy / odd scopes).
+ * Kept after building match fails only — not used when EXACT_UNIT+both building exist at address.
  */
 function buildAddressWithAnyUnitRowQuery(table: string, column: string): string {
   const normAddrExpr = sqlExactNormColumn(column);
@@ -148,7 +171,7 @@ export async function queryNycPropertyUiProductionV10Row(
     JSON.stringify({
       ...resolution,
       sql_from_clause_target: `\`${table}\``,
-      query_batch: "with_unit_then_building_then_unit_prompt_placeholder",
+      query_batch: "with_unit_then_exact_unit_prompt_then_building",
     })
   );
 
@@ -189,8 +212,9 @@ export async function queryNycPropertyUiProductionV10Row(
     return { row: null, debug };
   }
 
-  const queryWithUnit = buildLookupWithUnitMatchQuery(table, LOOKUP_COL);
+  const queryWithUserUnit = buildLookupWithUnitMatchQuery(table, LOOKUP_COL);
   const queryBuilding = buildBuildingOrHouseMatchQuery(table, LOOKUP_COL);
+  const queryExactUnitAtAddress = buildExactUnitRowsAtAddressForUnitPromptQuery(table, LOOKUP_COL);
   const queryAnyUnitAtAddress = buildAddressWithAnyUnitRowQuery(table, LOOKUP_COL);
 
   const applyMatch = (
@@ -216,12 +240,27 @@ export async function queryNycPropertyUiProductionV10Row(
   if (unitNormKeys.length > 0) {
     sqlAttempts.push("with_user_unit");
     const [withUnitRows] = await client.query({
-      query: queryWithUnit,
+      query: queryWithUserUnit,
       params: { norms: normKeys, unit_norms: unitNormKeys },
       location: "US",
     });
     const hit = applyMatch(withUnitRows[0] as Record<string, unknown> | undefined, "exact_unit");
     if (hit) return { row: hit.row, debug: hit.debug };
+  }
+
+  /** No `unit_or_lot`: prefer unit prompt when EXACT_UNIT rows exist; only then BUILDING / house aggregate. */
+  if (unitNormKeys.length === 0) {
+    sqlAttempts.push("exact_unit_rows_need_apartment_number");
+    const [exactUnitPromptRows] = await client.query({
+      query: queryExactUnitAtAddress,
+      params: { norms: normKeys },
+      location: "US",
+    });
+    const hitPrompt = applyMatch(
+      exactUnitPromptRows[0] as Record<string, unknown> | undefined,
+      "needs_unit_prompt"
+    );
+    if (hitPrompt) return { row: hitPrompt.row, debug: hitPrompt.debug };
   }
 
   sqlAttempts.push("building_or_house");
@@ -234,7 +273,7 @@ export async function queryNycPropertyUiProductionV10Row(
   if (hitB) return { row: hitB.row, debug: hitB.debug };
 
   if (unitNormKeys.length === 0) {
-    sqlAttempts.push("address_with_unit_prompt_placeholder");
+    sqlAttempts.push("address_with_any_unit_row_fallback");
     const [anyUnitRows] = await client.query({
       query: queryAnyUnitAtAddress,
       params: { norms: normKeys },

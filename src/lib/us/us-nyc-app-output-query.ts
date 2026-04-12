@@ -80,7 +80,13 @@ export type NycAppOutputQueryDebug = {
   /** How the row was resolved: user+unit, building/house line, or placeholder row to ask for unit. */
   match_tier: "exact_unit" | "building" | "needs_unit_prompt" | null;
   /** SQL branches attempted in order (for support / QA). */
-  sql_attempts: ("with_user_unit" | "building_or_house" | "address_with_unit_prompt_placeholder")[];
+  sql_attempts: (
+    | "with_user_unit"
+    | "exact_unit_rows_need_apartment_number"
+    | "building_or_house"
+    | "address_with_unit_prompt_placeholder"
+    | "address_with_any_unit_row_fallback"
+  )[];
   /** When `row_found` is false — short reason for logs. */
   no_match_reason: string | null;
   /** Echo of `unit_or_lot` query param (trimmed). */

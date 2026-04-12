@@ -190,6 +190,22 @@ function nycPricesMatchForAcris(a: number | null | undefined, b: number | null |
   return Math.round(a) === Math.round(b);
 }
 
+/** BQ may send boolean `true`; `String(true)` must not render as a caption under the value. */
+function nycDisplayValueIsEstimateCaption(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === "boolean") return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === "true" || low === "false") return null;
+  return s;
+}
+
+function nycTextSameAccent(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  return a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
+}
+
 export type UsNycTruthPropertyCardProps = {
   data: UsNycTruthCardData;
   currencySymbol: string;
@@ -376,6 +392,22 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const hasBuildingType =
     data.nyc_building_type_display != null && String(data.nyc_building_type_display).trim() !== "";
   const showBuildingTypeBlock = isV4Style && (isNycProdV10 ? hasBuildingType : true);
+
+  const valueExplainTrim = raw.value_explanation != null ? String(raw.value_explanation).trim() : "";
+  const explanationDisplayTrim =
+    raw.explanation_display != null ? String(raw.explanation_display).trim() : "";
+  const fallbackMsgTrim = raw.fallback_message != null ? String(raw.fallback_message).trim() : "";
+  const displayValueIsEstimateCaption = nycDisplayValueIsEstimateCaption(raw.display_value_is_estimate);
+  const showValueExplanationUnderEstimate = isNycProdV10 && valueExplainTrim !== "";
+  const showNeighborhoodExplanationLine =
+    isNycProdV10 &&
+    explanationDisplayTrim !== "" &&
+    !nycTextSameAccent(valueExplainTrim, explanationDisplayTrim);
+  /** Insight: avoid second copy when `fallback_message` duplicates `explanation_display` (already in neighborhood block). */
+  const showInsightFallbackStandalone =
+    showInsight &&
+    fallbackMsgTrim !== "" &&
+    !nycTextSameAccent(fallbackMsgTrim, explanationDisplayTrim);
 
   const lastTxScope = (data as { nyc_last_transaction_scope?: string | null }).nyc_last_transaction_scope;
   const hasLastTxPrice = price != null && price > 0;
@@ -656,12 +688,16 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           {isPropertyLevel ? (
             <span className={`${badgeBase} border-[#C6A85B]/50 bg-[#C6A85B]/12 text-[#C6A85B]`}>Property-level</span>
           ) : null}
-          <span className={`${badgeBase} border-[#C6A85B]/28 bg-black/40 text-zinc-200`}>Official record</span>
-          <span
-            className={`${badgeBase} border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-400/95`}
-          >
-            Conservative
-          </span>
+          {!isNycProdV10 ? (
+            <>
+              <span className={`${badgeBase} border-[#C6A85B]/28 bg-black/40 text-zinc-200`}>Official record</span>
+              <span
+                className={`${badgeBase} border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-400/95`}
+              >
+                Conservative
+              </span>
+            </>
+          ) : null}
           {showAcrisVerified ? (
             <span
               className={`${badgeBase} border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-400/85`}
@@ -779,13 +815,11 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                     ? formatCurrency(ev, currencySymbol)
                     : null}
               </div>
-              {isNycProdV10 && raw.display_value_is_estimate != null ? (
-                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.display_value_is_estimate)}</div>
+              {displayValueIsEstimateCaption ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{displayValueIsEstimateCaption}</div>
               ) : null}
-              {isNycProdV10 &&
-              raw.value_explanation != null &&
-              String(raw.value_explanation).trim() !== "" ? (
-                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.value_explanation)}</div>
+              {showValueExplanationUnderEstimate ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{valueExplainTrim}</div>
               ) : null}
               <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycSubtitleFromHierarchy(data)}</div>
             </div>
@@ -850,10 +884,8 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                     </div>
                   </>
                 ) : null}
-                {isNycProdV10 &&
-                raw.explanation_display != null &&
-                String(raw.explanation_display).trim() !== "" ? (
-                  <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.explanation_display)}</div>
+                {showNeighborhoodExplanationLine ? (
+                  <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{explanationDisplayTrim}</div>
                 ) : null}
               </div>
             ) : null
@@ -893,11 +925,9 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             </div>
           ) : null}
 
-          {showInsight &&
-          raw.fallback_message != null &&
-          String(raw.fallback_message).trim() !== "" ? (
+          {showInsightFallbackStandalone ? (
             <div className={block}>
-              <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.fallback_message)}</p>
+              <p className="mt-0.5 text-[8px] leading-tight text-zinc-500">{fallbackMsgTrim}</p>
             </div>
           ) : null}
         </>
