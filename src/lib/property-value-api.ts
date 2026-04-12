@@ -5,7 +5,13 @@
  * Uses ONLY official Israeli government data. Never returns street-level or nearby data.
  */
 
-import { parseAddressFromFullString, parseUSAddressFromFullString, parseUKAddressFromFullString, parseFRAddressFromFullString } from "./address-parse";
+import {
+  parseAddressFromFullString,
+  parseUSAddressFromFullString,
+  parseUKAddressFromFullString,
+  parseFRAddressFromFullString,
+  splitUsNycTrailingParentheticalUnitOrLot,
+} from "./address-parse";
 import { NYC_CANDIDATE_GENERATOR_VERSION } from "./us/us-nyc-address-normalize";
 import { toCanonicalAddress } from "./address-canonical";
 
@@ -322,6 +328,12 @@ export async function fetchPropertyValueInsights(
 
   try {
     let addressParam = address.trim();
+    let usUnitFromParens: string | null = null;
+    if (code === "US") {
+      const split = splitUsNycTrailingParentheticalUnitOrLot(addressParam);
+      addressParam = split.line;
+      usUnitFromParens = split.unitOrLot;
+    }
     if (code === "US" && addressParam.includes("Long Island City")) {
       addressParam = addressParam.replace(/Long Island City/g, "Queens");
     }
@@ -338,7 +350,8 @@ export async function fetchPropertyValueInsights(
     if (isFR && options?.rawInputAddress) params.set("rawInputAddress", options.rawInputAddress);
     if (apt) params.set("apt_number", apt);
     if (isFR && options?.postcode?.trim()) params.set("postcode", options.postcode.trim());
-    if (code === "US" && options?.unitOrLot?.trim()) params.set("unit_or_lot", options.unitOrLot.trim());
+    const usUnitCombined = [options?.unitOrLot, usUnitFromParens].map((s) => (s ?? "").trim()).filter(Boolean)[0];
+    if (code === "US" && usUnitCombined) params.set("unit_or_lot", usUnitCombined);
     // US / NYC: `real_estate_us.us_nyc_app_output_final_v5` via dedicated route (not `/api/property-value` truth pipeline).
     const apiPath = code === "US" ? `/api/us/nyc-app-output?${params.toString()}` : `/api/property-value?${params.toString()}`;
     if (code === "US" && process.env.NODE_ENV === "development") {

@@ -99,6 +99,22 @@ export function parseUSAddressFromFullString(
   return { houseNumber, street, city, state, zip };
 }
 
+/**
+ * NYC search: trailing `(...)` with unit/apt/lot — strip from the lookup line and return unit separately
+ * so it is not glued into `lookup_address` and can match BigQuery (`unit_or_lot` query param).
+ * US-only helper; does not change France.
+ */
+export function splitUsNycTrailingParentheticalUnitOrLot(addressLine: string): { line: string; unitOrLot: string | null } {
+  const trimmed = addressLine.trim().replace(/\s+/g, " ");
+  const re = /\s*\(\s*(?:unit|apt|apartment|lot|#)\s*[:\s]*([^)]+)\)\s*$/i;
+  const m = trimmed.match(re);
+  if (!m || m.index == null) return { line: trimmed, unitOrLot: null };
+  const inner = String(m[1] ?? "").trim();
+  const line = trimmed.slice(0, m.index).trim();
+  if (!line || !inner) return { line: trimmed, unitOrLot: null };
+  return { line, unitOrLot: inner };
+}
+
 /** Extract flat/unit/sub-building prefix from start of address (e.g. "Flat 414", "Unit 5", "#10") */
 export function extractFlatPrefix(input: string): string | null {
   const trimmed = (input ?? "").trim();

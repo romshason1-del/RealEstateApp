@@ -1344,10 +1344,16 @@ export const AddressExplorer = () => {
         setIsPropertyValueAddressInputOpen(false);
         setPropertyValueAddressQuery("");
         setPropertyValuePredictions([]);
+        const countryFromComponentsPv = results[0].address_components
+          ?.find((c) => c.types.includes("country"))
+          ?.short_name?.trim();
+        const isUSForPv = (countryFromComponentsPv ?? "").toUpperCase() === "US";
+        const typedPv = propertyValueAddressQuery.trim();
         const insight = getPropertyInsight(nextCenter, displayAddress, results[0].address_components);
         setSelectedBuilding({
           ...insight,
-          rawInputAddress: propertyValueAddressQuery.trim() || undefined,
+          rawInputAddress: typedPv || undefined,
+          ...(isUSForPv && typedPv ? { usNycLookupAddress: typedPv } : {}),
           selectedFormattedAddress: displayAddress,
         });
         setDismissedBuilding(null);
@@ -1408,7 +1414,9 @@ export const AddressExplorer = () => {
           results[0].formatted_address ?? prediction.description;
         const displayAddress = selectedFormatted;
         const countryFromComponents = results[0].address_components?.find((c) => c.types.includes("country"))?.short_name?.trim();
-        const isFrance = (countryFromComponents ?? "").toUpperCase() === "FR" || (countryFromComponents ?? "").toUpperCase() === "RE";
+        const countryU = (countryFromComponents ?? "").toUpperCase();
+        const isFrance = countryU === "FR" || countryU === "RE";
+        const isUSForSugg = countryU === "US";
 
         rawTypedInputRef.current = displayAddress;
         setQuery(displayAddress);
@@ -1418,6 +1426,7 @@ export const AddressExplorer = () => {
         setSelectedBuilding({
           ...insight,
           rawInputAddress: isFrance ? undefined : (rawTyped || undefined),
+          ...(isUSForSugg && rawTyped ? { usNycLookupAddress: rawTyped } : {}),
           selectedFormattedAddress: isFrance ? undefined : selectedFormatted,
           typedAddressForFrance: isFrance ? displayAddress : undefined,
           rawInputAddressForFrance: isFrance ? (rawTyped || displayAddress) : undefined,

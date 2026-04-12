@@ -444,8 +444,10 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
   const addressForApi = React.useMemo(() => {
     if (isFR && typedAddressForFrance?.trim()) return typedAddressForFrance.trim();
     if (isUS && usNycLookupAddress?.trim()) return usNycLookupAddress.trim();
+    /** Property Value dialog / autocomplete: `address` is often Google-formatted; prefer user-typed line for BQ lookup. */
+    if (isUS && rawInputAddress?.trim()) return rawInputAddress.trim();
     return address;
-  }, [isFR, isUS, typedAddressForFrance, usNycLookupAddress, address]);
+  }, [isFR, isUS, typedAddressForFrance, usNycLookupAddress, rawInputAddress, address]);
 
   React.useEffect(() => {
     if (!isUS || process.env.NODE_ENV !== "development") return;
