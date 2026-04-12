@@ -45,6 +45,15 @@ function isNycBuildingLevelOnlyPayload(p: Record<string, unknown> | null | undef
   return false;
 }
 
+/** NYC v10: range-only payloads omit `estimated_value` but still have a displayable band. */
+function usNycHasRangeDisplay(d: Record<string, unknown>): boolean {
+  const vt = String(d.value_display_type ?? "").toUpperCase();
+  if (vt !== "RANGE" && !vt.includes("RANGE")) return false;
+  const low = d.display_estimated_value_low;
+  const high = d.display_estimated_value_high;
+  return low != null && high != null;
+}
+
 export type PropertyValueCardProps = {
   address: string;
   position: { lat: number; lng: number };
@@ -760,7 +769,8 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     isUS &&
     activeInsightsData &&
     typeof activeInsightsData === "object" &&
-    (activeInsightsData as { estimated_value?: number | null }).estimated_value != null;
+    ((activeInsightsData as { estimated_value?: number | null }).estimated_value != null ||
+      usNycHasRangeDisplay(activeInsightsData as Record<string, unknown>));
 
   /**
    * Align with US route: null/empty status + estimated_value ⇒ treat as success for UI.
@@ -883,7 +893,7 @@ export function PropertyValueCard(props: PropertyValueCardProps) {
     usNycBqRowPresent ||
     (hasUsNycSuccessfulPayload &&
       (usNycApartmentFlowEnabled ||
-        (activeInsightsData as { estimated_value?: number | null }).estimated_value != null));
+        usNycHasEstimatedValue));
 
   const isUsRequiresUnit =
     isUS &&

@@ -51,6 +51,10 @@ export type UsNycTruthCardData = {
   nyc_bq_row_matched?: boolean;
   /** NYC v10 `ui_card_type` — controls which blocks render (e.g. PROPERTY_INSIGHT_CARD). */
   ui_card_type?: string | null;
+  /** NYC v10 — adapter / BQ; when RANGE, use low/high even if `estimated_value` is null. */
+  value_display_type?: string | null;
+  display_estimated_value_low?: number | null;
+  display_estimated_value_high?: number | null;
   /** Server `final_display_mode` from NYC row (e.g. ASK_APARTMENT). */
   nyc_final_display_mode?: string | null;
   /**
@@ -296,7 +300,9 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     (effectiveStatus === "success" ||
       (isNycProdV10 && effectiveStatus === "non_residential_blocked") ||
       ((effectiveStatus == null || effectiveStatus === "") &&
-        (ev != null || (isNycProdV10 && data.nyc_bq_row_matched === true))));
+        (ev != null ||
+          showProdRange ||
+          (isNycProdV10 && data.nyc_bq_row_matched === true))));
   const requiresUnitOnly = effectiveStatus === "requires_unit" && !treatAsSuccessWithData;
   const commercialPropertyOnly =
     isCommercialProp === true || effectiveStatus === "commercial_property";
@@ -372,13 +378,22 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const showBuildingTypeBlock = isV4Style && (isNycProdV10 ? hasBuildingType : true);
 
   const lastTxScope = (data as { nyc_last_transaction_scope?: string | null }).nyc_last_transaction_scope;
+  const hasLastTxPrice = price != null && price > 0;
+  const sinceLastSaleLine =
+    isNycProdV10 &&
+    raw.since_last_sale_pct_display != null &&
+    String(raw.since_last_sale_pct_display).trim() !== "";
+  const lastTxBlockHasContent = hasLastTxPrice || sinceLastSaleLine;
   const showLastTxSection = isV4Style
     ? data.nyc_display_hierarchy !== "NONE" &&
       (lastTxScope === "exact_unit" ||
         lastTxScope === "building" ||
         (lastTxScope == null && data.nyc_has_exact_transaction === true) ||
-        (showInsight && price != null && price > 0))
+        (showInsight && hasLastTxPrice) ||
+        hasLastTxPrice ||
+        sinceLastSaleLine)
     : true;
+  const showLastTxBlock = showLastTxSection && lastTxBlockHasContent;
 
   const showLegacyAcrisStripe = !isV4Style;
 
@@ -448,7 +463,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     );
   }
 
-  if (isNycProdV10 && uiCardT === "NON_RESIDENTIAL_BLOCKED") {
+  if (isNycProdV10 && (uiCardT === "NON_RESIDENTIAL_BLOCKED" || uiCardT === "BLOCKED")) {
     const fm = raw.fallback_message != null ? String(raw.fallback_message) : "";
     return (
       <div className="space-y-1">
@@ -634,6 +649,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           )}
         </div>
       ) : null}
+      {!showInsight ? (
       <div className="rounded-lg border border-zinc-700/50 bg-zinc-950/95 px-2 py-1.5 sm:px-2.5">
         <div className="text-[10px] font-semibold leading-tight tracking-tight text-zinc-100">NYC property record</div>
         <div className="mt-1 flex flex-wrap gap-1">
@@ -658,6 +674,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Multiple recorded deeds found</div>
         ) : null}
       </div>
+      ) : null}
 
       {apartmentFlowEnabled && showApartmentInput ? (
         <div className="rounded-md border border-amber-500/30 bg-black/55 px-2 py-1.5 sm:px-2.5">
@@ -724,7 +741,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
                 {raw.deal_score_numeric != null && String(raw.deal_score_numeric).trim() !== ""
                   ? String(raw.deal_score_numeric)
-                  : "—"}
+                  : null}
               </div>
               {showFullDeal ? (
                 <>
@@ -774,27 +791,21 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             </div>
           ) : null}
 
-          {showLastTxSection ? (
+          {showLastTxBlock ? (
             <div className={block}>
               <div className={sectionLabel}>Last transaction</div>
-              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-                {price != null && price > 0 ? (
-                  <>
-                    {formatCurrency(price, currencySymbol)}
-                    {dateStr ? ` · ${dateStr}` : ""}
-                  </>
-                ) : (
-                  "No official sale recorded"
-                )}
-              </div>
-              {isNycProdV10 &&
-              raw.since_last_sale_pct_display != null &&
-              String(raw.since_last_sale_pct_display).trim() !== "" ? (
+              {hasLastTxPrice ? (
+                <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                  {formatCurrency(price!, currencySymbol)}
+                  {dateStr ? ` · ${dateStr}` : ""}
+                </div>
+              ) : null}
+              {sinceLastSaleLine ? (
                 <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
                   Since last sale: {String(raw.since_last_sale_pct_display)}
                 </div>
               ) : null}
-              {multiUnit ? (
+              {multiUnit && hasLastTxPrice ? (
                 <div className="mt-1 border-t border-amber-500/10 pt-1 text-[8px] font-medium leading-tight text-emerald-400/90">
                   Transaction includes multiple units
                 </div>
@@ -823,9 +834,7 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
                   </>
                 ) : data.nyc_street_reference.date ? (
                   formatNycSaleDate(data.nyc_street_reference.date)
-                ) : (
-                  "—"
-                )}
+                ) : null}
               </div>
             </div>
           ) : null}
