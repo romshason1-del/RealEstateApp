@@ -77,8 +77,14 @@ export type NycAppOutputQueryDebug = {
   matched_stored_lookup_address: string | null;
   matched_stored_property_address: string | null;
   row_found: boolean;
-  /** v5: EXACT_UNIT vs BUILDING row, or null when no row. */
-  match_tier: "exact_unit" | "building" | null;
+  /** How the row was resolved: user+unit, building/house line, or placeholder row to ask for unit. */
+  match_tier: "exact_unit" | "building" | "needs_unit_prompt" | null;
+  /** SQL branches attempted in order (for support / QA). */
+  sql_attempts: ("with_user_unit" | "building_or_house" | "address_with_unit_prompt_placeholder")[];
+  /** When `row_found` is false — short reason for logs. */
+  no_match_reason: string | null;
+  /** Echo of `unit_or_lot` query param (trimmed). */
+  unit_or_lot_param: string | null;
 };
 
 function sqlExactNormColumn(col: string): string {
@@ -197,9 +203,13 @@ export async function queryNycAppOutputFinalV5Row(
     matched_stored_property_address: null,
     row_found: false,
     match_tier: null,
+    sql_attempts: [],
+    no_match_reason: null,
+    unit_or_lot_param: unitOrLot?.trim() ? unitOrLot.trim() : null,
   };
 
   if (candidates.length === 0 || normKeys.length === 0) {
+    debug.no_match_reason = "no_lookup_candidates_after_normalization";
     return { row: null, debug };
   }
 
@@ -252,6 +262,7 @@ export async function queryNycAppOutputFinalV5Row(
     return { row: result.row, debug: result.debug };
   }
 
+  debug.no_match_reason = "legacy_query_nyc_app_output_final_v5_no_row";
   return { row: null, debug };
 }
 

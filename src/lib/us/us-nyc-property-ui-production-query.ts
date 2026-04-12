@@ -105,6 +105,27 @@ function buildBuildingOrHouseMatchQuery(table: string, column: string): string {
   `;
 }
 
+/**
+ * User did not pass `unit_or_lot` but the table only has unit-level rows at this `lookup_address`.
+ * Pick a deterministic row so the API can set `requires_unit` / apartment prompt instead of "no record".
+ */
+function buildAddressWithAnyUnitRowQuery(table: string, column: string): string {
+  const normAddrExpr = sqlExactNormColumn(column);
+  return `
+    SELECT * EXCEPT(cand_ord)
+    FROM (
+      SELECT t.*, cand_ord
+      FROM \`${table}\` t
+      CROSS JOIN UNNEST(@norms) AS norm WITH OFFSET cand_ord
+      WHERE ${normAddrExpr} = norm
+        AND t.normalized_unit_number IS NOT NULL
+        AND TRIM(CAST(t.normalized_unit_number AS STRING)) != ''
+      ORDER BY cand_ord ASC, TRIM(CAST(t.normalized_unit_number AS STRING)) ASC
+      LIMIT 1
+    ) sub
+  `;
+}
+
 function stripSyntheticOrdField(row: Record<string, unknown>): Record<string, unknown> {
   const { cand_ord: _o, unit_ord: _u, ...rest } = row as Record<string, unknown> & {
     cand_ord?: unknown;
@@ -127,7 +148,7 @@ export async function queryNycPropertyUiProductionV10Row(
     JSON.stringify({
       ...resolution,
       sql_from_clause_target: `\`${table}\``,
-      query_batch: "lookup_unit_then_building_house",
+      query_batch: "with_unit_then_building_then_unit_prompt_placeholder",
     })
   );
 
@@ -140,6 +161,7 @@ export async function queryNycPropertyUiProductionV10Row(
   const unitTrim = unitOrLot?.trim() ?? "";
   const unitNormKeys = unitTrim ? listNycUnitNormalizationCandidates(unitTrim) : [];
 
+  const sqlAttempts: NycAppOutputQueryDebug["sql_attempts"] = [];
   const debug: NycAppOutputQueryDebug = {
     table,
     address_column: LOOKUP_COL,
@@ -157,18 +179,23 @@ export async function queryNycPropertyUiProductionV10Row(
     matched_stored_property_address: null,
     row_found: false,
     match_tier: null,
+    sql_attempts: sqlAttempts,
+    no_match_reason: null,
+    unit_or_lot_param: unitOrLot?.trim() ? unitOrLot.trim() : null,
   };
 
   if (candidates.length === 0 || normKeys.length === 0) {
+    debug.no_match_reason = "no_lookup_candidates_after_normalization";
     return { row: null, debug };
   }
 
   const queryWithUnit = buildLookupWithUnitMatchQuery(table, LOOKUP_COL);
   const queryBuilding = buildBuildingOrHouseMatchQuery(table, LOOKUP_COL);
+  const queryAnyUnitAtAddress = buildAddressWithAnyUnitRowQuery(table, LOOKUP_COL);
 
   const applyMatch = (
     row: Record<string, unknown> | undefined,
-    tier: "exact_unit" | "building"
+    tier: "exact_unit" | "building" | "needs_unit_prompt"
   ): { row: Record<string, unknown>; debug: NycAppOutputQueryDebug } | null => {
     if (!row) return null;
     const r = stripSyntheticOrdField(row);
@@ -182,10 +209,12 @@ export async function queryNycPropertyUiProductionV10Row(
     debug.matched_candidate = idx >= 0 ? candidates[idx]! : candidates[0]!;
     debug.matched_stored_lookup_address = la || null;
     debug.matched_stored_property_address = null;
-    return { row: r, debug: { ...debug } };
+    debug.no_match_reason = null;
+    return { row: r, debug: { ...debug, sql_attempts: [...sqlAttempts] } };
   };
 
   if (unitNormKeys.length > 0) {
+    sqlAttempts.push("with_user_unit");
     const [withUnitRows] = await client.query({
       query: queryWithUnit,
       params: { norms: normKeys, unit_norms: unitNormKeys },
@@ -195,6 +224,7 @@ export async function queryNycPropertyUiProductionV10Row(
     if (hit) return { row: hit.row, debug: hit.debug };
   }
 
+  sqlAttempts.push("building_or_house");
   const [buildingRows] = await client.query({
     query: queryBuilding,
     params: { norms: normKeys },
@@ -203,5 +233,20 @@ export async function queryNycPropertyUiProductionV10Row(
   const hitB = applyMatch(buildingRows[0] as Record<string, unknown> | undefined, "building");
   if (hitB) return { row: hitB.row, debug: hitB.debug };
 
+  if (unitNormKeys.length === 0) {
+    sqlAttempts.push("address_with_unit_prompt_placeholder");
+    const [anyUnitRows] = await client.query({
+      query: queryAnyUnitAtAddress,
+      params: { norms: normKeys },
+      location: "US",
+    });
+    const hitP = applyMatch(anyUnitRows[0] as Record<string, unknown> | undefined, "needs_unit_prompt");
+    if (hitP) return { row: hitP.row, debug: hitP.debug };
+  }
+
+  debug.no_match_reason =
+    unitNormKeys.length > 0
+      ? "no_row_for_submitted_unit_and_no_building_row"
+      : "no_building_row_and_no_unitized_row_at_address";
   return { row: null, debug };
 }

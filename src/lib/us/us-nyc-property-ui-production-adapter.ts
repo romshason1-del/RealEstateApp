@@ -117,19 +117,24 @@ function nullProductionAll(): Record<string, unknown> {
   return o;
 }
 
+export type NycPropertyUiProductionMatchTier = "exact_unit" | "building" | "needs_unit_prompt" | null;
+
 /**
  * @param row — BigQuery row or null when no match
  */
 export function adaptNycPropertyUiProductionRowToPropertyPayload(
   row: Record<string, unknown> | null,
   parsed: { city: string; street: string; houseNumber: string },
-  opts?: { unitOrLotSubmitted?: string | null }
+  opts?: { unitOrLotSubmitted?: string | null; matchTier?: NycPropertyUiProductionMatchTier }
 ): Record<string, unknown> {
   const city = parsed.city.trim() || "—";
   const street = parsed.street.trim() || "—";
   const houseNumber = parsed.houseNumber.trim() || "—";
   const address = { city, street, house_number: houseNumber };
   const unitSub = opts?.unitOrLotSubmitted?.trim() ?? null;
+  const unitSubmitted = !!unitSub?.trim();
+  const sqlMatchTier = opts?.matchTier ?? null;
+  const needsUnitPlaceholderTier = sqlMatchTier === "needs_unit_prompt";
 
   const emptyCore = {
     success: true as const,
@@ -182,11 +187,12 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
   const isExactUnitScope = isExactUnitFinalScope(finalScopeUpper);
   const isBuildingScope = isBuildingGrainFinalScope(finalScopeUpper);
   const legacyMatchScope = legacyNycMatchScopeFromFinal(finalScopeUpper);
-  const unitSubmitted = !!unitSub?.trim();
   const shouldPrompt =
     !unitSubmitted &&
-    "requires_apartment_number" in row &&
-    bool(row, "requires_apartment_number");
+    (needsUnitPlaceholderTier ||
+      ("requires_apartment_number" in row && bool(row, "requires_apartment_number")));
+  /** Placeholder row: never surface another unit’s sale/value before the user submits a unit. */
+  const suppressPlaceholderUnitMetrics = needsUnitPlaceholderTier && !unitSubmitted;
 
   const valueTypeRaw = str(row, P.value_display_type);
   const pointVal = num(row, P.display_estimated_value);
@@ -203,7 +209,8 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
         ? "building"
         : "exact_unit";
 
-  const estimatedValueBridge = isRangeValueDisplayType(valueTypeRaw) ? null : pointVal ?? null;
+  let estimatedValueBridge = isRangeValueDisplayType(valueTypeRaw) ? null : pointVal ?? null;
+  if (suppressPlaceholderUnitMetrics) estimatedValueBridge = null;
 
   const confidenceLabel = str(row, P.confidence_label);
   const uiCardNorm = normalizeUiCardType(str(row, P.ui_card_type));
@@ -226,7 +233,13 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
     nyc_last_transaction_scope,
     nyc_verified_source_unit_for_data:
       isNonResidential || isBuildingScope ? null : str(row, P.normalized_unit_number),
-    nyc_display_hierarchy: isNonResidential ? "NONE" : isBuildingScope ? "BUILDING" : "EXACT",
+    nyc_display_hierarchy: isNonResidential
+      ? "NONE"
+      : needsUnitPlaceholderTier
+        ? "BUILDING"
+        : isBuildingScope
+          ? "BUILDING"
+          : "EXACT",
     nyc_match_confidence: isNonResidential ? "NONE" : mapConfidenceLabel(confidenceLabel),
     nyc_has_exact_transaction: !isNonResidential && hasLastSale,
     nyc_show_street_reference: false,
@@ -234,20 +247,34 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
     nyc_show_search_another_cta: false,
     nyc_neighborhood_score: isNonResidential ? null : confidenceLabel,
     nyc_building_type_display: isNonResidential ? null : str(row, P.property_type_display),
-    estimated_value: isNonResidential ? null : estimatedValueBridge,
-    latest_sale_price: isNonResidential || !hasLastSale ? null : lastAmt,
-    latest_sale_date: isNonResidential || !hasLastSale ? null : lastDate,
+    estimated_value: isNonResidential || suppressPlaceholderUnitMetrics ? null : estimatedValueBridge,
+    latest_sale_price:
+      isNonResidential || suppressPlaceholderUnitMetrics || !hasLastSale ? null : lastAmt,
+    latest_sale_date:
+      isNonResidential || suppressPlaceholderUnitMetrics || !hasLastSale ? null : lastDate,
     latest_sale_total_units: null,
     price_per_sqft: null,
-    property_result: {
-      exact_value: isNonResidential ? null : estimatedValueBridge,
-      exact_value_message: isNonResidential ? null : estimatedValueBridge != null ? null : "Unavailable",
-      value_level: isNonResidential ? "no_match" : isBuildingScope ? "building-level" : "property-level",
+       property_result: {
+      exact_value: isNonResidential || suppressPlaceholderUnitMetrics ? null : estimatedValueBridge,
+      exact_value_message:
+        isNonResidential || suppressPlaceholderUnitMetrics
+          ? null
+          : estimatedValueBridge != null
+            ? null
+            : "Unavailable",
+      value_level:
+        isNonResidential || suppressPlaceholderUnitMetrics
+          ? "no_match"
+          : isBuildingScope
+            ? "building-level"
+            : "property-level",
       last_transaction: {
-        amount: isNonResidential || !hasLastSale ? 0 : (lastAmt ?? 0),
-        date: isNonResidential || !hasLastSale ? null : lastDate,
+        amount:
+          isNonResidential || suppressPlaceholderUnitMetrics || !hasLastSale ? 0 : (lastAmt ?? 0),
+        date:
+          isNonResidential || suppressPlaceholderUnitMetrics || !hasLastSale ? null : lastDate,
         message:
-          isNonResidential || !hasLastSale
+          isNonResidential || suppressPlaceholderUnitMetrics || !hasLastSale
             ? null
             : lastAmt != null && lastAmt > 0
               ? undefined
@@ -264,7 +291,7 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
     unit_or_lot_submitted: unitSub,
   };
 
-  if (!isNonResidential && hasLastSale && lastDate) {
+  if (!isNonResidential && !suppressPlaceholderUnitMetrics && hasLastSale && lastDate) {
     out.last_sale = { price: lastAmt, date: lastDate };
   }
 
