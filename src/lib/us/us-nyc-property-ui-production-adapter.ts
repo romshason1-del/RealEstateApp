@@ -222,6 +222,7 @@ export function adaptNycPropertyUiProductionRowToPropertyPayload(
     ...productionFlat,
     success: true,
     data_source: "us_nyc_property_ui_production_v10",
+    nyc_sql_match_tier: sqlMatchTier,
     nyc_bq_row_matched: true,
     /** Client: skip generic “no NYC record” empty-state when only `fallback_message` should show. */
     nyc_ui_non_residential_blocked: isNonResidential,

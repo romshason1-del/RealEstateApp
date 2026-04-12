@@ -73,6 +73,9 @@ function logNycPropertyUiV10(
         candidates_count: debug.candidates_tried.length,
         norm_keys_tried: debug.norm_keys_tried,
         unit_norm_keys_tried: debug.unit_norm_keys_tried,
+        sql_attempts: debug.sql_attempts,
+        no_match_reason: debug.no_match_reason,
+        unit_or_lot_param: debug.unit_or_lot_param,
         match_column: debug.match_column,
         match_tier: debug.match_tier,
         matched_norm_key: debug.matched_norm_key,
@@ -108,7 +111,7 @@ export async function GET(req: NextRequest) {
     const payload = adaptNycPropertyUiProductionRowToPropertyPayload(
       row,
       { city: parsed.city, street: parsed.street, houseNumber: parsed.houseNumber },
-      { unitOrLotSubmitted: unitOrLot }
+      { unitOrLotSubmitted: unitOrLot, matchTier: debug.match_tier }
     );
 
     logNycPropertyUiV10(
@@ -123,11 +126,17 @@ export async function GET(req: NextRequest) {
       ...payload,
       row: row ?? null,
     };
-    if (shouldIncludeUsNycDebugInApiResponse()) {
+    const includeNycDebugInJson =
+      shouldIncludeUsNycDebugInApiResponse() || req.nextUrl.searchParams.get("nyc_debug") === "1";
+    if (includeNycDebugInJson) {
       body.us_nyc_app_output_debug = debug;
+      body.nyc_deployment_trace = {
+        node_env: process.env.NODE_ENV ?? null,
+        vercel_git_commit_sha: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      };
     }
 
-    return NextResponse.json(omitUsNycDebugFromPayload(body));
+    return NextResponse.json(includeNycDebugInJson ? body : omitUsNycDebugFromPayload(body));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Query failed";
     return NextResponse.json({ success: false, message: msg, row: null }, { status: 500 });
