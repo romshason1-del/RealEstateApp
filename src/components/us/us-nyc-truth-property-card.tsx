@@ -49,6 +49,8 @@ export type UsNycTruthCardData = {
   nyc_matched_record_address?: string | null;
   /** True when `/api/us/nyc-app-output` matched a BigQuery row (adapter). */
   nyc_bq_row_matched?: boolean;
+  /** NYC v10 `ui_card_type` — controls which blocks render (e.g. PROPERTY_INSIGHT_CARD). */
+  ui_card_type?: string | null;
   /** Server `final_display_mode` from NYC row (e.g. ASK_APARTMENT). */
   nyc_final_display_mode?: string | null;
   /**
@@ -107,7 +109,7 @@ function formatNycSaleDate(dateStr: string | null | undefined): string {
 }
 
 function formatPricePerSqFt(value: number, symbol: string): string {
-  if (!Number.isFinite(value) || value <= 0) return "Unavailable";
+  if (!Number.isFinite(value) || value <= 0) return "";
   const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
   return `${symbol}${rounded.toLocaleString("en-US")}/sq ft`;
 }
@@ -272,7 +274,12 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
   const valType = String(raw.value_display_type ?? "").toUpperCase();
   const valueLow = nycRawNum(raw, "display_estimated_value_low");
   const valueHigh = nycRawNum(raw, "display_estimated_value_high");
-  const showProdRange = isNycProdV10 && valType === "RANGE" && valueLow != null && valueHigh != null;
+  /** Align with BQ + adapter: `Estimated Market Range`, `RANGE`, etc. */
+  const showProdRange =
+    isNycProdV10 &&
+    (valType === "RANGE" || valType.includes("RANGE")) &&
+    valueLow != null &&
+    valueHigh != null;
 
   const verifiedSourceRaw = data.nyc_verified_source_unit_for_data;
   const hasVerifiedSourceUnitInTable =
@@ -346,12 +353,31 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
     data.nyc_match_confidence !== undefined ||
     data.nyc_has_exact_transaction !== undefined ||
     isNycProdV10;
+
+  const hasEstimatedValueDisplay =
+    (showProdRange && valueLow != null && valueHigh != null) || (ev != null && ev > 0);
+  /** v10: omit empty estimated block instead of showing “Unavailable”. */
+  const showEstimatedValueBlock = !isNycProdV10 || hasEstimatedValueDisplay;
+  /** Insight cards: never show $/sq ft; v10 otherwise only when we have a value. */
+  const showPricePerSqftBlock = !showInsight && (!isNycProdV10 || (ppsf != null && ppsf > 0));
+  const hasNeighborhoodScore =
+    data.nyc_neighborhood_score != null && String(data.nyc_neighborhood_score).trim() !== "";
+  const explanationNonEmpty =
+    raw.explanation_display != null && String(raw.explanation_display).trim() !== "";
+  /** v10: show neighborhood/confidence + explanation when either is present (insight often has explanation only). */
+  const showNeighborhoodBlockContent =
+    !isNycProdV10 || hasNeighborhoodScore || (showInsight && explanationNonEmpty);
+  const hasBuildingType =
+    data.nyc_building_type_display != null && String(data.nyc_building_type_display).trim() !== "";
+  const showBuildingTypeBlock = isV4Style && (isNycProdV10 ? hasBuildingType : true);
+
   const lastTxScope = (data as { nyc_last_transaction_scope?: string | null }).nyc_last_transaction_scope;
   const showLastTxSection = isV4Style
     ? data.nyc_display_hierarchy !== "NONE" &&
       (lastTxScope === "exact_unit" ||
         lastTxScope === "building" ||
-        (lastTxScope == null && data.nyc_has_exact_transaction === true))
+        (lastTxScope == null && data.nyc_has_exact_transaction === true) ||
+        (showInsight && price != null && price > 0))
     : true;
 
   const showLegacyAcrisStripe = !isV4Style;
@@ -726,25 +752,27 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
               ) : null}
             </div>
           ) : null}
-          <div className={block}>
-            <div className={sectionLabel}>Estimated value for this property</div>
-            <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
-              {showProdRange && valueLow != null && valueHigh != null
-                ? `${formatCurrency(valueLow, currencySymbol)} – ${formatCurrency(valueHigh, currencySymbol)}`
-                : ev != null && ev > 0
-                  ? formatCurrency(ev, currencySymbol)
-                  : "Unavailable"}
+          {showEstimatedValueBlock ? (
+            <div className={block}>
+              <div className={sectionLabel}>Estimated value for this property</div>
+              <div className="mt-0.5 text-base font-semibold leading-tight tracking-tight text-amber-100 sm:text-lg">
+                {showProdRange && valueLow != null && valueHigh != null
+                  ? `${formatCurrency(valueLow, currencySymbol)} – ${formatCurrency(valueHigh, currencySymbol)}`
+                  : ev != null && ev > 0
+                    ? formatCurrency(ev, currencySymbol)
+                    : null}
+              </div>
+              {isNycProdV10 && raw.display_value_is_estimate != null ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.display_value_is_estimate)}</div>
+              ) : null}
+              {isNycProdV10 &&
+              raw.value_explanation != null &&
+              String(raw.value_explanation).trim() !== "" ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.value_explanation)}</div>
+              ) : null}
+              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycSubtitleFromHierarchy(data)}</div>
             </div>
-            {isNycProdV10 && raw.display_value_is_estimate != null ? (
-              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.display_value_is_estimate)}</div>
-            ) : null}
-            {isNycProdV10 &&
-            raw.value_explanation != null &&
-            String(raw.value_explanation).trim() !== "" ? (
-              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.value_explanation)}</div>
-            ) : null}
-            <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{nycSubtitleFromHierarchy(data)}</div>
-          </div>
+          ) : null}
 
           {showLastTxSection ? (
             <div className={block}>
@@ -803,19 +831,23 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
           ) : null}
 
           {isV4Style ? (
-            <div className={block}>
-              <div className={sectionLabel}>Neighborhood score</div>
-              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-                {data.nyc_neighborhood_score != null && String(data.nyc_neighborhood_score).trim() !== ""
-                  ? String(data.nyc_neighborhood_score)
-                  : "Unavailable"}
+            showNeighborhoodBlockContent ? (
+              <div className={block}>
+                {hasNeighborhoodScore ? (
+                  <>
+                    <div className={sectionLabel}>Neighborhood score</div>
+                    <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                      {String(data.nyc_neighborhood_score)}
+                    </div>
+                  </>
+                ) : null}
+                {isNycProdV10 &&
+                raw.explanation_display != null &&
+                String(raw.explanation_display).trim() !== "" ? (
+                  <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.explanation_display)}</div>
+                ) : null}
               </div>
-              {isNycProdV10 &&
-              raw.explanation_display != null &&
-              String(raw.explanation_display).trim() !== "" ? (
-                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">{String(raw.explanation_display)}</div>
-              ) : null}
-            </div>
+            ) : null
           ) : (
             <div className={block}>
               <div className={sectionLabel}>Local market context</div>
@@ -828,26 +860,26 @@ export function UsNycTruthPropertyCard(props: UsNycTruthPropertyCardProps) {
             </div>
           )}
 
-          <div className={block}>
-            <div className={sectionLabel}>Price per ft²</div>
-            <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-              {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : "Unavailable"}
-            </div>
-            <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
-            {isNycProdV10 && raw.size_sqft_final != null && String(raw.size_sqft_final).trim() !== "" ? (
-              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
-                Size: {String(raw.size_sqft_final)} sq ft
+          {showPricePerSqftBlock ? (
+            <div className={block}>
+              <div className={sectionLabel}>Price per ft²</div>
+              <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
+                {ppsf != null && ppsf > 0 ? formatPricePerSqFt(ppsf, currencySymbol) : null}
               </div>
-            ) : null}
-          </div>
+              <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">Per square foot</div>
+              {isNycProdV10 && raw.size_sqft_final != null && String(raw.size_sqft_final).trim() !== "" ? (
+                <div className="mt-0.5 text-[8px] leading-tight text-zinc-500">
+                  Size: {String(raw.size_sqft_final)} sq ft
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
-          {isV4Style ? (
+          {showBuildingTypeBlock ? (
             <div className={block}>
               <div className={sectionLabel}>Building type</div>
               <div className="mt-0.5 text-[11px] font-medium leading-tight text-zinc-100">
-                {data.nyc_building_type_display != null && String(data.nyc_building_type_display).trim() !== ""
-                  ? String(data.nyc_building_type_display)
-                  : "Unavailable"}
+                {String(data.nyc_building_type_display)}
               </div>
             </div>
           ) : null}
